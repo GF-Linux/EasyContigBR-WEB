@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}EasyContig BR{% endblock %}</title>
+<style>
+  :root{ --tinta:#16181d; --fraco:#6b7280; --linha:#e3e6ea; --fundo:#f7f8fa;
+         --papel:#fff; --acento:#1f6f43; --alerta:#8a4b00; --erro:#9b1c1c; }
+  @media (prefers-color-scheme: dark){
+    :root{ --tinta:#e8eaed; --fraco:#9aa3af; --linha:#2b2f36; --fundo:#14161a;
+           --papel:#1b1e24; --acento:#54b782; --alerta:#d79a4a; --erro:#f08a8a; }
+  }
+  *{ box-sizing:border-box }
+  body{ margin:0; background:var(--fundo); color:var(--tinta);
+        font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .faixa{ background:var(--papel); border-bottom:1px solid var(--linha); }
+  .faixa .interno{ display:flex; align-items:baseline; gap:.75rem; }
+  .interno{ max-width:60rem; margin:0 auto; padding:1rem 1.25rem; }
+  h1{ font-size:1.05rem; margin:0; letter-spacing:.02em }
+  h2{ font-size:.95rem; margin:1.75rem 0 .6rem; }
+  .sub{ color:var(--fraco); font-size:.85rem }
+  .direita{ margin-left:auto }
+  a{ color:var(--acento) }
+  .cartao{ background:var(--papel); border:1px solid var(--linha);
+           border-radius:10px; padding:1.1rem 1.25rem; margin-bottom:1rem; }
+  table{ border-collapse:collapse; width:100% }
+  th,td{ text-align:left; padding:.45rem .5rem; border-bottom:1px solid var(--linha);
+         font-size:.87rem; vertical-align:top }
+  th{ color:var(--fraco); font-weight:600 }
+  .rotulo{ display:inline-block; padding:.1rem .5rem; border-radius:99px;
+           font-size:.74rem; border:1px solid var(--linha) }
+  .recebendo{ color:var(--fraco) } .na_fila{ color:var(--fraco) } .rodando{ color:var(--alerta) }
+  .pronto{ color:var(--acento) } .falhou{ color:var(--erro) }
+  button,.botao{ font:inherit; padding:.5rem .95rem; border-radius:8px; cursor:pointer;
+          border:1px solid var(--acento); background:var(--acento); color:#fff;
+          text-decoration:none; display:inline-block }
+  button[disabled]{ opacity:.5; cursor:not-allowed }
+  .secundario{ background:transparent; color:var(--acento) }
+  input[type=text],input[type=email]{ font:inherit; padding:.5rem .6rem; width:100%;
+    border:1px solid var(--linha); border-radius:8px; background:var(--fundo);
+    color:var(--tinta) }
+  .campo{ margin-bottom:.9rem }
+  .erro{ color:var(--erro) }
+  .barra{ height:6px; background:var(--linha); border-radius:99px; overflow:hidden }
+  .barra > i{ display:block; height:100%; background:var(--acento) }
+  code{ font-size:.85em; background:var(--fundo); padding:.1rem .3rem; border-radius:4px }
+  .rodape{ color:var(--fraco); font-size:.78rem; padding:2rem 1.25rem; max-width:60rem;
+           margin:0 auto; border-top:1px solid var(--linha) }
+</style>
+</head>
+<body>
+<div class="faixa"><div class="interno">
+  <h1>EasyContig BR <span class="sub">· lotes</span></h1>
+  {% if usuario %}<span class="direita sub">{{ usuario.email }} ·
+    <a href="/sair">sair</a></span>{% endif %}
+</div></div>
+<div class="interno">{% block conteudo %}{% endblock %}</div>
+<div class="rodape">
+  Motor de montagem: Tracy (Rausch et al., BMC Genomics 2020). Identificação por
+  BLAST contra banco local curado. <strong>O relatório relata, não conclui</strong> —
+  todo limiar vai impresso nele. Uso em pesquisa.
+</div>
+</body>
+</html>

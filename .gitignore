@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Configuração real da máquina — o exemplo é que é versionado.
+.env
+
+# ⚠️ NUNCA versionar: aqui ficam os .ab1 enviados pelos usuários. São dados de
+# sequenciamento não publicados do laboratório (o mesmo motivo de o repo da demo
+# ser privado).
+dados/
+bancos/
+nucleo

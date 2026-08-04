@@ -1,0 +1,59 @@
+# Docker Compose desde o primeiro dia (ADR 0050): é o que torna a entrega à
+# universidade possível. Quem assumir o serviço precisa conseguir subir tudo com
+# um comando, sem reconstruir o ambiente a partir da memória do autor.
+#
+#   docker compose up -d --build
+#
+# Antes: coloque uma cópia (ou link) do repo do EasyContig em ./nucleo e os
+# bancos BLAST em ./bancos.
+
+services:
+  web:
+    build: &build
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"   # atrás de um proxy reverso com TLS, nunca exposto direto
+    environment: &ambiente
+      EASYCONTIG_DATA_DIR: /dados
+      EASYCONTIG_DB_18S: /bancos/referencias_18S
+      EASYCONTIG_DB_16S: /bancos/referencias_16S
+      EASYCONTIG_TRACY_BIN: /usr/local/bin/tracy
+      EASYCONTIG_TRIM: "4"
+      EASYCONTIG_AUTH: google
+      EASYCONTIG_DOMINIO: ${EASYCONTIG_DOMINIO:-ufrrj.br}
+      EASYCONTIG_SECRET_KEY: ${EASYCONTIG_SECRET_KEY:?defina no .env — sem ela as sessões caem a cada reinício}
+      EASYCONTIG_HTTPS_ONLY: "1"
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    volumes: &volumes
+      - dados:/dados
+      - ./bancos:/bancos:ro
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/saude').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # O trabalhador é o que faz a conta da ADR 0050 fechar: os ~26 s de um lote de
+  # 40 amostras acontecem AQUI, e não numa conexão HTTP aberta.
+  #
+  # `replicas` é o botão de vazão: cada réplica come ~1 núcleo (0,65 s de CPU por
+  # amostra, medido). Numa VPS de 4 vCPU, 3 é o ponto razoável — sobra um para o
+  # web. Eles disputam a mesma fila em SQLite e o UPDATE condicional garante que
+  # cada lote é de um trabalhador só.
+  trabalhador:
+    build: *build
+    restart: unless-stopped
+    command: ["python", "-m", "easycontig_web.trabalhador"]
+    environment: *ambiente
+    volumes: *volumes
+    depends_on:
+      - web
+    deploy:
+      replicas: ${TRABALHADORES:-2}
+
+volumes:
+  dados:

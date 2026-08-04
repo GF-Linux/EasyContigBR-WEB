@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block titulo %}{{ lote.nome or lote.id }} — EasyContig BR{% endblock %}
+{% block conteudo %}
+
+{% if recarregar %}<meta http-equiv="refresh" content="3">{% endif %}
+
+<p class="sub"><a href="/">← todas as corridas</a></p>
+
+<div class="cartao">
+  <h2 style="margin-top:0">{{ lote.nome or 'lote' }}</h2>
+  <p><span class="rotulo {{ lote.status }}">{{ lote.status.replace('_',' ') }}</span>
+     <span class="sub">· {{ lote.n_arquivos }} arquivo(s) · protocolo
+     <code>{{ lote.id }}</code></span></p>
+
+  {% if lote.status == 'recebendo' %}
+    <p class="sub">Recebendo os arquivos. O lote só entra na fila quando o último
+    byte chegar — processar um envio pela metade daria um relatório com menos
+    amostras do que a corrida tem, sem nada indicando a falta.</p>
+
+  {% elif lote.status == 'na_fila' %}
+    <p class="sub">Na fila. Esta página se atualiza sozinha — pode fechar e voltar
+    pelo link depois; o processamento não depende de manter a aba aberta.</p>
+
+  {% elif lote.status == 'rodando' %}
+    {% set pct = (100 * lote.feito / lote.total) if lote.total else 0 %}
+    <div class="barra"><i style="width:{{ pct|round(0) }}%"></i></div>
+    <p class="sub">{{ lote.feito }} de {{ lote.total }} amostras
+      {% if lote.etapa %}· montando <code>{{ lote.etapa }}</code>{% endif %}</p>
+
+  {% elif lote.status == 'pronto' %}
+    <p>
+      <a class="botao" href="/lotes/{{ lote.id }}/relatorio">Abrir relatório</a>
+      <a class="botao secundario" href="/lotes/{{ lote.id }}/resultado.csv">Baixar CSV</a>
+      <a class="botao secundario" href="/lotes/{{ lote.id }}/relatorio.json">JSON dos fatos</a>
+    </p>
+    <p class="sub">Para PDF: abra o relatório e imprima (Ctrl+P → Salvar como PDF).</p>
+
+  {% elif lote.status == 'falhou' %}
+    <p class="erro">O lote não foi processado.</p>
+    <pre class="sub" style="white-space:pre-wrap">{{ lote.erro }}</pre>
+    <p class="sub">Falha de uma amostra sozinha não chega aqui — ela vira uma linha
+    com ressalva dentro do relatório. Isto aqui é falha do lote inteiro.</p>
+  {% endif %}
+</div>
+
+{% endblock %}

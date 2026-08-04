@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block titulo %}Entrar — EasyContig BR{% endblock %}
+{% block conteudo %}
+
+<div class="cartao" style="max-width:26rem;margin-top:2rem">
+  <h2 style="margin-top:0">Entrar</h2>
+  {% if erro %}<p class="erro">{{ erro }}</p>{% endif %}
+
+  {% if modo == 'google' %}
+    {% if google_ok %}
+      <p><a class="botao" href="/auth/google">Entrar com Google</a></p>
+    {% else %}
+      <p class="erro">Login Google selecionado, mas faltam
+      <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.</p>
+    {% endif %}
+  {% else %}
+    <p class="sub">Modo de desenvolvimento: qualquer e-mail entra, sem senha.
+    <strong>Não use assim em servidor.</strong></p>
+    <form method="post" action="/entrar">
+      <div class="campo">
+        <label class="sub" for="email">e-mail</label>
+        <input type="email" id="email" name="email" required
+               placeholder="voce@ufrrj.br">
+      </div>
+      <button type="submit">Entrar</button>
+    </form>
+  {% endif %}
+
+  {% if dominio %}
+    <p class="sub" style="margin-bottom:0">Restrito a <code>{{ dominio }}</code>.</p>
+  {% endif %}
+</div>
+
+{% endblock %}

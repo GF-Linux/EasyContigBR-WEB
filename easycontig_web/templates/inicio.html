@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block conteudo %}
+
+{% set faltando = diagnostico | rejectattr(1) | list %}
+{% if faltando %}
+<div class="cartao">
+  <strong class="erro">Esta instalação está incompleta.</strong>
+  <p class="sub">Enquanto faltar alguma dependência, o lote roda mas o relatório
+  vem sem a parte correspondente — e <em>ausência de <code>blastn</code> não é
+  "nenhum acerto"</em>, é falta de ferramenta.</p>
+  <table>
+    {% for item, ok, detalhe in diagnostico %}
+    <tr><td style="width:8rem">{{ item }}</td>
+        <td class="{{ 'pronto' if ok else 'falhou' }}">{{ 'OK' if ok else 'FALTA' }}</td>
+        <td class="sub">{{ detalhe }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<h2>Enviar uma corrida</h2>
+<div class="cartao">
+  <form method="post" action="/lotes" enctype="multipart/form-data">
+    <div class="campo">
+      <label class="sub" for="nome">Nome da corrida (só para você se achar depois)</label>
+      <input type="text" id="nome" name="nome" placeholder="ex.: F13719 #80649 27/07">
+    </div>
+    <div class="campo">
+      <label class="sub" for="arquivos">Arquivos <code>.ab1</code> — pode selecionar a pasta inteira</label><br>
+      <input type="file" id="arquivos" name="arquivos" multiple
+             accept=".ab1,.abi,.scf" webkitdirectory-hint required
+             style="margin-top:.4rem">
+    </div>
+    <button type="submit">Processar lote</button>
+    <p class="sub" style="margin-bottom:0">
+      Até {{ max_arquivos }} arquivos / {{ max_mb }} MB por lote. Trim = {{ trim }}
+      (valor medido, ADR 0042). O pareamento F/R sai do <em>conteúdo</em> das
+      leituras, não do nome do arquivo.
+    </p>
+  </form>
+</div>
+
+<h2>Suas corridas</h2>
+{% if not lotes %}
+  <div class="cartao sub">Nenhuma ainda.</div>
+{% else %}
+<div class="cartao">
+<table>
+  <tr><th>corrida</th><th>situação</th><th>arquivos</th><th>enviada</th><th></th></tr>
+  {% for l in lotes %}
+  <tr>
+    <td><a href="/lotes/{{ l.id }}">{{ l.nome or l.id }}</a></td>
+    <td><span class="rotulo {{ l.status }}">{{ l.status.replace('_',' ') }}</span></td>
+    <td>{{ l.n_arquivos }}</td>
+    <td class="sub">{{ l.criado_em.replace('T',' ')[:16] }}</td>
+    <td>{% if l.status == 'pronto' %}
+        <a href="/lotes/{{ l.id }}/relatorio">relatório</a> ·
+        <a href="/lotes/{{ l.id }}/resultado.csv">CSV</a>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% endif %}
+
+{% endblock %}
