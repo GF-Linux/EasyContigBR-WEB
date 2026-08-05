@@ -1,98 +1,243 @@
 {% extends "base.html" %}
 {% block titulo %}{{ amostra.key }} — EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* Workspace da amostra: alinhamento em cima, os dois cromatogramas embaixo,
+   painel de identificação à direita (design aprovado em 05/08, ADR 0052).
+   O traço chega por /api/.../traco depois que a página já abriu. */
+.trabalho{ padding:0 }
+.trabalho > .interno{ max-width:none }
+.trabalho > .interno > .rodape{ display:none }
+.oficina{ display:grid; grid-template-columns:minmax(0,1fr) 300px; min-height:100vh }
+@media(max-width:1150px){ .oficina{ grid-template-columns:1fr } }
+.meio{ padding:13px; display:flex; flex-direction:column; gap:11px; min-width:0 }
+
+.bloco{ background:var(--painel); border:1px solid var(--linha); border-radius:10px }
+.bl-topo{ display:flex; align-items:center; gap:10px; padding:8px 13px;
+  border-bottom:1px solid var(--linha); flex-wrap:wrap }
+.bl-topo b{ font-size:12.5px; font-weight:700 }
+.bl-topo .aj{ font-size:11px; color:var(--fraco) }
+.bl-topo .dir{ margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--apoio) }
+.bl-topo .dir em{ font-style:normal; color:var(--vermelho) }
+
+/* alinhamento */
+.aln{ padding:10px 13px; font-family:var(--mono); font-size:12px; line-height:1.75;
+  overflow-x:auto }
+.aln-l{ display:flex; gap:11px; white-space:nowrap; align-items:baseline }
+.aln-n{ width:11rem; flex:none; color:var(--apoio); font-size:11px; text-align:right;
+  overflow:hidden; text-overflow:ellipsis }
+.aln-n.forte{ color:var(--tinta); font-weight:700 }
+.b{ padding:0 .5px; border-radius:2px; cursor:pointer }
+.b:hover{ background:var(--linha-forte) }
+.bA{ color:var(--verde) } .bC{ color:var(--azul) } .bG{ color:#C6CBE0 }
+.bT{ color:var(--vermelho) } .bgap,.bN{ color:var(--fraco) }
+.b.mm{ background:rgba(240,82,74,.22); color:#ff8f88; font-weight:700 }
+.b.sel{ background:var(--violeta); color:#14121f; font-weight:700 }
+.b.morta{ opacity:.32; text-decoration:line-through }
+.regua{ color:var(--fraco) }
+
+/* cromatograma */
+.cr-topo{ display:flex; align-items:center; gap:11px; padding:7px 13px;
+  border-bottom:1px solid var(--linha); flex-wrap:wrap; font-size:11px }
+.cr-topo .nome{ font-family:var(--mono); color:var(--violeta-claro); font-weight:600 }
+.cr-topo .meta{ color:var(--fraco) }
+.leg{ display:flex; gap:9px; margin-left:auto; align-items:center; color:var(--fraco);
+  font-size:10px }
+.leg s{ text-decoration:none; display:flex; align-items:center; gap:4px }
+.leg i{ width:7px; height:7px; border-radius:50%; display:block }
+.tela-tr{ background:#0d0e16; position:relative; overflow:hidden }
+.tela-tr svg{ display:block; width:100%; height:132px }
+.tr{ fill:none; stroke-width:1.25; vector-effect:non-scaling-stroke }
+.tr.A{ stroke:var(--verde) } .tr.C{ stroke:var(--azul) }
+.tr.G{ stroke:#C6CBE0 } .tr.T{ stroke:var(--vermelho) }
+.faixa-sel{ fill:rgba(145,132,217,.20); stroke:var(--violeta); stroke-width:1 }
+.faixa-mm{ fill:rgba(240,82,74,.13) }
+.tela-tr svg{ display:block; width:100%; height:112px }
+/* Faixa das letras: fora do SVG, porque lá dentro o eixo x é esticado e a
+   letra vira um traço. Em % o alinhamento com o pico continua exato. */
+.bases-lin{ position:relative; height:19px; border-top:1px solid var(--linha) }
+.bases-lin .bl{ position:absolute; top:2px; transform:translateX(-50%);
+  font-family:var(--mono); font-size:11px; cursor:pointer; padding:0 1px;
+  border-radius:2px }
+.bases-lin .bl:hover{ background:var(--linha-forte) }
+.bases-lin .bl.morta{ opacity:.4; text-decoration:line-through }
+.vazio-tr{ padding:1.6rem 1rem; text-align:center; color:var(--fraco); font-size:12px }
+
+/* barra de ações */
+.acoes{ position:sticky; bottom:12px; margin:2px auto 0; display:flex; gap:6px;
+  align-items:center; background:var(--painel); border:1px solid var(--violeta);
+  border-radius:11px; padding:7px 9px; box-shadow:0 10px 30px rgba(0,0,0,.55);
+  width:max-content; max-width:100%; flex-wrap:wrap }
+.ac{ font-size:12px; font-weight:600; padding:6px 11px; border-radius:7px;
+  border:1px solid var(--linha-forte); background:var(--interno); color:var(--apoio) }
+.ac:hover:not(:disabled){ border-color:var(--violeta); color:var(--tinta);
+  background:var(--interno) }
+.ac:disabled{ opacity:.4; cursor:not-allowed }
+.ac.perigo:hover:not(:disabled){ border-color:var(--vermelho); color:#ff9a94 }
+.divisor{ width:1px; height:22px; background:var(--linha-forte); margin:0 2px }
+.dica-ac{ font-size:11px; color:var(--fraco); font-family:var(--mono) }
+
+/* painel direito */
+.lado{ background:var(--painel); border-left:1px solid var(--linha);
+  padding:14px 15px 22px; display:flex; flex-direction:column; gap:12px;
+  overflow-y:auto }
+@media(max-width:1150px){ .lado{ border-left:0; border-top:1px solid var(--linha) } }
+.id-topo{ display:flex; align-items:center; gap:6px; font-family:var(--mono);
+  font-size:9.5px; letter-spacing:.13em; text-transform:uppercase }
+.especie{ font-size:1.38rem; font-weight:800; font-style:italic; line-height:1.1;
+  margin:5px 0 3px }
+.metricas{ display:grid; grid-template-columns:1fr 1fr; gap:8px }
+.mt{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
+  padding:9px 11px }
+.mt b{ display:block; font-family:var(--mono); font-size:1.12rem; font-weight:700;
+  font-variant-numeric:tabular-nums; line-height:1.2 }
+.mt.v b{ color:var(--verde) }
+.mt s{ display:block; text-decoration:none; font-family:var(--mono); font-size:8.5px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--fraco); margin-top:3px }
+.gb{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
+  padding:11px }
+.gb .rot{ font-family:var(--mono); font-size:8.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--fraco) }
+.gb .acc{ font-family:var(--mono); font-size:13px; font-weight:700; margin-top:3px }
+.qual .rot{ font-family:var(--mono); font-size:9px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--fraco); margin-bottom:6px }
+.lq{ display:flex; justify-content:space-between; gap:1rem; padding:5px 0;
+  font-size:12px; border-bottom:1px solid var(--linha) }
+.lq span:last-child{ font-family:var(--mono); font-variant-numeric:tabular-nums;
+  text-align:right }
+.exp{ background:var(--interno); border:1px solid var(--violeta); border-radius:9px;
+  padding:11px }
+.exp .rot{ font-family:var(--mono); font-size:9px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--violeta); margin-bottom:6px }
+.exp p{ margin:0 0 8px; font-size:11.5px; color:var(--apoio); line-height:1.5 }
+.exp .fila{ display:flex; gap:6px } .exp .fila .ac{ flex:1; text-align:center }
+.rascunho{ display:flex; gap:6px; font-size:10.5px; color:var(--ambar); margin-top:7px;
+  line-height:1.45 }
+.ressalva{ font-size:11.5px; color:var(--apoio); line-height:1.5; margin:0 0 .5rem }
+.ressalva .rg{ color:var(--fraco); font-family:var(--mono); font-size:10px }
+{% endblock %}
+
 {% block conteudo %}
-{#
-  Uma amostra do lote. Espera: `usuario`, `lote` e `amostra` (saída de
-  amostras.amostra). A página relata o que foi medido e imprime a regra ao lado
-  de cada ressalva; ela não classifica a amostra nem recomenda o que fazer.
-#}
+<div class="oficina"
+     data-traco="/api/lotes/{{ lote.id }}/amostras/{{ amostra.key|urlencode }}/traco">
 
-<p class="sub"><a href="/lotes/{{ lote.id }}?tela_do_lote=1">← {{ lote.nome or lote.id }}</a></p>
+  <div class="meio">
+    <div class="bl-topo" style="border:0;padding:2px 2px 0">
+      <a href="/lotes/{{ lote.id }}?tela_do_lote=1" class="sub">← {{ lote.nome or lote.id }}</a>
+      <b style="margin-left:8px">{{ amostra.key }}</b>
+    </div>
 
-<div class="cartao">
-  <h2 style="margin-top:0">{{ amostra.key }}</h2>
-  <p class="sub">amostra do lote <code>{{ lote.id }}</code></p>
+    {% if amostra.erro %}
+    <div class="bloco" style="border-color:rgba(240,82,74,.4)">
+      <div class="bl-topo"><b class="erro">Esta amostra não montou</b></div>
+      <pre class="sub" style="white-space:pre-wrap;padding:11px 13px;margin:0">{{ amostra.erro }}</pre>
+      <p class="sub" style="padding:0 13px 12px;margin:0">Sem consenso não há o que
+      procurar no banco — nada chegou a ser consultado.</p>
+    </div>
+    {% endif %}
 
-  {% if amostra.erro %}
-  <p class="erro">Esta amostra não montou.</p>
-  <pre class="sub" style="white-space:pre-wrap">{{ amostra.erro }}</pre>
-  {% endif %}
+    <section class="bloco">
+      <div class="bl-topo">
+        <b>Alinhamento</b>
+        <span class="aj">clique numa base para marcá-la nos dois cromatogramas</span>
+        <span class="dir"><span id="m-pb">{{ amostra.consenso_pb }}</span> pb ·
+          {{ amostra.cobertura_media|br or "—" }}× ·
+          <em><span id="m-mm">—</span> mismatch</em></span>
+      </div>
+      <div class="aln" id="aln">
+        <p class="sub" style="margin:0">Carregando o alinhamento…</p>
+      </div>
+    </section>
+
+    <div id="cromatogramas"></div>
+
+    <div class="acoes" id="acoes" style="display:none">
+      <button class="ac" id="b-erro" type="button">⚠ Próximo erro</button>
+      <span class="divisor"></span>
+      <span class="dica-ac">remover base</span>
+      <button class="ac perigo" id="b-del0" type="button" disabled>só do F</button>
+      <button class="ac perigo" id="b-del1" type="button" disabled>só do R</button>
+      <button class="ac perigo" id="b-del2" type="button" disabled>dos dois</button>
+      <span class="divisor"></span>
+      <button class="ac" id="b-undo" type="button" disabled>↺ Desfazer</button>
+    </div>
+  </div>
+
+  <aside class="lado">
+    <div>
+      <div class="id-topo {{ amostra.situacao_classe }}">✓ {{ amostra.situacao_texto }}</div>
+      {% if amostra.identificado %}
+        <div class="especie">{{ amostra.organismo }}</div>
+        <div class="sub" style="font-size:11px">{{ amostra.marcador }} ·
+          banco local · melhor acerto</div>
+      {% else %}
+        <p class="sub" style="margin:.5rem 0 0">{{ amostra.situacao_nota }}</p>
+      {% endif %}
+    </div>
+
+    {% if amostra.identificado %}
+    <div class="metricas">
+      <div class="mt v"><b>{{ amostra.identidade|br or "—" }}%</b><s>identidade</s></div>
+      <div class="mt"><b>{{ amostra.cobertura_query|br or "—" }}%</b><s>cobertura</s></div>
+      <div class="mt v"><b>{{ amostra.e_value or "—" }}</b><s>e-value</s></div>
+      <div class="mt"><b>{{ amostra.consenso_pb }}</b><s>consenso (pb)</s></div>
+    </div>
+
+    <div class="gb">
+      <div class="rot">acesso genbank</div>
+      <div class="acc">{{ amostra.accession or "—" }}</div>
+    </div>
+    {% if amostra.accession %}
+      {# Por BOTÃO, nunca automático: o NCBI limita a 3 requisições por segundo, e
+         o propósito é encurtar a ponte, não terceirizar a conclusão (ADR 0052). #}
+      <a class="botao secundario" style="text-align:center"
+         href="https://www.ncbi.nlm.nih.gov/nuccore/{{ amostra.accession }}"
+         target="_blank" rel="noopener">⧉ Validar no GenBank</a>
+    {% endif %}
+    {% endif %}
+
+    <div class="qual">
+      <div class="rot">qualidade do contig</div>
+      <div class="lq"><span>Cobertura média</span>
+        <span>{{ amostra.cobertura_media|br or "—" }}×</span></div>
+      <div class="lq"><span>Leituras</span><span>{{ amostra.n_leituras }}</span></div>
+      <div class="lq"><span>Uma leitura só</span>
+        <span>{{ amostra.n_cobertura_1 }}{% if amostra.pct_cobertura_1x %}
+          ({{ amostra.pct_cobertura_1x|br }}%){% endif %}</span></div>
+      <div class="lq"><span>Discordâncias</span><span>{{ amostra.discordancias }}</span></div>
+      {% for r in amostra.leituras %}
+      <div class="lq"><span>{{ r.primer or r.nome }}</span>
+        <span class="pronto">{{ r.q_rotulo }} ({{ r.q_medio }})</span></div>
+      {% endfor %}
+      <div class="lq"><span>Bases removidas</span><span id="q-ed">0</span></div>
+    </div>
+
+    <div class="exp">
+      <div class="rot">exportar</div>
+      <p>O consenso só vira definitivo aqui. Até exportar, o que está na tela é
+      rascunho.</p>
+      <div class="fila">
+        <button class="ac" id="b-fasta" type="button">FASTA</button>
+        <button class="ac" id="b-txt" type="button">Texto</button>
+      </div>
+      <div class="rascunho" id="rascunho" style="display:none">
+        ⚠ <span>Há edições não exportadas. Sair desta página perde o que você
+        corrigiu.</span></div>
+    </div>
+
+    {% if amostra.ressalvas %}
+    <div>
+      <div class="rot" style="font-family:var(--mono);font-size:9px;letter-spacing:.12em;
+           text-transform:uppercase;color:var(--fraco);margin-bottom:7px">
+        ressalvas ({{ amostra.n_ressalvas }})</div>
+      {% for c in amostra.ressalvas %}
+      <p class="ressalva">{{ c.texto }}<br>
+        <span class="rg">[{{ c.codigo }}{% if c.regra %} · {{ c.regra }}{% endif %}]</span></p>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </aside>
 </div>
 
-<div class="cartao">
-  <h2 style="margin-top:0">Identificação</h2>
-  <p><span class="rotulo {{ amostra.situacao_classe }}">{{ amostra.situacao_texto }}</span></p>
-
-  {% if amostra.identificado %}
-    <p style="font-size:1.15rem; margin:.2rem 0">{{ amostra.organismo }}</p>
-    <table>
-      <tr><th style="width:14rem">Accession</th>
-          <td>{{ amostra.accession or "—" }}</td></tr>
-      <tr><th>Identidade (%)</th><td>{{ amostra.identidade|br or "—" }}</td></tr>
-      <tr><th>Cobertura da consulta (%)</th><td>{{ amostra.cobertura_query|br or "—" }}</td></tr>
-      <tr><th>E-value</th><td>{{ amostra.e_value or "—" }}</td></tr>
-      <tr><th>Marcador</th><td>{{ amostra.marcador or "—" }}</td></tr>
-    </table>
-  {% endif %}
-
-  {% if amostra.situacao_nota %}<p class="sub">{{ amostra.situacao_nota }}</p>{% endif %}
-</div>
-
-<div class="cartao">
-  <h2 style="margin-top:0">Montagem</h2>
-  <table>
-    <tr><th style="width:14rem">N. de leituras</th><td>{{ amostra.n_leituras }}</td></tr>
-    <tr><th>Consenso (pb)</th><td>{{ amostra.consenso_pb }}</td></tr>
-    <tr><th>Cobertura média</th><td>{{ amostra.cobertura_media|br or "—" }}</td></tr>
-    <tr><th>Bases sustentadas por uma única leitura</th>
-        <td>{{ amostra.n_cobertura_1 }}{% if amostra.pct_cobertura_1x %}
-            ({{ amostra.pct_cobertura_1x|br }}%){% endif %}</td></tr>
-    <tr><th>Posições em que as leituras discordaram</th>
-        <td>{{ amostra.discordancias }}</td></tr>
-    <tr><th>Contig invertido</th>
-        <td>{{ amostra.contig_invertido }}
-          {% if amostra.invertido %}<span class="sub">— o contig foi montado no
-          sentido complementar. A polaridade global de um contig é arbitrária e
-          o sentido foi decidido por maioria; os sentidos das leituras abaixo já
-          estão normalizados.</span>{% endif %}</td></tr>
-  </table>
-
-  {% if amostra.leituras %}
-  <h2>Leituras</h2>
-  <table>
-    <tr><th>Leitura</th><th>Primer (nome)</th><th>Sentido: nome</th>
-        <th>Sentido: medido</th><th>Bases</th><th>Q médio</th><th>Janela</th></tr>
-    {% for r in amostra.leituras %}
-    <tr>
-      <td>{{ r.nome }}</td>
-      <td>{{ r.primer or "—" }}</td>
-      <td{% if r.sentido_diverge %} class="rodando"{% endif %}>{{ r.sentido_nome or "—" }}</td>
-      <td{% if r.sentido_diverge %} class="rodando"{% endif %}>{{ r.sentido_medido or "—" }}</td>
-      <td>{{ r.bases }}</td>
-      <td>{{ r.q_medio or "—" }}{% if r.q_rotulo %} <span class="sub">{{ r.q_rotulo }}</span>{% endif %}</td>
-      <td>{{ r.janela or "—" }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% endif %}
-</div>
-
-<div class="cartao">
-  <h2 style="margin-top:0">Ressalvas ({{ amostra.n_ressalvas }})</h2>
-  {% if amostra.ressalvas %}
-    {% for c in amostra.ressalvas %}
-    <p style="margin:.45rem 0">{{ c.texto }}<br>
-      <span class="sub">[{{ c.codigo }}{% if c.regra %} · regra: {{ c.regra }}{% endif %}]</span></p>
-    {% endfor %}
-    <p class="sub">Cada ressalva é o resultado de uma regra fixa, impressa acima
-    junto do fato para que possa ser contestada.</p>
-  {% else %}
-    <p class="sub">Nenhum limiar do relatório foi cruzado nesta amostra. Isso não
-    é atestado de qualidade — é a ausência de ressalva.</p>
-  {% endif %}
-</div>
-
-<p class="sub"><a href="/lotes/{{ lote.id }}?tela_do_lote=1">← voltar para o lote</a> ·
-  <a href="/lotes/{{ lote.id }}/relatorio">relatório completo do lote</a></p>
-
+<script src="/estatico/oficina.js" defer></script>
 {% endblock %}

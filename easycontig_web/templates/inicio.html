@@ -28,7 +28,8 @@
       <input type="text" id="nome" name="nome" placeholder="ex.: F13719 #80649 27/07">
     </div>
     <div class="campo">
-      <label class="sub" for="arquivos">Arquivos <code>.ab1</code> — pode selecionar a pasta inteira</label><br>
+      <label class="sub" for="arquivos">Arquivos <code>.ab1</code> — o par F+R de uma
+      amostra, ou a pasta inteira de uma corrida</label><br>
       <input type="file" id="arquivos" name="arquivos" multiple
              accept=".ab1,.abi,.scf" webkitdirectory-hint required
              style="margin-top:.4rem">
@@ -46,9 +47,10 @@
     <p id="falha" class="erro" style="display:none; margin:.9rem 0 0" role="alert"></p>
 
     <p class="sub" style="margin-bottom:0">
-      Até {{ max_arquivos }} arquivos / {{ max_mb }} MB por lote. Trim = {{ trim }}
-      (valor medido, ADR 0042). O pareamento F/R sai do <em>conteúdo</em> das
-      leituras, não do nome do arquivo.
+      Dois arquivos viram uma amostra e abrem direto no cromatograma; uma pasta
+      vira um lote com a lista de amostras. Até {{ max_arquivos }} arquivos /
+      {{ max_mb }} MB por envio. Trim = {{ trim }} (valor medido, ADR 0042).
+      O pareamento F/R sai do <em>conteúdo</em> das leituras, não do nome do arquivo.
     </p>
 
     {% if cota %}

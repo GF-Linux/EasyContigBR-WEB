@@ -26,7 +26,7 @@ dev = ["pytest>=8", "httpx>=0.27"]
 packages = ["easycontig_web"]
 
 [tool.setuptools.package-data]
-easycontig_web = ["templates/*.html"]
+easycontig_web = ["templates/*.html", "estatico/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

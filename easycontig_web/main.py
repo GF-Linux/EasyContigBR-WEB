@@ -17,11 +17,13 @@ from urllib.parse import quote
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse)
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import amostras as mod_amostras
-from . import auth, config, cotas, executor, fila, retencao
+from . import auth, config, cotas, executor, fila, retencao, traco
 
 cfg = config.carregar()
 fila.criar_esquema(cfg.sqlite_path)
@@ -31,6 +33,10 @@ app = FastAPI(title="EasyContig BR — lotes", docs_url="/api/docs")
 # A chave assina o cookie de sessão. Sem SECRET_KEY no ambiente, gera uma por
 # processo: seguro, mas derruba as sessões a cada reinício — aceitável em
 # desenvolvimento, e o `.env.example` avisa que produção precisa definir.
+# O traço de um par são ~380 KB de JSON e ~112 KB comprimidos (medido). Sem
+# isto, a página da amostra puxaria três vezes mais pela rede sem ganho nenhum.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("EASYCONTIG_SECRET_KEY") or secrets.token_urlsafe(32),
@@ -39,6 +45,13 @@ app.add_middleware(
 )
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+# O JS do workspace sai em arquivo, e não embutido no template, porque o
+# navegador o guarda em cache entre amostras — a página da amostra é a que mais
+# se reabre, uma por par.
+app.mount("/estatico",
+          StaticFiles(directory=str(Path(__file__).parent / "estatico")),
+          name="estatico")
 
 
 def _br(valor) -> str:
@@ -280,6 +293,34 @@ def pagina_lote(request: Request, lote_id: str, tela_do_lote: int = 0):
         "resumo": mod_amostras.resumo(rep) if rep else None,
         "expira_em": retencao.expira_em(lote, cfg.retencao_dias),
     })
+
+
+@app.get("/api/lotes/{lote_id}/amostras/{chave}/traco")
+def api_traco(request: Request, lote_id: str, chave: str):
+    """O cromatograma das duas leituras, no eixo de coluna do consenso.
+
+    Sai por API e não embutido na página porque é o pedaço pesado (~112 KB
+    comprimidos): a página abre com os números na hora, e o traço chega depois.
+    Remontar custa ~0,3 s de tracy — é feito aqui, sob demanda.
+    """
+    u = _exigir(request)
+    _lote_do_usuario(lote_id, u)
+    rep = _relatorio(lote_id)
+    if not rep:
+        raise HTTPException(status_code=404, detail="relatório indisponível")
+    am = traco.amostra_do_relatorio(rep, chave)
+    if not am:
+        raise HTTPException(status_code=404, detail="amostra não encontrada no lote")
+    lote_dir = executor.pastas_do_lote(cfg, lote_id)["raiz"]
+    dados = traco.para_navegador(traco.montar(cfg, lote_dir, am), am)
+    if not dados:
+        # Sem traço a página não quebra: ela mostra os números e diz por quê.
+        return JSONResponse({"disponivel": False,
+                             "motivo": "os arquivos originais não estão mais no "
+                                       "servidor, ou esta amostra não é um par F+R"},
+                            status_code=200)
+    dados["disponivel"] = True
+    return JSONResponse(dados)
 
 
 @app.get("/lotes/{lote_id}/amostras/{chave}", response_class=HTMLResponse)

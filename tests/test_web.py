@@ -159,3 +159,23 @@ def test_saude_lista_as_dependencias(cliente):
     d = cliente.get("/saude").json()
     assert {x["item"] for x in d["dependencias"]} == {
         "tracy", "blastn", "banco 18S", "banco 16S"}
+
+
+# --- workspace da amostra: o traço --------------------------------------------
+def test_rota_do_traco_exige_sessao(cliente):
+    """O traço carrega o conteúdo do .ab1 — não pode sair sem dono."""
+    r = cliente.get("/api/lotes/qualquer/amostras/x/traco")
+    assert r.status_code == 401
+
+
+def test_traco_de_lote_alheio_da_404(cliente):
+    """O traço carrega o conteúdo do .ab1: a checagem de dono vale aqui também."""
+    _entrar(cliente, "gustavo@ufrrj.br")
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]),
+                     follow_redirects=False)
+    lote_id = r.headers["location"].rsplit("/", 1)[-1]
+
+    cliente.get("/sair")
+    _entrar(cliente, "outra@ufrrj.br")
+    assert cliente.get(
+        f"/api/lotes/{lote_id}/amostras/amostra12/traco").status_code == 404
