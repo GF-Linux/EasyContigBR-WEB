@@ -1,38 +1,105 @@
 {% extends "base.html" %}
 {% block titulo %}Entrar — EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* A entrada não usa a casca com lateral: quem não entrou não tem corridas para
+   listar. Marca à esquerda, coluna de entrada à direita (ADR 0052). */
+.trabalho{ padding:0 }
+.trabalho > .interno{ max-width:none }
+.rodape{ display:none }
+.portaria{ display:grid; grid-template-columns:minmax(0,1fr) minmax(21rem,.66fr);
+  min-height:100vh }
+@media(max-width:860px){ .portaria{ grid-template-columns:1fr } }
+.pt-marca{ position:relative; padding:3rem; display:flex; flex-direction:column;
+  justify-content:space-between; overflow:hidden;
+  background:radial-gradient(70% 60% at 20% 20%,rgba(14,151,130,.16) 0,transparent 60%),
+             radial-gradient(60% 60% at 85% 85%,rgba(145,132,217,.14) 0,transparent 60%),
+             #14151F }
+.pt-marca .selo{ width:128px; height:128px; border-radius:50%; background:#F5F4F2;
+  padding:11px; display:grid; place-items:center;
+  box-shadow:0 0 0 1px rgba(255,255,255,.12),0 10px 34px rgba(0,0,0,.5) }
+.pt-marca .selo svg{ width:100%; height:100%; display:block }
+.pt-marca h1{ font-size:clamp(1.6rem,3vw,2.15rem); font-weight:800; letter-spacing:-.03em;
+  margin:1.5rem 0 .55rem; line-height:1.08 }
+.pt-marca p{ color:var(--apoio); max-width:34ch; margin:0; font-size:.95rem }
+.creds{ display:flex; gap:.45rem; flex-wrap:wrap; margin-top:1.4rem }
+.cred{ font-family:var(--mono); font-size:.66rem; letter-spacing:.06em; color:var(--apoio);
+  border:1px solid var(--linha-forte); border-radius:20px; padding:.26rem .66rem }
+.pt-entrar{ background:var(--painel); border-left:1px solid var(--linha-forte);
+  padding:3rem 2.3rem; display:flex; flex-direction:column; justify-content:center }
+@media(max-width:860px){ .pt-entrar{ border-left:0; border-top:1px solid var(--linha-forte) } }
+.pt-entrar h2{ font-size:1.2rem; font-weight:800; margin:0 0 1.2rem; letter-spacing:-.01em }
+.google{ display:flex; align-items:center; justify-content:center; gap:.6rem; width:100%;
+  font-size:.94rem; font-weight:600; padding:.78rem 1rem; border-radius:9px;
+  border:1px solid var(--linha-forte); background:#fff; color:#1f2430 }
+.google:hover{ background:#f1f2f6 }
+.google svg{ width:18px; height:18px; flex:none }
+.ou{ display:flex; align-items:center; gap:.75rem; margin:1.2rem 0; color:var(--fraco);
+  font-size:.72rem; font-family:var(--mono); letter-spacing:.1em }
+.ou::before,.ou::after{ content:""; flex:1; height:1px; background:var(--linha) }
+.campo label{ display:block; font-family:var(--mono); font-size:.64rem; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--fraco); margin-bottom:.32rem }
+.pt-entrar button[type=submit]{ width:100%; margin-top:.85rem; padding:.7rem 1rem }
+{% endblock %}
+
 {% block conteudo %}
+<div class="portaria">
 
-<div class="cartao" style="max-width:26rem;margin-top:2rem">
-  <h2 style="margin-top:0">Entrar</h2>
-  {% if erro %}<p class="erro">{{ erro }}</p>{% endif %}
-
-  {% if modo == 'google' %}
-    {% if google_ok %}
-      <p><a class="botao" href="/auth/google">Entrar com Google</a></p>
-    {% else %}
-      <p class="erro">Login Google selecionado, mas faltam
-      <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.</p>
-    {% endif %}
-  {% else %}
-    <p class="sub">Modo de desenvolvimento: qualquer e-mail entra, sem senha.
-    <strong>Não use assim em servidor.</strong></p>
-    <form method="post" action="/entrar">
-      {# Preserva o destino de quem chegou aqui por um link de lote: depois de
-         entrar, a pessoa volta para o que tentou abrir. O `main.py` recusa
-         qualquer valor que não seja caminho local. #}
-      <input type="hidden" name="proximo" value="{{ proximo }}">
-      <div class="campo">
-        <label class="sub" for="email">e-mail</label>
-        <input type="email" id="email" name="email" required
-               placeholder="voce@ufrrj.br">
+  <div class="pt-marca">
+    <div>
+      <span class="selo">{% include "_logo.html" %}</span>
+      <h1>EasyContig BR</h1>
+      <p>Montagem e identificação de sequências Sanger do Laboratório de
+      Hemoparasitas e Vetores da UFRRJ.</p>
+      <div class="creds">
+        <span class="cred">Tracy · EMBL</span>
+        <span class="cred">BLAST local</span>
+        <span class="cred">registro INPI</span>
       </div>
-      <button type="submit">Entrar</button>
-    </form>
-  {% endif %}
+    </div>
+    <p class="fraco" style="font-size:.76rem;margin:1.8rem 0 0;max-width:38ch">
+      Uso em pesquisa. O resultado relata o que foi medido e não emite diagnóstico.</p>
+  </div>
 
-  {% if dominio %}
-    <p class="sub" style="margin-bottom:0">Restrito a <code>{{ dominio }}</code>.</p>
-  {% endif %}
+  <div class="pt-entrar">
+    <h2>Entrar</h2>
+    {% if erro %}<p class="erro" style="margin:0 0 .9rem">{{ erro }}</p>{% endif %}
+
+    {% if modo == 'google' %}
+      {% if google_ok %}
+        <a class="google" href="/auth/google">
+          <svg viewBox="0 0 48 48" aria-hidden="true">
+            <path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-2.7-.4-3.9H24v7.1h12.1c-.2 1.8-1.6 4.6-4.5 6.4l6.9 5.3c4.1-3.8 6.6-9.3 6.6-14.9z"/>
+            <path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.3c-1.9 1.3-4.4 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7.1 5.5C8.1 41.1 15.4 46 24 46z"/>
+            <path fill="#FBBC05" d="M11.5 28.5c-.5-1.4-.7-2.9-.7-4.5s.3-3.1.7-4.5l-7.1-5.5C2.9 17 2 20.4 2 24s.9 7 2.4 10z"/>
+            <path fill="#EA4335" d="M24 10.6c4.1 0 6.9 1.8 8.5 3.3l6.2-6C34.9 4.5 29.9 2 24 2 15.4 2 8.1 6.9 4.4 14l7.1 5.5c1.8-5.3 6.7-8.9 12.5-8.9z"/>
+          </svg>
+          Entrar com Google
+        </a>
+      {% else %}
+        <p class="erro">Login Google selecionado, mas faltam
+        <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.</p>
+      {% endif %}
+    {% else %}
+      {# Modo de desenvolvimento: entra sem senha. O aviso fica porque uma tela
+         que não distingue dev de produção é como um servidor aberto passa
+         despercebido. #}
+      <p class="sub" style="margin:0 0 1rem">Modo de desenvolvimento: qualquer
+      e-mail entra, sem senha. <strong class="erro">Não use assim em servidor.</strong></p>
+      <form method="post" action="/entrar">
+        <input type="hidden" name="proximo" value="{{ proximo }}">
+        <div class="campo">
+          <label for="email">e-mail</label>
+          <input type="email" id="email" name="email" required placeholder="voce@ufrrj.br">
+        </div>
+        <button type="submit">Continuar</button>
+      </form>
+    {% endif %}
+
+    {% if dominio %}
+      <p class="sub" style="margin:1rem 0 0">Restrito a <code>{{ dominio }}</code>.</p>
+    {% endif %}
+  </div>
+
 </div>
-
 {% endblock %}

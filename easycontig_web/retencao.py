@@ -7,10 +7,9 @@ que ali eles ficavam PARA SEMPRE — são corridas Sanger **não publicadas**, e
 volume que só cresce é ao mesmo tempo risco (dado de terceiro guardado sem
 prazo) e conta de disco (uma corrida de 40 amostras são ~26 MB de traço bruto).
 
-O que este módulo NÃO faz: decidir a política. `DIAS_PADRAO` abaixo é um chute
-técnico com justificativa técnica, e não a regra do laboratório — quem tem o
-dado é quem define o prazo. Enquanto ninguém define, o módulo é conservador em
-todas as bifurcações: na dúvida, guarda.
+O que este módulo NÃO faz: decidir a política. Quem tem o dado é quem define o
+prazo, e enquanto ninguém definir o padrão é NÃO APAGAR (`DIAS_PADRAO = 0`) —
+o módulo é conservador em todas as bifurcações: na dúvida, guarda.
 
 Fica de propósito sem depender de `executor` (que importa `app.core` inteiro só
 para ter o caminho da pasta) e sem ler `Config`: recebe caminhos por argumento,
@@ -29,11 +28,16 @@ from .fila import RECEBENDO, RODANDO, conectar
 
 log = logging.getLogger("easycontig.retencao")
 
-# 90 dias é o intervalo entre a corrida chegar do sequenciador e o pessoal ter
-# terminado de olhar o resultado, com folga para férias e greve — é isso, e nada
-# além disso. NÃO é prazo de guarda de dado de pesquisa nem exigência de agência
-# de fomento: essa decisão tem dono humano e ainda não tem resposta.
-DIAS_PADRAO = 90
+# ⚠️ O PADRÃO É NÃO APAGAR. Isto já esteve em 90 e era defeito: uma instalação
+# que não define `EASYCONTIG_RETENCAO_DIAS` passava a apagar corridas em 90 dias
+# sem ninguém ter decidido nada — e apagar não tem desfazer. O prazo de guarda de
+# dado de pesquisa tem dono humano (autor + orientadora) e ainda não foi
+# decidido; até lá, acumular é o erro reversível e apagar é o irreversível.
+#
+# 90 dias continua sendo a SUGESTÃO documentada no `.env.example` (tempo entre a
+# corrida chegar e o pessoal terminar de olhar, com folga) — sugestão, não padrão.
+DIAS_PADRAO = 0
+DIAS_SUGERIDO = 90
 
 # Os estados em que a pasta está sendo escrita NESTE INSTANTE por outro processo:
 # um upload em curso ou o trabalhador montando. Apagar por baixo deles é o mesmo
@@ -45,9 +49,10 @@ INTOCAVEIS = (RECEBENDO, RODANDO)
 def dias_configurados() -> int:
     """Prazo em dias, de `EASYCONTIG_RETENCAO_DIAS`. 0 = nunca expurgar.
 
-    Valor ausente cai no padrão; valor ilegível ou negativo TAMBÉM cai no padrão,
-    com aviso no log. Negativo é o caso perigoso: `dias=-1` significaria "tudo já
-    venceu" e um erro de digitação no `.env` esvaziaria o volume inteiro.
+    Valor ausente cai no padrão (que é 0 = não apagar); valor ilegível ou negativo
+    TAMBÉM cai no padrão, com aviso no log. Negativo é o caso perigoso: `dias=-1`
+    significaria "tudo já venceu" e um erro de digitação no `.env` esvaziaria o
+    volume inteiro. Todas as bifurcações erram para o lado de guardar.
     """
     bruto = os.environ.get("EASYCONTIG_RETENCAO_DIAS", "").strip()
     if not bruto:

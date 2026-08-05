@@ -5,61 +5,180 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block titulo %}EasyContig BR{% endblock %}</title>
 <style>
-  :root{ --tinta:#16181d; --fraco:#6b7280; --linha:#e3e6ea; --fundo:#f7f8fa;
-         --papel:#fff; --acento:#1f6f43; --alerta:#8a4b00; --erro:#9b1c1c; }
-  @media (prefers-color-scheme: dark){
-    :root{ --tinta:#e8eaed; --fraco:#9aa3af; --linha:#2b2f36; --fundo:#14161a;
-           --papel:#1b1e24; --acento:#54b782; --alerta:#d79a4a; --erro:#f08a8a; }
-  }
-  *{ box-sizing:border-box }
-  body{ margin:0; background:var(--fundo); color:var(--tinta);
-        font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
-  .faixa{ background:var(--papel); border-bottom:1px solid var(--linha); }
-  .faixa .interno{ display:flex; align-items:baseline; gap:.75rem; }
-  .interno{ max-width:60rem; margin:0 auto; padding:1rem 1.25rem; }
-  h1{ font-size:1.05rem; margin:0; letter-spacing:.02em }
-  h2{ font-size:.95rem; margin:1.75rem 0 .6rem; }
-  .sub{ color:var(--fraco); font-size:.85rem }
-  .direita{ margin-left:auto }
-  a{ color:var(--acento) }
-  .cartao{ background:var(--papel); border:1px solid var(--linha);
-           border-radius:10px; padding:1.1rem 1.25rem; margin-bottom:1rem; }
-  table{ border-collapse:collapse; width:100% }
-  th,td{ text-align:left; padding:.45rem .5rem; border-bottom:1px solid var(--linha);
-         font-size:.87rem; vertical-align:top }
-  th{ color:var(--fraco); font-weight:600 }
-  .rotulo{ display:inline-block; padding:.1rem .5rem; border-radius:99px;
-           font-size:.74rem; border:1px solid var(--linha) }
-  .recebendo{ color:var(--fraco) } .na_fila{ color:var(--fraco) } .rodando{ color:var(--alerta) }
-  .pronto{ color:var(--acento) } .falhou{ color:var(--erro) }
-  button,.botao{ font:inherit; padding:.5rem .95rem; border-radius:8px; cursor:pointer;
-          border:1px solid var(--acento); background:var(--acento); color:#fff;
-          text-decoration:none; display:inline-block }
-  button[disabled]{ opacity:.5; cursor:not-allowed }
-  .secundario{ background:transparent; color:var(--acento) }
-  input[type=text],input[type=email]{ font:inherit; padding:.5rem .6rem; width:100%;
-    border:1px solid var(--linha); border-radius:8px; background:var(--fundo);
-    color:var(--tinta) }
-  .campo{ margin-bottom:.9rem }
-  .erro{ color:var(--erro) }
-  .barra{ height:6px; background:var(--linha); border-radius:99px; overflow:hidden }
-  .barra > i{ display:block; height:100%; background:var(--acento) }
-  code{ font-size:.85em; background:var(--fundo); padding:.1rem .3rem; border-radius:4px }
-  .rodape{ color:var(--fraco); font-size:.78rem; padding:2rem 1.25rem; max-width:60rem;
-           margin:0 auto; border-top:1px solid var(--linha) }
+/* ───────────────────────────────────────────────────────────────────────────
+   Paleta do design aprovado em 2026-08-05 (ADR 0052). Não foi escolhida aqui:
+   foi amostrada do desenho — #12131C é 42% dos pixels, #232532 é 30%, #161826
+   é 14%, e o acento é o violeta #9184D9. Verde/vermelho/âmbar são SEMÂNTICOS
+   (base, falha, pendência), nunca decoração — é o que faz "sem acerto" e "não
+   montou" se distinguirem de relance.
+   A tela é comprometida com o escuro: é a mesma sala do aplicativo desktop.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root{
+  --fundo:#12131C; --painel:#232532; --interno:#161826; --selecao:#2B2741;
+  --linha:#2c2f40; --linha-forte:#3a3e52;
+  --tinta:#E8EAF2; --apoio:#A9AEC4; --fraco:#6E7490;
+  --violeta:#9184D9; --violeta-claro:#A99EE6; --violeta-fundo:rgba(145,132,217,.13);
+  --verde:#3FB950; --vermelho:#F0524A; --ambar:#E3A34A; --azul:#58A6FF;
+  --sans:"Inter","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  --mono:"JetBrains Mono","Consolas","SFMono-Regular",ui-monospace,monospace;
+}
+*{ box-sizing:border-box }
+body{ margin:0; background:var(--fundo); color:var(--tinta);
+      font:15px/1.6 var(--sans); -webkit-font-smoothing:antialiased }
+a{ color:var(--violeta-claro); text-decoration:none }
+a:hover{ text-decoration:underline }
+:focus-visible{ outline:2px solid var(--violeta); outline-offset:2px; border-radius:4px }
+
+/* ── casca: lateral fixa + área de trabalho ──────────────────────────────── */
+.casca{ display:grid; grid-template-columns:212px minmax(0,1fr); min-height:100vh }
+.casca.sozinha{ grid-template-columns:1fr }
+@media(max-width:820px){ .casca{ grid-template-columns:1fr } }
+
+.lateral{ background:var(--painel); border-right:1px solid var(--linha);
+  display:flex; flex-direction:column; padding:14px 0 }
+@media(max-width:820px){ .lateral{ border-right:0; border-bottom:1px solid var(--linha) } }
+.lat-topo{ display:flex; align-items:center; gap:9px; padding:0 14px 13px }
+.lat-topo .selo{ width:30px; height:30px; flex:none; border-radius:50%;
+  background:#F5F4F2; padding:3px; display:grid; place-items:center }
+.lat-topo .selo svg{ width:100%; height:100%; display:block }
+.lat-topo b{ font-size:13.5px; font-weight:700; letter-spacing:.01em }
+.lat-topo b span{ color:var(--apoio); font-weight:400 }
+
+.perfil{ display:flex; align-items:center; gap:9px; padding:10px 14px;
+  border-top:1px solid var(--linha); border-bottom:1px solid var(--linha) }
+.perfil .av{ width:30px; height:30px; border-radius:50%; flex:none; display:grid;
+  place-items:center; font-size:11px; font-weight:800; color:#14121f;
+  background:linear-gradient(135deg,var(--violeta),#6f63b8) }
+.perfil .quem{ min-width:0 }
+.perfil .nm{ font-size:12.5px; font-weight:600; line-height:1.3;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.perfil .sai{ font-family:var(--mono); font-size:9px; letter-spacing:.06em;
+  color:var(--fraco) }
+
+.sec{ font-family:var(--mono); font-size:9px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--fraco); padding:14px 14px 7px }
+.corridas{ display:flex; flex-direction:column; gap:1px; padding:0 8px;
+  max-height:46vh; overflow-y:auto }
+.cr{ display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:7px;
+  font-size:12.5px; color:var(--apoio); border:1px solid transparent }
+.cr:hover{ background:var(--interno); text-decoration:none; color:var(--tinta) }
+.cr.viva{ background:var(--selecao); border-color:var(--violeta); color:var(--tinta);
+  font-weight:600 }
+.cr .pt{ width:6px; height:6px; border-radius:50%; flex:none; background:var(--fraco) }
+.cr .pt.pronto{ background:var(--verde) } .cr .pt.falhou{ background:var(--vermelho) }
+.cr .pt.rodando,.cr .pt.na_fila,.cr .pt.recebendo{ background:var(--ambar) }
+.cr .nome{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.lat-acao{ margin:10px 8px 0; padding:7px 9px; border-radius:7px; font-size:12.5px;
+  color:var(--apoio); display:block }
+.lat-acao:hover{ background:var(--interno); color:var(--tinta); text-decoration:none }
+.lat-pe{ margin-top:auto; padding:12px 14px 0; border-top:1px solid var(--linha);
+  font-family:var(--mono); font-size:9.5px; color:var(--fraco) }
+
+.trabalho{ padding:20px 22px 40px; min-width:0 }
+.trabalho > .interno{ max-width:64rem }
+
+/* ── tipografia e blocos ─────────────────────────────────────────────────── */
+h1{ font-size:1.32rem; font-weight:800; letter-spacing:-.02em; margin:0 0 .2rem }
+h2{ font-size:.98rem; font-weight:700; margin:1.6rem 0 .55rem; letter-spacing:-.005em }
+.sub{ color:var(--apoio); font-size:.86rem }
+.fraco{ color:var(--fraco) }
+.cartao{ background:var(--painel); border:1px solid var(--linha); border-radius:10px;
+  padding:1.05rem 1.2rem; margin-bottom:.9rem }
+table{ border-collapse:collapse; width:100% }
+th,td{ text-align:left; padding:.45rem .55rem; border-bottom:1px solid var(--linha);
+  font-size:.87rem; vertical-align:top }
+th{ color:var(--fraco); font-weight:600; font-family:var(--mono); font-size:.72rem;
+  letter-spacing:.06em; text-transform:uppercase }
+td{ font-variant-numeric:tabular-nums }
+
+/* estados: cor semântica, sempre acompanhada de palavra — cor sozinha não informa */
+.rotulo{ display:inline-block; padding:.14rem .55rem; border-radius:99px;
+  font-family:var(--mono); font-size:.7rem; border:1px solid var(--linha-forte);
+  color:var(--apoio) }
+.recebendo,.na_fila{ color:var(--apoio) }
+.rodando{ color:var(--ambar); border-color:rgba(227,163,74,.4) }
+.pronto{ color:var(--verde); border-color:rgba(63,185,80,.4) }
+.falhou{ color:var(--vermelho); border-color:rgba(240,82,74,.4) }
+.erro{ color:var(--vermelho) }
+
+button,.botao{ font:inherit; font-size:.88rem; font-weight:600; padding:.5rem .95rem;
+  border-radius:8px; cursor:pointer; border:1px solid var(--violeta);
+  background:var(--violeta); color:#14121f; display:inline-block; text-decoration:none }
+button:hover,.botao:hover{ background:var(--violeta-claro); text-decoration:none }
+button[disabled]{ opacity:.45; cursor:not-allowed }
+.secundario{ background:transparent; color:var(--violeta-claro) }
+.secundario:hover{ background:var(--violeta-fundo) }
+input[type=text],input[type=email]{ font:inherit; font-size:.9rem; padding:.55rem .7rem;
+  width:100%; border:1px solid var(--linha-forte); border-radius:8px;
+  background:var(--interno); color:var(--tinta) }
+input[type=text]::placeholder,input[type=email]::placeholder{ color:var(--fraco) }
+input[type=file]{ font:inherit; font-size:.84rem; color:var(--apoio) }
+.campo{ margin-bottom:.85rem }
+.barra{ height:6px; background:var(--linha); border-radius:99px; overflow:hidden }
+.barra > i{ display:block; height:100%; background:var(--violeta) }
+code{ font-family:var(--mono); font-size:.85em; background:var(--interno);
+  padding:.1rem .32rem; border-radius:4px; color:var(--apoio) }
+pre{ font-family:var(--mono); font-size:.8rem }
+.rodape{ color:var(--fraco); font-size:.78rem; padding:1.8rem 0 0; margin-top:1.6rem;
+  border-top:1px solid var(--linha); max-width:64rem; line-height:1.6 }
+{% block estilo %}{% endblock %}
 </style>
 </head>
 <body>
-<div class="faixa"><div class="interno">
-  <h1>EasyContig BR <span class="sub">· lotes</span></h1>
-  {% if usuario %}<span class="direita sub">{{ usuario.email }} ·
-    <a href="/sair">sair</a></span>{% endif %}
-</div></div>
-<div class="interno">{% block conteudo %}{% endblock %}</div>
-<div class="rodape">
-  Motor de montagem: Tracy (Rausch et al., BMC Genomics 2020). Identificação por
-  BLAST contra banco local curado. <strong>O relatório relata, não conclui</strong> —
-  todo limiar vai impresso nele. Uso em pesquisa.
+
+<div class="casca{% if not usuario %} sozinha{% endif %}">
+{% if usuario %}
+  <aside class="lateral">
+    <div class="lat-topo">
+      <span class="selo">{% include "_logo.html" %}</span>
+      <b>EasyContig <span>BR</span></b>
+    </div>
+
+    <div class="perfil">
+      <span class="av">{{ (usuario.nome or usuario.email)[:2]|upper }}</span>
+      <span class="quem">
+        <span class="nm" title="{{ usuario.email }}">{{ usuario.nome or usuario.email }}</span><br>
+        <a class="sai" href="/sair">sair</a>
+      </span>
+    </div>
+
+    {# A lista fica na lateral porque é o que a pessoa volta para consultar
+       (ADR 0051: o uso real é par a par, e o histórico é o que se acumula). #}
+    <div class="sec">Corridas</div>
+    <div class="corridas">
+      {% for l in (corridas or []) %}
+        {# Sem `?tela_do_lote=1` de propósito: uma corrida de UMA amostra — que é
+           o caso normal, o par F+R da ADR 0051 — precisa cair direto na página
+           da amostra. Pôr o parâmetro aqui anulava esse atalho em todo acesso
+           pela lateral, que é justamente por onde a pessoa volta. #}
+        <a class="cr{% if lote is defined and lote and lote.id == l.id %} viva{% endif %}"
+           href="/lotes/{{ l.id }}" title="{{ l.status }}">
+          <i class="pt {{ l.status }}"></i>
+          <span class="nome">{{ l.nome or l.id }}</span>
+        </a>
+      {% else %}
+        <span class="lat-acao fraco" style="font-size:11.5px">Nenhuma ainda.</span>
+      {% endfor %}
+    </div>
+
+    <a class="lat-acao" href="/">+ Enviar corrida</a>
+    <div class="lat-pe">{{ usuario.email }}</div>
+  </aside>
+{% endif %}
+
+  <main class="trabalho">
+    <div class="interno">
+      {% block conteudo %}{% endblock %}
+
+      <div class="rodape">
+        Motor de montagem: Tracy (Rausch et al., BMC Genomics 2020).
+        Identificação por BLAST contra banco local curado.
+        <strong>O relatório relata, não conclui</strong> — todo limiar vai impresso
+        nele. Uso em pesquisa.
+      </div>
+    </div>
+  </main>
 </div>
+
 </body>
 </html>

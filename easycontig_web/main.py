@@ -74,8 +74,10 @@ def _erro(request: Request, exc: HTTPException):
         # lote que tentou abrir, em vez de cair na lista e ter de procurá-lo.
         return RedirectResponse(f"/entrar?proximo={quote(request.url.path)}",
                                 status_code=303)
+    u = _u(request)
     return TEMPLATES.TemplateResponse(request, "erro.html", {
-        "usuario": _u(request), "codigo": exc.status_code, "detalhe": exc.detail,
+        **(_casca(u) if u else {"usuario": None}),
+        "codigo": exc.status_code, "detalhe": exc.detail,
     }, status_code=exc.status_code)
 
 EXT_ACEITAS = {".ab1", ".abi", ".scf"}
@@ -91,6 +93,16 @@ def _exigir(request: Request) -> auth.Usuario:
     if not u:
         raise HTTPException(status_code=401, detail="entre para continuar")
     return u
+
+
+def _casca(u: auth.Usuario) -> dict:
+    """O que a barra lateral precisa, em qualquer página.
+
+    A lista de corridas mora na lateral porque é o que a pessoa volta para
+    consultar — o uso real é par a par (ADR 0051), e o que se acumula é o
+    histórico. Fica curta de propósito: a lateral é atalho, não arquivo.
+    """
+    return {"usuario": u, "corridas": fila.listar(cfg.sqlite_path, dono=u.email, limite=25)}
 
 
 def _lote_do_usuario(lote_id: str, u: auth.Usuario) -> dict:
@@ -112,7 +124,7 @@ def inicio(request: Request):
     if not u:
         return RedirectResponse("/entrar", status_code=303)
     return TEMPLATES.TemplateResponse(request, "inicio.html", {
-        "usuario": u,
+        **_casca(u),
         "lotes": fila.listar(cfg.sqlite_path, dono=u.email),
         "diagnostico": config.diagnostico(cfg),
         "trim": cfg.trim,
@@ -261,7 +273,7 @@ def pagina_lote(request: Request, lote_id: str, tela_do_lote: int = 0):
                 f"/lotes/{lote_id}/amostras/{quote(itens[0]['key'])}", status_code=303)
 
     return TEMPLATES.TemplateResponse(request, "lote.html", {
-        "usuario": u, "lote": lote,
+        **_casca(u), "lote": lote,
         # a página só se recarrega sozinha enquanto há o que esperar
         "recarregar": lote["status"] in (fila.RECEBENDO, fila.NA_FILA, fila.RODANDO),
         "amostras": mod_amostras.listar(rep) if rep else None,
@@ -281,7 +293,7 @@ def pagina_amostra(request: Request, lote_id: str, chave: str):
     if not a:
         raise HTTPException(status_code=404, detail="amostra não encontrada no lote")
     return TEMPLATES.TemplateResponse(request, "amostra.html", {
-        "usuario": u, "lote": lote, "amostra": a,
+        **_casca(u), "lote": lote, "amostra": a,
     })
 
 

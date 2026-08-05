@@ -224,3 +224,23 @@ def test_valor_invalido_cai_no_padrao_em_vez_de_esvaziar_o_volume(monkeypatch, v
     apagar o volume inteiro."""
     monkeypatch.setenv("EASYCONTIG_RETENCAO_DIAS", valor)
     assert retencao.dias_configurados() == retencao.DIAS_PADRAO
+
+
+def test_o_padrao_e_nao_apagar(monkeypatch):
+    """Instalação que não configura nada NÃO pode apagar dado de ninguém.
+
+    Isto já esteve em 90 e era defeito: quem subisse o servidor sem definir
+    `EASYCONTIG_RETENCAO_DIAS` passava a apagar corridas em 90 dias sem ter
+    decidido nada. Acumular é o erro reversível; apagar não tem desfazer.
+    """
+    monkeypatch.delenv("EASYCONTIG_RETENCAO_DIAS", raising=False)
+    assert retencao.dias_configurados() == 0
+    assert retencao.DIAS_PADRAO == 0
+
+
+def test_faxina_sem_configuracao_nao_toca_em_nada(banco, lotes_dir, monkeypatch):
+    monkeypatch.delenv("EASYCONTIG_RETENCAO_DIAS", raising=False)
+    lote_id = semear(banco, lotes_dir, dias_atras=9999)
+    r = retencao.faxina(banco, lotes_dir, dias=retencao.dias_configurados(), agora=AGORA)
+    assert r["apagados"] == 0
+    assert (lotes_dir / lote_id).exists()
