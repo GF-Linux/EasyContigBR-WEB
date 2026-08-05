@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block titulo %}{{ amostra.key }} — EasyContig BR{% endblock %}
+{% block conteudo %}
+{#
+  Uma amostra do lote. Espera: `usuario`, `lote` e `amostra` (saída de
+  amostras.amostra). A página relata o que foi medido e imprime a regra ao lado
+  de cada ressalva; ela não classifica a amostra nem recomenda o que fazer.
+#}
+
+<p class="sub"><a href="/lotes/{{ lote.id }}">← {{ lote.nome or lote.id }}</a></p>
+
+<div class="cartao">
+  <h2 style="margin-top:0">{{ amostra.key }}</h2>
+  <p class="sub">amostra do lote <code>{{ lote.id }}</code></p>
+
+  {% if amostra.erro %}
+  <p class="erro">Esta amostra não montou.</p>
+  <pre class="sub" style="white-space:pre-wrap">{{ amostra.erro }}</pre>
+  {% endif %}
+</div>
+
+<div class="cartao">
+  <h2 style="margin-top:0">Identificação</h2>
+  <p><span class="rotulo {{ amostra.situacao_classe }}">{{ amostra.situacao_texto }}</span></p>
+
+  {% if amostra.identificado %}
+    <p style="font-size:1.15rem; margin:.2rem 0">{{ amostra.organismo }}</p>
+    <table>
+      <tr><th style="width:14rem">Accession</th>
+          <td>{{ amostra.accession or "—" }}</td></tr>
+      <tr><th>Identidade (%)</th><td>{{ amostra.identidade or "—" }}</td></tr>
+      <tr><th>Cobertura da consulta (%)</th><td>{{ amostra.cobertura_query or "—" }}</td></tr>
+      <tr><th>E-value</th><td>{{ amostra.e_value or "—" }}</td></tr>
+      <tr><th>Marcador</th><td>{{ amostra.marcador or "—" }}</td></tr>
+    </table>
+  {% endif %}
+
+  {% if amostra.situacao_nota %}<p class="sub">{{ amostra.situacao_nota }}</p>{% endif %}
+</div>
+
+<div class="cartao">
+  <h2 style="margin-top:0">Montagem</h2>
+  <table>
+    <tr><th style="width:14rem">N. de leituras</th><td>{{ amostra.n_leituras }}</td></tr>
+    <tr><th>Consenso (pb)</th><td>{{ amostra.consenso_pb }}</td></tr>
+    <tr><th>Cobertura média</th><td>{{ amostra.cobertura_media or "—" }}</td></tr>
+    <tr><th>Bases sustentadas por uma única leitura</th>
+        <td>{{ amostra.n_cobertura_1 }}{% if amostra.pct_cobertura_1x %}
+            ({{ amostra.pct_cobertura_1x }}%){% endif %}</td></tr>
+    <tr><th>Posições em que as leituras discordaram</th>
+        <td>{{ amostra.discordancias }}</td></tr>
+    <tr><th>Contig invertido</th>
+        <td>{{ amostra.contig_invertido }}
+          {% if amostra.invertido %}<span class="sub">— o contig foi montado no
+          sentido complementar. A polaridade global de um contig é arbitrária e
+          o sentido foi decidido por maioria; os sentidos das leituras abaixo já
+          estão normalizados.</span>{% endif %}</td></tr>
+  </table>
+
+  {% if amostra.leituras %}
+  <h2>Leituras</h2>
+  <table>
+    <tr><th>Leitura</th><th>Primer (nome)</th><th>Sentido: nome</th>
+        <th>Sentido: medido</th><th>Bases</th><th>Q médio</th><th>Janela</th></tr>
+    {% for r in amostra.leituras %}
+    <tr>
+      <td>{{ r.nome }}</td>
+      <td>{{ r.primer or "—" }}</td>
+      <td{% if r.sentido_diverge %} class="rodando"{% endif %}>{{ r.sentido_nome or "—" }}</td>
+      <td{% if r.sentido_diverge %} class="rodando"{% endif %}>{{ r.sentido_medido or "—" }}</td>
+      <td>{{ r.bases }}</td>
+      <td>{{ r.q_medio or "—" }}{% if r.q_rotulo %} <span class="sub">{{ r.q_rotulo }}</span>{% endif %}</td>
+      <td>{{ r.janela or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+<div class="cartao">
+  <h2 style="margin-top:0">Ressalvas ({{ amostra.n_ressalvas }})</h2>
+  {% if amostra.ressalvas %}
+    {% for c in amostra.ressalvas %}
+    <p style="margin:.45rem 0">{{ c.texto }}<br>
+      <span class="sub">[{{ c.codigo }}{% if c.regra %} · regra: {{ c.regra }}{% endif %}]</span></p>
+    {% endfor %}
+    <p class="sub">Cada ressalva é o resultado de uma regra fixa, impressa acima
+    junto do fato para que possa ser contestada.</p>
+  {% else %}
+    <p class="sub">Nenhum limiar do relatório foi cruzado nesta amostra. Isso não
+    é atestado de qualidade — é a ausência de ressalva.</p>
+  {% endif %}
+</div>
+
+<p class="sub"><a href="/lotes/{{ lote.id }}">← voltar para o lote</a> ·
+  <a href="/lotes/{{ lote.id }}/relatorio">relatório completo do lote</a></p>
+
+{% endblock %}

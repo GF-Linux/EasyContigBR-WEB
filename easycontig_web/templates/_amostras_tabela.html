@@ -1,0 +1,66 @@
+{#
+  _amostras_tabela.html — include (não estende nada), para entrar dentro do
+  cartão de um lote pronto. Espera: `lote`, `amostras` (saída de
+  amostras.listar) e `resumo` (saída de amostras.resumo).
+
+  Colunas vazias saem como travessão, nunca como 0: identidade em branco quer
+  dizer que não houve acerto, e "0%" seria lido como uma medida.
+#}
+<div class="cartao">
+  <h2 style="margin-top:0">Amostras</h2>
+  <p class="sub">{{ resumo.total }} amostra(s){% if resumo.banco %} · banco
+    consultado: {{ resumo.banco }}{% endif %}{% if resumo.trim %} ·
+    trim={{ resumo.trim }}{% endif %}</p>
+
+  <p>
+    {% for s in resumo.situacoes %}
+      <span class="rotulo {{ s.classe }}" title="{{ s.nota }}">{{ s.n }}
+        {{ s.texto }}</span>
+    {% endfor %}
+    {% if resumo.com_ressalva %}
+      <span class="rotulo sub">{{ resumo.com_ressalva }} com ressalva</span>
+    {% endif %}
+    {% if resumo.com_erro %}
+      <span class="rotulo falhou">{{ resumo.com_erro }} sem consenso</span>
+    {% endif %}
+  </p>
+
+  <table>
+    <tr>
+      <th>Amostra</th>
+      <th>N. de leituras</th>
+      <th>Consenso (pb)</th>
+      <th>Cobertura média</th>
+      <th>Organismo</th>
+      <th>Identidade (%)</th>
+      <th>Situação da identificação</th>
+      <th>Ressalvas</th>
+    </tr>
+    {% for a in amostras %}
+    <tr>
+      <td><a href="/lotes/{{ lote.id }}/amostras/{{ a.key|urlencode }}">{{ a.key }}</a></td>
+      <td>{{ a.n_leituras }}</td>
+      <td>{{ a.consenso_pb }}</td>
+      <td>{{ a.cobertura_media or "—" }}</td>
+      <td>{{ a.organismo or "—" }}</td>
+      <td>{{ a.identidade or "—" }}</td>
+      <td><span class="rotulo {{ a.situacao_classe }}"
+                title="{{ a.situacao_nota }}">{{ a.situacao_texto }}</span></td>
+      <td>
+        {% if a.erro %}<span class="erro">não montou</span><br>{% endif %}
+        {% if a.n_ressalvas %}
+          <span class="sub" title="{{ a.ressalvas|map(attribute='texto')|join(' | ') }}"
+            >{{ a.n_ressalvas }} ressalva(s)</span>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="sub">O relatório deste lote não trouxe amostras.</td></tr>
+    {% endfor %}
+  </table>
+
+  <p class="sub">Identidade em branco (—) significa que não houve acerto no banco
+  local; não é 0%. Ausência de ressalva significa que nenhum limiar do relatório
+  foi cruzado — não é atestado de qualidade. Clique na amostra para ver as
+  medidas e as ressalvas por extenso.</p>
+</div>

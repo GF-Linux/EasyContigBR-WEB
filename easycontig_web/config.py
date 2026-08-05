@@ -12,6 +12,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import retencao
+
 
 def _path(nome: str, padrao: str | None = None) -> Path | None:
     v = os.environ.get(nome) or padrao
@@ -29,6 +31,7 @@ class Config:
     max_arquivos: int         # teto de arquivos por lote
     max_bytes: int            # teto de tamanho por lote
     dominio_permitido: str    # restrição de e-mail no login (vazio = qualquer)
+    retencao_dias: int        # prazo do expurgo; 0 = guardar para sempre
 
     @property
     def lotes_dir(self) -> Path:
@@ -54,6 +57,9 @@ def carregar() -> Config:
         # texto: um lote de 40 já são ~26 MB (ADR 0050).
         max_bytes=int(os.environ.get("EASYCONTIG_MAX_BYTES", str(300 * 1024 * 1024))),
         dominio_permitido=os.environ.get("EASYCONTIG_DOMINIO", ""),
+        # O prazo em si é decisão do laboratório, não do código: `retencao.py`
+        # trata valor ausente, ilegível e negativo, e nunca deduz "tudo vencido".
+        retencao_dias=retencao.dias_configurados(),
     )
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     cfg.lotes_dir.mkdir(parents=True, exist_ok=True)

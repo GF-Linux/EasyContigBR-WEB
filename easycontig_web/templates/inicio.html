@@ -20,7 +20,9 @@
 
 <h2>Enviar uma corrida</h2>
 <div class="cartao">
-  <form method="post" action="/lotes" enctype="multipart/form-data">
+  <form id="envio" method="post" action="/lotes" enctype="multipart/form-data"
+        data-max-arquivos="{{ max_arquivos }}"
+        data-max-bytes="{{ max_mb * 1024 * 1024 }}">
     <div class="campo">
       <label class="sub" for="nome">Nome da corrida (só para você se achar depois)</label>
       <input type="text" id="nome" name="nome" placeholder="ex.: F13719 #80649 27/07">
@@ -30,13 +32,41 @@
       <input type="file" id="arquivos" name="arquivos" multiple
              accept=".ab1,.abi,.scf" webkitdirectory-hint required
              style="margin-top:.4rem">
+      <p id="resumo" class="sub" style="margin:.4rem 0 0"></p>
     </div>
-    <button type="submit">Processar lote</button>
+
+    <button type="submit" id="botao-enviar"
+            {% if cota and not cota.pode_enviar %}disabled{% endif %}>Processar lote</button>
+
+    <div id="progresso" style="display:none; margin-top:.9rem">
+      <div class="barra"><i id="progresso-barra" style="width:0%"></i></div>
+      <p id="progresso-texto" class="sub" style="margin:.4rem 0 0" aria-live="polite"></p>
+    </div>
+
+    <p id="falha" class="erro" style="display:none; margin:.9rem 0 0" role="alert"></p>
+
     <p class="sub" style="margin-bottom:0">
       Até {{ max_arquivos }} arquivos / {{ max_mb }} MB por lote. Trim = {{ trim }}
       (valor medido, ADR 0042). O pareamento F/R sai do <em>conteúdo</em> das
       leituras, não do nome do arquivo.
     </p>
+
+    {% if cota %}
+    {# tamanho em texto de gente, com vírgula decimal — a tela nunca mostra bytes crus #}
+    {%- macro tam(bytes) -%}
+      {%- set m = bytes / 1048576 -%}
+      {%- if m >= 1024 -%}{{ ((m / 1024) | round(1)) | string | replace('.', ',') }} GB
+      {%- else -%}{{ (m | round(1)) | string | replace('.', ',') }} MB{%- endif -%}
+    {%- endmacro -%}
+    <p class="sub" style="margin:.35rem 0 0">
+      Nesta conta:
+      {{ cota.lotes_ativos }} corrida(s) em processamento{% if cota.max_lotes_ativos %} de {{ cota.max_lotes_ativos }}{% else %} (sem limite){% endif %} ·
+      {{ tam(cota.bytes_usados) }} ocupados{% if cota.max_bytes_conta %} de {{ tam(cota.max_bytes_conta) }}{% else %} (sem limite de espaço){% endif %}.
+    </p>
+    {% if not cota.pode_enviar %}
+    <p class="erro" style="margin:.35rem 0 0">{{ cota.motivo }}</p>
+    {% endif %}
+    {% endif %}
   </form>
 </div>
 
@@ -61,5 +91,172 @@
 </table>
 </div>
 {% endif %}
+
+<script>
+/* Envio com progresso e desfecho explícito.
+ *
+ * O <form> acima continua válido sozinho: se este script não rodar, o navegador
+ * envia do jeito antigo. O que ele acrescenta é o que o <form> não sabe fazer —
+ * dizer quanto já subiu dos 26 MB de uma corrida real e, principalmente, dizer
+ * com todas as letras quando o envio MORREU no meio. Um upload que termina pela
+ * metade sem avisar é o defeito mais grave já encontrado neste projeto
+ * (relatório com 33 das 40 amostras); a versão muda deixava exatamente isso em
+ * aberto para o usuário.
+ *
+ * XMLHttpRequest e não fetch: fetch não expõe progresso de upload. */
+(function () {
+  var form = document.getElementById('envio');
+  if (!form || !window.FormData || !window.XMLHttpRequest) return;
+  if (!('upload' in new XMLHttpRequest())) return;  // sem progresso: envio nativo
+
+  var entrada = document.getElementById('arquivos');
+  var botao = document.getElementById('botao-enviar');
+  var resumo = document.getElementById('resumo');
+  var caixa = document.getElementById('progresso');
+  var barra = document.getElementById('progresso-barra');
+  var texto = document.getElementById('progresso-texto');
+  var falha = document.getElementById('falha');
+
+  var ACEITAS = ['.ab1', '.abi', '.scf'];
+  var maxArquivos = parseInt(form.getAttribute('data-max-arquivos'), 10) || 0;
+  var maxBytes = parseInt(form.getAttribute('data-max-bytes'), 10) || 0;
+  var enviando = false;
+
+  function mb(n) { return (n / 1048576).toFixed(1).replace('.', ',') + ' MB'; }
+
+  function aceito(arquivo) {
+    var nome = (arquivo.name || '').toLowerCase();
+    for (var i = 0; i < ACEITAS.length; i++) {
+      if (nome.slice(-ACEITAS[i].length) === ACEITAS[i]) return true;
+    }
+    return false;
+  }
+
+  function selecao() {
+    var lista = entrada.files || [];
+    var n = 0, bytes = 0, ignorados = 0;
+    for (var i = 0; i < lista.length; i++) {
+      if (aceito(lista[i])) { n++; bytes += lista[i].size; } else { ignorados++; }
+    }
+    return { n: n, bytes: bytes, ignorados: ignorados };
+  }
+
+  function mostrarFalha(msg) {
+    falha.textContent = msg;
+    falha.style.display = '';
+  }
+
+  function limparFalha() {
+    falha.textContent = '';
+    falha.style.display = 'none';
+  }
+
+  function destravar() {
+    enviando = false;
+    botao.disabled = false;
+    botao.textContent = 'Processar lote';
+    caixa.style.display = 'none';
+    window.onbeforeunload = null;
+  }
+
+  entrada.addEventListener('change', function () {
+    limparFalha();
+    var s = selecao();
+    if (!s.n) {
+      resumo.textContent = entrada.files && entrada.files.length
+        ? 'Nenhum arquivo .ab1/.abi/.scf na seleção.' : '';
+      return;
+    }
+    resumo.textContent = s.n + ' arquivo(s) · ' + mb(s.bytes)
+      + (s.ignorados ? ' · ' + s.ignorados + ' de outro tipo serão ignorados' : '');
+  });
+
+  form.addEventListener('submit', function (ev) {
+    if (enviando) { ev.preventDefault(); return; }
+    var s = selecao();
+    if (!s.n) {
+      ev.preventDefault();
+      mostrarFalha('Nenhum arquivo .ab1/.abi/.scf na seleção. Escolha a pasta da corrida.');
+      return;
+    }
+    // Conferido aqui só para não fazer o usuário subir 26 MB até o servidor
+    // recusar; quem manda é o teto do servidor, que é conferido de novo lá.
+    if (maxArquivos && s.n > maxArquivos) {
+      ev.preventDefault();
+      mostrarFalha(s.n + ' arquivos selecionados; o teto por lote é ' + maxArquivos + '.');
+      return;
+    }
+    if (maxBytes && s.bytes > maxBytes) {
+      ev.preventDefault();
+      mostrarFalha('A seleção tem ' + mb(s.bytes) + '; o teto por lote é '
+                   + mb(maxBytes) + '.');
+      return;
+    }
+
+    ev.preventDefault();
+    limparFalha();
+    enviando = true;
+    botao.disabled = true;
+    botao.textContent = 'Enviando…';
+    caixa.style.display = '';
+    barra.style.width = '0%';
+    texto.textContent = 'Enviando ' + s.n + ' arquivo(s) · ' + mb(s.bytes) + '…';
+    // Fechar a aba agora aborta o envio: o lote fica pela metade no servidor.
+    window.onbeforeunload = function () {
+      return 'O envio ainda não terminou. Se sair agora, a corrida não será processada.';
+    };
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', form.getAttribute('action'), true);
+
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      var pct = Math.round(100 * e.loaded / e.total);
+      barra.style.width = pct + '%';
+      texto.textContent = mb(e.loaded) + ' de ' + mb(e.total) + ' (' + pct + '%)'
+        + (pct >= 100 ? ' · gravando no servidor…' : '');
+    };
+
+    xhr.onload = function () {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        // O servidor responde 303 para /lotes/{id}; o XHR já seguiu o
+        // redirecionamento, e responseURL é a página final do lote.
+        window.onbeforeunload = null;
+        location.assign(xhr.responseURL || '/');
+        return;
+      }
+      var detalhe = '';
+      try { detalhe = (JSON.parse(xhr.responseText) || {}).detail || ''; } catch (e) {}
+      destravar();
+      mostrarFalha('O lote não foi aceito: '
+        + (detalhe || 'o servidor respondeu ' + xhr.status)
+        + ' — nada foi processado. Corrija a seleção e envie de novo.');
+    };
+
+    var interrompido = function () {
+      destravar();
+      // ⚠️ Esta mensagem já foi uma AFIRMAÇÃO ("esta corrida NÃO foi
+      // processada") e era falsa. Testando em 2026-08-05: cortada a conexão aos
+      // 35%, o servidor já tinha o corpo inteiro (o Starlette recebe tudo antes
+      // do handler rodar), processou as 40 amostras e publicou o lote como
+      // pronto — enquanto a tela dizia o contrário em vermelho.
+      //
+      // O navegador NÃO SABE o que o servidor fez: ele perdeu a resposta, não o
+      // envio. A única frase honesta aqui é a que manda conferir a lista — e
+      // conferir antes de reenviar evita a corrida duplicada com dois
+      // protocolos, que é o estrago prático deste caso.
+      mostrarFalha('A conexão caiu antes de o servidor confirmar. NÃO dá para '
+        + 'saber daqui se a corrida chegou inteira: ela pode ter sido aceita e '
+        + 'estar processando. Recarregue esta página e veja em "Suas corridas" '
+        + 'antes de enviar de novo — reenviar sem conferir cria duas corridas '
+        + 'iguais com protocolos diferentes.');
+    };
+    xhr.onerror = interrompido;
+    xhr.onabort = interrompido;
+
+    xhr.send(new FormData(form));
+  });
+})();
+</script>
 
 {% endblock %}

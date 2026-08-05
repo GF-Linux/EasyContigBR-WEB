@@ -12,6 +12,7 @@ import os
 import secrets
 import shutil
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
@@ -19,7 +20,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, config, executor, fila
+from . import amostras as mod_amostras
+from . import auth, config, cotas, executor, fila, retencao
 
 cfg = config.carregar()
 fila.criar_esquema(cfg.sqlite_path)
@@ -37,6 +39,29 @@ app.add_middleware(
 )
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+@app.exception_handler(HTTPException)
+def _erro(request: Request, exc: HTTPException):
+    """Quem veio pelo navegador recebe página; quem veio por API recebe JSON.
+
+    Sem isto, abrir um link de lote sem sessão devolvia `{"detail":"entre para
+    continuar"}` cru na tela, sem título nem caminho de volta. E não é caso de
+    borda: sem `EASYCONTIG_SECRET_KEY` fixa a chave é regerada a cada arranque
+    do servidor (ver o comentário do SessionMiddleware), então TODO reinício
+    desloga todo mundo e leva todos a esta parede.
+    """
+    quer_html = "text/html" in request.headers.get("accept", "")
+    if not quer_html:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    if exc.status_code == 401:
+        # `proximo` preserva o destino: depois de entrar, a pessoa volta para o
+        # lote que tentou abrir, em vez de cair na lista e ter de procurá-lo.
+        return RedirectResponse(f"/entrar?proximo={quote(request.url.path)}",
+                                status_code=303)
+    return TEMPLATES.TemplateResponse(request, "erro.html", {
+        "usuario": _u(request), "codigo": exc.status_code, "detalhe": exc.detail,
+    }, status_code=exc.status_code)
 
 EXT_ACEITAS = {".ab1", ".abi", ".scf"}
 
@@ -78,31 +103,51 @@ def inicio(request: Request):
         "trim": cfg.trim,
         "max_arquivos": cfg.max_arquivos,
         "max_mb": cfg.max_bytes // (1024 * 1024),
+        "cota": cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email),
+        "retencao_dias": cfg.retencao_dias,
     })
 
 
+def _destino(proximo: str) -> str:
+    """Para onde mandar depois do login. Só caminho local — nunca outro site.
+
+    `proximo` chega pela URL, então é entrada do usuário: sem esta checagem, um
+    link `/entrar?proximo=https://outro.site` faria a nossa página de login
+    despejar a pessoa em outro domínio logo depois de ela digitar o e-mail.
+    Exigir que comece com uma barra só (e não `//`, que o navegador lê como
+    outro host) resolve.
+    """
+    if proximo.startswith("/") and not proximo.startswith("//"):
+        return proximo
+    return "/"
+
+
 @app.get("/entrar", response_class=HTMLResponse)
-def pagina_entrar(request: Request, erro: str = ""):
+def pagina_entrar(request: Request, erro: str = "", proximo: str = ""):
     return TEMPLATES.TemplateResponse(request, "entrar.html", {
         "modo": auth.modo(),
         "google_ok": auth.google_configurado(),
         "dominio": cfg.dominio_permitido,
         "erro": erro,
+        "proximo": _destino(proximo),
     })
 
 
 @app.post("/entrar")
-def entrar_dev(request: Request, email: str = Form(...)):
+def entrar_dev(request: Request, email: str = Form(...), proximo: str = Form("")):
     if auth.modo() != "dev":
         raise HTTPException(status_code=403, detail="login de desenvolvimento desligado")
     email = email.strip().lower()
+    destino = _destino(proximo)
+    volta = f"&proximo={quote(destino)}" if destino != "/" else ""
     if "@" not in email:
-        return RedirectResponse("/entrar?erro=e-mail+invalido", status_code=303)
+        return RedirectResponse(f"/entrar?erro=e-mail+invalido{volta}", status_code=303)
     if not auth.dominio_ok(email, cfg.dominio_permitido):
         return RedirectResponse(
-            f"/entrar?erro=fora+do+dominio+{cfg.dominio_permitido}", status_code=303)
+            f"/entrar?erro=fora+do+dominio+{cfg.dominio_permitido}{volta}",
+            status_code=303)
     auth.entrar_na_sessao(request, auth.Usuario(email=email, nome=email.split("@")[0]))
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(destino, status_code=303)
 
 
 @app.get("/sair")
@@ -127,6 +172,16 @@ async def criar_lote(request: Request,
         raise HTTPException(
             status_code=413,
             detail=f"{len(aceitos)} arquivos; o teto é {cfg.max_arquivos}")
+
+    # A cota é conferida ANTES de `novo_lote`: recusar depois deixaria uma linha
+    # no banco e uma pasta em disco de um lote que nunca vai rodar — e é
+    # justamente o disco que a cota existe para proteger.
+    # ⚠️ Alcance honesto: quando este handler roda, o Starlette já recebeu o
+    # corpo inteiro. A cota impede que os bytes sejam GUARDADOS, não que
+    # trafeguem; barrar o tráfego exigiria um middleware olhando Content-Length.
+    situacao = cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email)
+    if not situacao.pode_enviar:
+        raise HTTPException(status_code=413, detail=situacao.motivo)
 
     lote_id = fila.novo_lote(cfg.sqlite_path, dono=u.email,
                              nome=nome.strip() or "lote", n_arquivos=len(aceitos))
@@ -162,14 +217,44 @@ async def criar_lote(request: Request,
     return RedirectResponse(f"/lotes/{lote_id}", status_code=303)
 
 
+def _relatorio(lote_id: str) -> dict | None:
+    """Os fatos do lote, já lidos do `relatorio.json` gravado pelo trabalhador.
+
+    None quando o arquivo não existe ou não tem forma de relatório — a tela diz
+    "relatório indisponível" em vez de mostrar uma lista vazia, que passaria por
+    "lote sem amostras" e é o tipo de defeito que se parece com resultado.
+    """
+    return mod_amostras.carregar(
+        executor.pastas_do_lote(cfg, lote_id)["relatorio_json"])
+
+
 @app.get("/lotes/{lote_id}", response_class=HTMLResponse)
 def pagina_lote(request: Request, lote_id: str):
     u = _exigir(request)
     lote = _lote_do_usuario(lote_id, u)
+    rep = _relatorio(lote_id) if lote["status"] == fila.PRONTO else None
     return TEMPLATES.TemplateResponse(request, "lote.html", {
         "usuario": u, "lote": lote,
         # a página só se recarrega sozinha enquanto há o que esperar
         "recarregar": lote["status"] in (fila.RECEBENDO, fila.NA_FILA, fila.RODANDO),
+        "amostras": mod_amostras.listar(rep) if rep else None,
+        "resumo": mod_amostras.resumo(rep) if rep else None,
+        "expira_em": retencao.expira_em(lote, cfg.retencao_dias),
+    })
+
+
+@app.get("/lotes/{lote_id}/amostras/{chave}", response_class=HTMLResponse)
+def pagina_amostra(request: Request, lote_id: str, chave: str):
+    u = _exigir(request)
+    lote = _lote_do_usuario(lote_id, u)
+    rep = _relatorio(lote_id)
+    if not rep:
+        raise HTTPException(status_code=404, detail="relatório indisponível")
+    a = mod_amostras.amostra(rep, chave)
+    if not a:
+        raise HTTPException(status_code=404, detail="amostra não encontrada no lote")
+    return TEMPLATES.TemplateResponse(request, "amostra.html", {
+        "usuario": u, "lote": lote, "amostra": a,
     })
 
 
@@ -177,6 +262,25 @@ def pagina_lote(request: Request, lote_id: str):
 def api_lote(request: Request, lote_id: str):
     u = _exigir(request)
     return JSONResponse(_lote_do_usuario(lote_id, u))
+
+
+@app.post("/lotes/{lote_id}/apagar")
+def apagar_lote(request: Request, lote_id: str):
+    """Apagar agora, sem esperar o prazo.
+
+    Existe porque a retenção automática não substitui isto: quem mandou um lote
+    por engano — a pasta errada, o dado de outro projeto — precisa poder tirá-lo
+    do servidor no mesmo minuto, e não em 90 dias. `_lote_do_usuario` garante
+    que só o dono chega aqui.
+    """
+    u = _exigir(request)
+    _lote_do_usuario(lote_id, u)
+    if not retencao.apagar_lote(cfg.sqlite_path, cfg.lotes_dir, lote_id):
+        # A remoção recusa lote em `recebendo`/`rodando`: há outro processo
+        # lendo ou escrevendo aquela pasta neste instante.
+        raise HTTPException(status_code=409,
+                            detail="o lote está em uso; tente de novo quando terminar")
+    return RedirectResponse("/", status_code=303)
 
 
 def _arquivo(lote_id: str, u: auth.Usuario, chave: str, midia: str,

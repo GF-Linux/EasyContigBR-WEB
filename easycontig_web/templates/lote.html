@@ -36,11 +36,46 @@
     <p class="sub">Para PDF: abra o relatório e imprima (Ctrl+P → Salvar como PDF).</p>
 
   {% elif lote.status == 'falhou' %}
+
     <p class="erro">O lote não foi processado.</p>
     <pre class="sub" style="white-space:pre-wrap">{{ lote.erro }}</pre>
     <p class="sub">Falha de uma amostra sozinha não chega aqui — ela vira uma linha
     com ressalva dentro do relatório. Isto aqui é falha do lote inteiro.</p>
   {% endif %}
 </div>
+
+{# A tabela por amostra evita o Ctrl+F no relatório inteiro: uma corrida real
+   tem 40 amostras. Quando o relatório existe mas não pôde ser lido, dizemos
+   isso — uma tabela vazia passaria por "corrida sem amostras". #}
+{% if lote.status == 'pronto' %}
+  {% if amostras %}
+    {% include "_amostras_tabela.html" %}
+  {% else %}
+    <div class="cartao sub">O relatório deste lote não pôde ser lido
+    (<code>relatorio.json</code> ausente ou ilegível). Os arquivos para download
+    acima podem ainda funcionar.</div>
+  {% endif %}
+{% endif %}
+
+{% if lote.status not in ('recebendo', 'rodando') %}
+<div class="cartao">
+  <h2 style="margin-top:0">Este lote no servidor</h2>
+  {% if expira_em %}
+    <p class="sub">Os arquivos enviados e o relatório serão apagados
+    automaticamente em <strong>{{ expira_em.strftime('%d/%m/%Y') }}</strong>.
+    Baixe o que precisar guardar antes disso.</p>
+  {% else %}
+    <p class="sub">O expurgo automático está desligado nesta instalação: os
+    <code>.ab1</code> enviados ficam aqui até alguém apagá-los.</p>
+  {% endif %}
+  <form method="post" action="/lotes/{{ lote.id }}/apagar"
+        onsubmit="return confirm('Apagar este lote do servidor? Os .ab1 enviados e o relatório somem, e não há como desfazer.')">
+    <button type="submit" class="secundario">Apagar agora</button>
+  </form>
+  <p class="sub" style="margin-bottom:0">Apagar remove do servidor os
+  <code>.ab1</code> que você enviou e o relatório gerado — os arquivos originais
+  no seu computador não são tocados.</p>
+</div>
+{% endif %}
 
 {% endblock %}

@@ -17,9 +17,16 @@ import os
 import signal
 import time
 
-from . import config, executor, fila
+from . import config, executor, fila, retencao
 
 log = logging.getLogger("easycontig.trabalhador")
+
+# De hora em hora, e não a cada volta do laço: a faxina varre o disco inteiro
+# para somar tamanhos, e nada do que ela decide muda em 0,25 s — um lote leva
+# dias para vencer. Mora aqui, e não num cron, porque o trabalhador é o processo
+# que a universidade já vai manter de pé; um agendamento a mais no sistema é
+# mais uma coisa para alguém esquecer de configurar na migração de servidor.
+INTERVALO_FAXINA = 3600.0
 
 _parar = False
 
@@ -72,13 +79,39 @@ def main() -> None:
     for item, ok, det in config.diagnostico(cfg):
         log.info("%-10s %s  %s", item, "OK " if ok else "FALTA", det)
 
+    # A política de retenção vai para o log toda vez que o processo sobe. Quem
+    # opera o servidor tem que conseguir descobrir se o expurgo está ligado sem
+    # ler código — e "desligado" é um estado legítimo, não um defeito.
+    if cfg.retencao_dias:
+        log.info("retenção: lotes são apagados %d dias após o envio",
+                 cfg.retencao_dias)
+    else:
+        log.info("retenção DESLIGADA: nenhum lote é apagado automaticamente")
+
     signal.signal(signal.SIGTERM, _pedir_parada)
     signal.signal(signal.SIGINT, _pedir_parada)
 
     log.info("trabalhador pronto — aguardando lotes")
     ocioso = 0.25
+    # Zero e não `time.monotonic()`: a primeira faxina roda no arranque. É quando
+    # o operador está olhando o log, então é a hora em que um expurgo inesperado
+    # ainda dá para perceber e desligar.
+    proxima_faxina = 0.0
     while not _parar:
         try:
+            if time.monotonic() >= proxima_faxina:
+                proxima_faxina = time.monotonic() + INTERVALO_FAXINA
+                # Fora do `rodar_um` de propósito: falha de faxina não pode
+                # impedir o lote de alguém de ser processado.
+                try:
+                    r = retencao.faxina(cfg.sqlite_path, cfg.lotes_dir,
+                                        dias=cfg.retencao_dias)
+                    if r["apagados"]:
+                        log.info("faxina: %d lote(s) expurgados, %.1f MB liberados",
+                                 r["apagados"], r["bytes"] / 1048576)
+                except Exception:               # noqa: BLE001
+                    log.exception("faxina falhou; segue processando a fila")
+
             if not rodar_um(cfg):
                 time.sleep(ocioso)
         except Exception:                       # noqa: BLE001

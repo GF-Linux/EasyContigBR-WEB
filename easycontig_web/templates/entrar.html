@@ -17,6 +17,10 @@
     <p class="sub">Modo de desenvolvimento: qualquer e-mail entra, sem senha.
     <strong>Não use assim em servidor.</strong></p>
     <form method="post" action="/entrar">
+      {# Preserva o destino de quem chegou aqui por um link de lote: depois de
+         entrar, a pessoa volta para o que tentou abrir. O `main.py` recusa
+         qualquer valor que não seja caminho local. #}
+      <input type="hidden" name="proximo" value="{{ proximo }}">
       <div class="campo">
         <label class="sub" for="email">e-mail</label>
         <input type="email" id="email" name="email" required

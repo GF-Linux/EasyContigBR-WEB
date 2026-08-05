@@ -81,12 +81,18 @@ Sirva atrás de um proxy reverso com TLS — o compose publica só em `127.0.0.1
 - **Login Google** — o código está escrito em `auth.py` mas **nunca foi
   exercitado**: depende de um CLIENT_ID/SECRET do Google Cloud. Até alguém rodar
   com credencial real, considere não testado. Hoje só o modo `dev` funciona.
-- **Retenção de dados** — os `.ab1` enviados ficam no volume para sempre. Não há
-  expurgo, e isso precisa de dono antes de a coisa sair da rede local: são dados
-  de sequenciamento **não publicados** do laboratório, que hoje nunca saem da
-  máquina de quem monta.
-- **Limite por usuário** — o teto é por lote, não por conta; nada impede uma
-  pessoa encher o disco com envios seguidos.
+- **O prazo de retenção** — o mecanismo existe (`retencao.py`: expurgo por prazo,
+  botão "apagar agora", aviso da data na página do lote), mas **o número de dias
+  não tem dono**. `EASYCONTIG_RETENCAO_DIAS` vem `0` no exemplo — desligado, o
+  comportamento antigo — porque 90 dias é um padrão técnico e não a política do
+  laboratório sobre dado de sequenciamento **não publicado**. Ligue quando
+  alguém assinar embaixo do prazo: apagar não tem desfazer.
+- **Ninguém é avisado antes de o dado vencer.** A página do lote mostra a data,
+  mas não há e-mail de "seu lote vence em 7 dias"; quem não abrir a página
+  descobre pela ausência.
+- **`.ab1` e relatório vencem juntos.** A faxina apaga a pasta inteira. Dá para
+  argumentar que o traço bruto (pesado, existe no laboratório) e o relatório
+  (leve, é o produto) merecem prazos diferentes — não implementado, é política.
 - **Fase 2** — cromatograma e grade editável no navegador. Adiado de propósito.
 
 ## Números medidos (Steam Deck, hardware fraco de propósito)
