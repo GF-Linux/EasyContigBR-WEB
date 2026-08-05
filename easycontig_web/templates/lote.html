@@ -2,7 +2,52 @@
 {% block titulo %}{{ lote.nome or lote.id }} — EasyContig BR{% endblock %}
 {% block conteudo %}
 
-{% if recarregar %}<meta http-equiv="refresh" content="3">{% endif %}
+{% if recarregar %}
+  {# O `meta refresh` fica como plano B para navegador sem JS. Ele sozinho era o
+     gargalo, medido no Deck: um par F+R fica pronto em 582 ms (286 ms de
+     processamento + 296 ms de fila), e a pessoa esperava até 3 s por causa
+     desta linha — a tela custava até 10× o processamento. Não se conserta isso
+     tirando a fila (que custa 8% da espera e é o que impede a conexão
+     pendurada da ADR 0050); conserta-se perguntando mais rápido. #}
+  <noscript><meta http-equiv="refresh" content="3"></noscript>
+  <script>
+  (function () {
+    // Começa rápido porque a maioria dos envios é um par (ADR 0051), e vai
+    // afrouxando: uma corrida de 40 leva ~14 s e não precisa de 300 ms de
+    // polling o tempo todo. Teto de 3 s = o mesmo do meta refresh antigo.
+    var espera = 300, TETO = 3000, parado = false;
+    function perguntar() {
+      if (parado) { return; }
+      fetch('/api/lotes/{{ lote.id }}', { headers: { 'accept': 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (l) {
+          if (!l) { return agendar(); }
+          if (l.status === 'pronto' || l.status === 'falhou') {
+            parado = true;
+            location.reload();
+            return;
+          }
+          var b = document.getElementById('progresso');
+          if (b && l.total) {
+            b.style.width = Math.round(100 * l.feito / l.total) + '%';
+            var t = document.getElementById('progresso-texto');
+            if (t) {
+              t.textContent = l.feito + ' de ' + l.total + ' amostras'
+                + (l.etapa ? ' · montando ' + l.etapa : '');
+            }
+          }
+          agendar();
+        })
+        .catch(agendar);
+    }
+    function agendar() {
+      setTimeout(perguntar, espera);
+      espera = Math.min(Math.round(espera * 1.4), TETO);
+    }
+    setTimeout(perguntar, espera);
+  })();
+  </script>
+{% endif %}
 
 <p class="sub"><a href="/">← todas as corridas</a></p>
 
@@ -23,9 +68,9 @@
 
   {% elif lote.status == 'rodando' %}
     {% set pct = (100 * lote.feito / lote.total) if lote.total else 0 %}
-    <div class="barra"><i style="width:{{ pct|round(0) }}%"></i></div>
-    <p class="sub">{{ lote.feito }} de {{ lote.total }} amostras
-      {% if lote.etapa %}· montando <code>{{ lote.etapa }}</code>{% endif %}</p>
+    <div class="barra"><i id="progresso" style="width:{{ pct|round(0) }}%"></i></div>
+    <p class="sub" id="progresso-texto">{{ lote.feito }} de {{ lote.total }} amostras
+      {% if lote.etapa %}· montando {{ lote.etapa }}{% endif %}</p>
 
   {% elif lote.status == 'pronto' %}
     <p>

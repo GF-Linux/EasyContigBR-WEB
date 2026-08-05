@@ -212,7 +212,9 @@ def test_contig_invertido_e_informado_como_fato(tmp_path):
 def test_amostra_por_chave(real):
     a = amostras.amostra(real, "F13719_am01_CAP08_16S_A09-B09")
     assert a["organismo"] == "Candidatus Anaplasma capybara"
-    assert a["identidade"] == "100.000" and a["marcador"] == "16S"
+    # 1 casa: `report.py` grava `round(pct_identity, 1)`, e imprimir 3
+    # afirmaria precisão que o número não tem (conferido contra o blastn cru).
+    assert a["identidade"] == "100.0" and a["marcador"] == "16S"
     assert a["n_leituras"] == 2 and len(a["leituras"]) == 2
     assert a["leituras"][0]["janela"] == "95–418"
 

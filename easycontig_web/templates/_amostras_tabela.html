@@ -25,7 +25,11 @@
     {% endif %}
   </p>
 
-  <table>
+  {# 8 colunas não cabem em tela estreita e o corte comia justamente a coluna
+     de Ressalvas, que é a última. Rolagem só nesta caixa: a página inteira não
+     pode rolar de lado. #}
+  <div style="overflow-x:auto">
+  <table style="min-width:52rem">
     <tr>
       <th>Amostra</th>
       <th>N. de leituras</th>
@@ -41,9 +45,9 @@
       <td><a href="/lotes/{{ lote.id }}/amostras/{{ a.key|urlencode }}">{{ a.key }}</a></td>
       <td>{{ a.n_leituras }}</td>
       <td>{{ a.consenso_pb }}</td>
-      <td>{{ a.cobertura_media or "—" }}</td>
+      <td>{{ a.cobertura_media|br or "—" }}</td>
       <td>{{ a.organismo or "—" }}</td>
-      <td>{{ a.identidade or "—" }}</td>
+      <td>{{ a.identidade|br or "—" }}</td>
       <td><span class="rotulo {{ a.situacao_classe }}"
                 title="{{ a.situacao_nota }}">{{ a.situacao_texto }}</span></td>
       <td>
@@ -58,6 +62,7 @@
     <tr><td colspan="8" class="sub">O relatório deste lote não trouxe amostras.</td></tr>
     {% endfor %}
   </table>
+  </div>
 
   <p class="sub">Identidade em branco (—) significa que não houve acerto no banco
   local; não é 0%. Ausência de ressalva significa que nenhum limiar do relatório

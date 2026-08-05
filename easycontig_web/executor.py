@@ -10,6 +10,7 @@ aqui: é o que mantém web e desktop dizendo a mesma coisa sobre a mesma amostra
 from __future__ import annotations
 
 import csv
+import html
 import io
 from pathlib import Path
 
@@ -74,9 +75,31 @@ def executar(cfg: Config, lote_id: str, *, nome: str = "", n_esperado: int = 0,
     )
 
     p["relatorio_json"].write_text(rep.to_json(), encoding="utf-8")
-    p["relatorio_html"].write_text(render_html(rep), encoding="utf-8")
+    p["relatorio_html"].write_text(documento_html(rep), encoding="utf-8")
     p["resultado_csv"].write_text(para_csv(rep), encoding="utf-8")
     return rep
+
+
+def documento_html(rep: BatchReport) -> str:
+    """O relatório do núcleo dentro de um documento HTML de verdade.
+
+    `render_html` devolve um FRAGMENTO (começa no `<style>`), porque no desktop
+    ele alimenta o `QTextDocument` que gera o PDF — e ali um `<head>` atrapalha.
+    Na web o mesmo texto vai direto para o navegador, e sem `<title>` o "Salvar
+    como PDF" do Ctrl+P nomeia o arquivo com a URL: o usuário termina com
+    `127.0.0.1_lotes_v2-UNsPd....pdf` em vez do nome da corrida.
+
+    Envolver aqui, e não em `app/core/report.py`, mantém o desktop intocado —
+    é o mesmo motivo de `report_pdf.py` não existir deste lado (ADR 0050).
+    """
+    titulo = f"EasyContig BR — {rep.folder}" if rep.folder else "EasyContig BR — lote"
+    return (
+        "<!doctype html>\n<html lang='pt-BR'>\n<head>\n"
+        "<meta charset='utf-8'>\n"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
+        f"<title>{html.escape(titulo)}</title>\n"
+        "</head>\n<body>\n" + render_html(rep) + "\n</body>\n</html>\n"
+    )
 
 
 def para_csv(rep: BatchReport) -> str:
@@ -103,7 +126,7 @@ def para_csv(rep: BatchReport) -> str:
             f"{s.pct_cov1:.1f}" if s.consensus_len else "",
             s.organism or "",
             s.accession or "",
-            f"{s.pct_identity:.3f}" if s.pct_identity is not None else "",
+            f"{s.pct_identity:.1f}" if s.pct_identity is not None else "",
             f"{s.query_cover:.1f}" if s.query_cover is not None else "",
             s.e_value or "",
             s.id_source or "",

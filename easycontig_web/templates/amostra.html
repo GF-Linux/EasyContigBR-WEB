@@ -7,7 +7,7 @@
   de cada ressalva; ela não classifica a amostra nem recomenda o que fazer.
 #}
 
-<p class="sub"><a href="/lotes/{{ lote.id }}">← {{ lote.nome or lote.id }}</a></p>
+<p class="sub"><a href="/lotes/{{ lote.id }}?tela_do_lote=1">← {{ lote.nome or lote.id }}</a></p>
 
 <div class="cartao">
   <h2 style="margin-top:0">{{ amostra.key }}</h2>
@@ -28,8 +28,8 @@
     <table>
       <tr><th style="width:14rem">Accession</th>
           <td>{{ amostra.accession or "—" }}</td></tr>
-      <tr><th>Identidade (%)</th><td>{{ amostra.identidade or "—" }}</td></tr>
-      <tr><th>Cobertura da consulta (%)</th><td>{{ amostra.cobertura_query or "—" }}</td></tr>
+      <tr><th>Identidade (%)</th><td>{{ amostra.identidade|br or "—" }}</td></tr>
+      <tr><th>Cobertura da consulta (%)</th><td>{{ amostra.cobertura_query|br or "—" }}</td></tr>
       <tr><th>E-value</th><td>{{ amostra.e_value or "—" }}</td></tr>
       <tr><th>Marcador</th><td>{{ amostra.marcador or "—" }}</td></tr>
     </table>
@@ -43,10 +43,10 @@
   <table>
     <tr><th style="width:14rem">N. de leituras</th><td>{{ amostra.n_leituras }}</td></tr>
     <tr><th>Consenso (pb)</th><td>{{ amostra.consenso_pb }}</td></tr>
-    <tr><th>Cobertura média</th><td>{{ amostra.cobertura_media or "—" }}</td></tr>
+    <tr><th>Cobertura média</th><td>{{ amostra.cobertura_media|br or "—" }}</td></tr>
     <tr><th>Bases sustentadas por uma única leitura</th>
         <td>{{ amostra.n_cobertura_1 }}{% if amostra.pct_cobertura_1x %}
-            ({{ amostra.pct_cobertura_1x }}%){% endif %}</td></tr>
+            ({{ amostra.pct_cobertura_1x|br }}%){% endif %}</td></tr>
     <tr><th>Posições em que as leituras discordaram</th>
         <td>{{ amostra.discordancias }}</td></tr>
     <tr><th>Contig invertido</th>
@@ -92,7 +92,7 @@
   {% endif %}
 </div>
 
-<p class="sub"><a href="/lotes/{{ lote.id }}">← voltar para o lote</a> ·
+<p class="sub"><a href="/lotes/{{ lote.id }}?tela_do_lote=1">← voltar para o lote</a> ·
   <a href="/lotes/{{ lote.id }}/relatorio">relatório completo do lote</a></p>
 
 {% endblock %}

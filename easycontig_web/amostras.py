@@ -222,7 +222,10 @@ def _formatar(s: dict) -> dict:
         # ---- identificação
         "organismo": s.get("organism") or "",
         "accession": s.get("accession") or "",
-        "identidade": _num(s.get("pct_identity"), 3),
+        # 1 casa, e nao 3: `report.py` grava `round(hit.pct_identity, 1)`, entao
+        # imprimir 99.400 onde o blastn mediu 99,44 AFIRMA uma precisao que o
+        # numero nao tem. Conferido contra o blastn cru em 8 amostras.
+        "identidade": _num(s.get("pct_identity"), 1),
         "cobertura_query": _num(s.get("query_cover"), 1),
         "e_value": s.get("e_value") or "",
         "marcador": s.get("id_source") or "",

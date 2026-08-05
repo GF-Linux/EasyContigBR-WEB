@@ -128,10 +128,10 @@ def test_lotes_de_outro_dono_nao_entram_nesta_cota(banco, lotes_dir, monkeypatch
 def test_tetos_vem_do_ambiente_e_caem_no_padrao_quando_ilegiveis(monkeypatch):
     monkeypatch.delenv("EASYCONTIG_MAX_LOTES_ATIVOS", raising=False)
     monkeypatch.delenv("EASYCONTIG_MAX_BYTES_CONTA", raising=False)
-    assert cotas.teto_lotes_ativos() == 3
+    assert cotas.teto_lotes_ativos() == 10   # ADR 0051: cada par é um lote
     assert cotas.teto_bytes_conta() == 2 * 1024 * 1024 * 1024
     # `.env` com erro de digitação não pode virar "sem limite" por acidente
     monkeypatch.setenv("EASYCONTIG_MAX_LOTES_ATIVOS", "três")
     monkeypatch.setenv("EASYCONTIG_MAX_BYTES_CONTA", "-1")
-    assert cotas.teto_lotes_ativos() == 3
+    assert cotas.teto_lotes_ativos() == 10   # ADR 0051: cada par é um lote
     assert cotas.teto_bytes_conta() == 2 * 1024 * 1024 * 1024

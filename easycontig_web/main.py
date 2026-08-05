@@ -41,6 +41,21 @@ app.add_middleware(
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
+def _br(valor) -> str:
+    """Número no formato daqui: 99,4 e não 99.4.
+
+    Só na APRESENTAÇÃO. O CSV e o JSON continuam com ponto, porque são lidos por
+    programa (e o CSV vai para planilha e para o R). Misturar os dois na mesma
+    tela era o defeito: a página escrevia "25,1 MB" com vírgula e "96.500" com
+    ponto, e `96.500` em português lê-se noventa e seis mil e quinhentos.
+    """
+    texto = "" if valor is None else str(valor)
+    return texto.replace(".", ",") if texto else ""
+
+
+TEMPLATES.env.filters["br"] = _br
+
+
 @app.exception_handler(HTTPException)
 def _erro(request: Request, exc: HTTPException):
     """Quem veio pelo navegador recebe página; quem veio por API recebe JSON.
@@ -229,10 +244,22 @@ def _relatorio(lote_id: str) -> dict | None:
 
 
 @app.get("/lotes/{lote_id}", response_class=HTMLResponse)
-def pagina_lote(request: Request, lote_id: str):
+def pagina_lote(request: Request, lote_id: str, tela_do_lote: int = 0):
     u = _exigir(request)
     lote = _lote_do_usuario(lote_id, u)
     rep = _relatorio(lote_id) if lote["status"] == fila.PRONTO else None
+
+    # Quando o envio é UM PAR — o uso normal, ADR 0051 — o lote tem uma amostra
+    # só, e a "tabela de amostras" é uma linha. O resultado que a pessoa veio
+    # buscar é a página da amostra; mostrar antes uma tela de lote com um item
+    # cobra um clique à toa. `?tela_do_lote=1` é a saída para quem quer mesmo a
+    # tela do lote — e é para onde a página da amostra volta, senão daria laço.
+    if rep and not tela_do_lote:
+        itens = mod_amostras.listar(rep)
+        if len(itens) == 1:
+            return RedirectResponse(
+                f"/lotes/{lote_id}/amostras/{quote(itens[0]['key'])}", status_code=303)
+
     return TEMPLATES.TemplateResponse(request, "lote.html", {
         "usuario": u, "lote": lote,
         # a página só se recarrega sozinha enquanto há o que esperar

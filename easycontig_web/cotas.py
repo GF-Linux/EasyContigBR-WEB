@@ -22,10 +22,16 @@ from . import fila
 
 _ATIVOS = (fila.RECEBENDO, fila.NA_FILA, fila.RODANDO)
 
-_MAX_LOTES_ATIVOS_PADRAO = 3
-# 2 GiB ≈ 80 corridas de 26 MB guardadas. O .ab1 nunca é apagado depois do
-# processamento (o laboratório volta neles), então o que a conta acumula é o
-# histórico inteiro, não o lote da vez.
+# 10, e não 3, por causa da ADR 0051: o uso real é PAR A PAR, e cada par enviado
+# é um lote próprio. Com 3, quem manda cinco pares seguidos — que é o fluxo
+# normal, não abuso — bate na parede. Medido no Deck: um par fica pronto em
+# 582 ms, então 10 ativos são ~6 s de trabalho; ainda segura uma disparada, sem
+# atrapalhar quem está trabalhando.
+_MAX_LOTES_ATIVOS_PADRAO = 10
+# 2 GiB ≈ 3 200 pares de 650 KB, ou ~80 corridas inteiras de 26 MB (tamanhos
+# medidos nos lotes reais). Como o `.ab1` não é apagado depois do processamento
+# (o laboratório volta neles) e a retenção vem desligada, isto é o acumulado da
+# conta ao longo do tempo, não o envio da vez.
 _MAX_BYTES_CONTA_PADRAO = 2 * 1024 * 1024 * 1024
 
 
