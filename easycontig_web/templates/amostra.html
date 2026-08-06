@@ -149,16 +149,17 @@ a.ac:hover{ text-decoration:none }
        exigia clicar em "voltar" para descobrir que a tela do lote existia — o
        caminho não era descoberto, era adivinhado. #}
     <div class="bl-topo" style="border:0;padding:2px 2px 0">
-      <a href="/lotes/{{ lote.id }}?tela_do_lote=1" class="sub"
-         title="Todas as amostras desta corrida">▤ {{ lote.nome or lote.id }}</a>
+      {# Leva à página da corrida — onde ficam relatório, CSV e o apagar. É o
+         caminho que faltava: dele só se chegava clicando em "voltar". #}
+      <a href="/lotes/{{ lote.id }}?tela_do_lote=1" class="ac"
+         title="Página da corrida: amostras, relatório e apagar"
+         >⚙ {{ lote.nome or lote.id }}</a>
       <b style="margin-left:4px">{{ amostra.key }}</b>
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
         <a class="ac" href="/lotes/{{ lote.id }}/relatorio" target="_blank"
            rel="noopener">Relatório da corrida</a>
         <a class="ac" href="/lotes/{{ lote.id }}/resultado.csv">CSV</a>
-        {# Volta para a bancada — a lista de todas as corridas. Sem isto, sair de
-           uma amostra exigia passar pela tela do lote, que é outra coisa. #}
-        <a class="ac" href="/" title="Bancada — todas as corridas">⌂ Bancada</a>
+        <a class="ac" href="/" title="Enviar uma corrida nova">+ Nova corrida</a>
       </span>
     </div>
 

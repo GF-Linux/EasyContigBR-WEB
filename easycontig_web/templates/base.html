@@ -167,19 +167,20 @@ pre{ font-family:var(--mono); font-size:.8rem }
             <span class="nome">{{ l.nome or l.id }}</span>
           </a>
           {% if l.status == 'pronto' %}
-            {# Atalho direto para o relatório: sem ele, ver o relatório de um par
-               exigia abrir a amostra, voltar para o lote e só então clicar —
-               três passos para uma coisa só. #}
+            {# Dois atalhos por corrida, porque clicar no nome abre a AMOSTRA (o
+               par vai direto para o cromatograma) e a página da corrida — onde
+               ficam relatório, CSV e o apagar — não tinha caminho próprio. #}
             <a class="cr-acao" href="/lotes/{{ l.id }}/relatorio" target="_blank"
                rel="noopener" title="Abrir o relatório desta corrida">▤</a>
           {% endif %}
+          <a class="cr-acao" href="/lotes/{{ l.id }}?tela_do_lote=1"
+             title="Página da corrida: relatório, CSV e apagar">⚙</a>
         </span>
       {% else %}
         <span class="lat-acao fraco" style="font-size:11.5px">Nenhuma ainda.</span>
       {% endfor %}
     </div>
 
-    <a class="lat-acao" href="/">⌂ Bancada · enviar corrida</a>
     <div class="lat-pe">{{ usuario.email }}</div>
   </aside>
 {% endif %}
