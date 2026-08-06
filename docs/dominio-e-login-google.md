@@ -152,6 +152,8 @@ Sobre as duas últimas linhas, que são a decisão de verdade deste arquivo:
   **O subdomínio entra junto** (`ufrrj.br` cobre `ppgcv.ufrrj.br` e
   `lhv.ufrrj.br`); sósia não entra (`falso-ufrrj.br` fica de fora, porque o
   ponto é exigido). Para prender no domínio exato: `=ufrrj.br`.
+* `EASYCONTIG_PRODUCAO=1` faz o servidor **recusar subir** em modo `dev`, sem
+  `SECRET_KEY` ou sem `HTTPS_ONLY` — aviso em arquivo de exemplo não é trava.
 
 ### O que a lista de domínios NÃO consegue fazer
 
@@ -170,8 +172,6 @@ justamente por isso que é honesto — o registro de quem foi autorizado fica no
 Recomendação para o primeiro dia: **`ufrrj.br`**, que já cobre o LHV e todo o
 resto da universidade. Somar instituição conforme aparecer pedido. A cobrança da
 iniciativa privada continua sendo cláusula de licença e contrato, não código.
-* `EASYCONTIG_PRODUCAO=1` faz o servidor **recusar subir** em modo `dev`, sem
-  `SECRET_KEY` ou sem `HTTPS_ONLY` — aviso em arquivo de exemplo não é trava.
 
 ---
 
