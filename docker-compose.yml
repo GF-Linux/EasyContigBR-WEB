@@ -27,6 +27,10 @@ services:
       EASYCONTIG_HTTPS_ONLY: "1"
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # De onde o proxy reverso chega. Vazio = `X-Forwarded-For` é ignorado, que
+      # é o padrão seguro: o cabeçalho é escrito pelo cliente e, aceito de
+      # qualquer um, torna todo teto por IP contornável (medido em 06/08).
+      EASYCONTIG_PROXIES_CONFIAVEIS: ${EASYCONTIG_PROXIES_CONFIAVEIS:-}
     volumes: &volumes
       - dados:/dados
       - ./bancos:/bancos:ro
