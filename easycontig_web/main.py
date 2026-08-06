@@ -23,7 +23,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import amostras as mod_amostras
-from . import auth, config, cotas, executor, fila, perfil, retencao, traco
+from . import auth, bancos, config, cotas, executor, fila, perfil, retencao, traco
 
 cfg = config.carregar()
 fila.criar_esquema(cfg.sqlite_path)
@@ -319,6 +319,93 @@ def foto_do_perfil(request: Request):
     if not caminho.exists():
         raise HTTPException(status_code=404, detail="sem foto")
     return FileResponse(caminho)
+
+
+# ------------------------------------------------------- bancos de referência
+@app.get("/bancos", response_class=HTMLResponse)
+def pagina_bancos(request: Request, erro: str = "", feito: str = ""):
+    u = _exigir(request)
+    grupos: dict[str, list] = {}
+    for c in bancos.CATALOGO:
+        grupos.setdefault(c.grupo, []).append(
+            {"c": c, "estado": bancos.estado(cfg.data_dir, c.id)})
+    return TEMPLATES.TemplateResponse(request, "bancos.html", {
+        **_casca(u), "grupos": grupos,
+        "meus": bancos.meus_bancos(cfg.data_dir, u.email),
+        "erro": erro, "feito": feito,
+    })
+
+
+@app.post("/bancos/{banco_id}/montar")
+def montar_banco(request: Request, banco_id: str):
+    """Baixa do NCBI e monta. Síncrono de propósito: são segundos para os
+    pequenos, e quem aperta está olhando. Os grandes avisam o tamanho antes."""
+    _exigir(request)
+    if banco_id not in bancos.POR_ID:
+        raise HTTPException(status_code=404, detail="banco desconhecido")
+    try:
+        bancos.montar(cfg.data_dir, banco_id, blast_bin=cfg.blast_bin)
+    except Exception as e:                      # noqa: BLE001
+        return RedirectResponse(f"/bancos?erro={quote(str(e)[:200])}", status_code=303)
+    return RedirectResponse(f"/bancos?feito={quote(banco_id)}", status_code=303)
+
+
+@app.post("/bancos/{banco_id}/remover")
+def remover_banco(request: Request, banco_id: str):
+    u = _exigir(request)
+    if banco_id.startswith("meu_"):
+        # banco de usuário só some pela mão do dono
+        if banco_id not in {b["id"] for b in bancos.meus_bancos(cfg.data_dir, u.email)}:
+            raise HTTPException(status_code=404, detail="banco não encontrado")
+    elif banco_id not in bancos.POR_ID:
+        raise HTTPException(status_code=404, detail="banco desconhecido")
+    bancos.remover(cfg.data_dir, banco_id)
+    return RedirectResponse("/bancos", status_code=303)
+
+
+@app.post("/bancos/meu")
+async def enviar_banco(request: Request, apelido: str = Form(...),
+                       fasta: UploadFile = File(...)):
+    u = _exigir(request)
+    try:
+        banco_id = bancos.id_do_usuario(u.email, apelido.strip())
+        dados = (await fasta.read(20 * 1024 * 1024 + 1)).decode("utf-8", "replace")
+        if len(dados) > 20 * 1024 * 1024:
+            raise ValueError("o FASTA passa de 20 MB")
+        bancos.montar_do_usuario(cfg.data_dir, banco_id, dados, blast_bin=cfg.blast_bin)
+    except Exception as e:                      # noqa: BLE001
+        return RedirectResponse(f"/bancos?erro={quote(str(e)[:200])}", status_code=303)
+    return RedirectResponse("/bancos?feito=meu", status_code=303)
+
+
+@app.get("/api/lotes/{lote_id}/amostras/{chave}/consultar")
+def api_consultar(request: Request, lote_id: str, chave: str, banco: str):
+    """Consulta o consenso da amostra contra UM banco extra.
+
+    ⚠️ Não é identificação: o veredito continua vindo do banco curado, e esta
+    resposta é rotulada como consulta. Trocar uma coisa pela outra mudaria o
+    resultado validado sem ninguém decidir (ADR 0037).
+    """
+    u = _exigir(request)
+    _lote_do_usuario(lote_id, u)
+    rep = _relatorio(lote_id)
+    am = traco.amostra_do_relatorio(rep, chave) if rep else None
+    if not am:
+        raise HTTPException(status_code=404, detail="amostra não encontrada")
+    permitidos = set(bancos.POR_ID) | {b["id"] for b in
+                                       bancos.meus_bancos(cfg.data_dir, u.email)}
+    if banco not in permitidos or not bancos.existe(cfg.data_dir, banco):
+        raise HTTPException(status_code=404, detail="banco não montado")
+    asm = traco.montar(cfg, executor.pastas_do_lote(cfg, lote_id)["raiz"], am)
+    if asm is None:
+        raise HTTPException(status_code=409, detail="não foi possível remontar a amostra")
+    try:
+        hits = bancos.consultar(asm.consensus_nogap,
+                                bancos.prefixo(cfg.data_dir, banco),
+                                blast_bin=cfg.blast_bin)
+    except Exception as e:                      # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+    return JSONResponse({"banco": banco, "hits": hits, "consulta": True})
 
 
 def _relatorio(lote_id: str) -> dict | None:
