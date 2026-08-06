@@ -2,7 +2,11 @@
 {% block titulo %}Bancos de referência — EasyContig BR{% endblock %}
 
 {% block estilo %}
-.trabalho > .interno{ max-width:74rem }
+/* Sem teto próprio: herda o da casca, que acompanha a tela (2026-08-06). Os
+   cartões ficavam presos em ~1420px num monitor de 1920.
+   O `.aviso-motor` MANTÉM o `max-width:70ch` abaixo de propósito: é texto
+   corrido, e texto corrido tem medida de leitura. O que não podia acontecer era
+   a PÁGINA inteira herdar a largura do parágrafo mais estreito dela. */
 .aviso-motor{ background:var(--interno); border:1px solid var(--linha);
   border-left:3px solid var(--violeta); border-radius:0 9px 9px 0;
   padding:.85rem 1.1rem; margin:0 0 1.1rem; font-size:.9rem; color:var(--apoio);

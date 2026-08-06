@@ -37,25 +37,49 @@ a:hover{ text-decoration:underline }
 .lateral{ background:var(--painel); border-right:1px solid var(--linha);
   display:flex; flex-direction:column; padding:14px 0 }
 @media(max-width:820px){ .lateral{ border-right:0; border-bottom:1px solid var(--linha) } }
-.lat-topo{ display:flex; align-items:center; gap:9px; padding:0 14px 13px }
+.lat-topo{ display:flex; align-items:center; gap:9px; padding:0 14px 13px;
+  color:inherit }
+.lat-topo:hover{ text-decoration:none }
+.lat-topo:hover b{ color:var(--violeta-claro) }
 .lat-topo .selo{ width:30px; height:30px; flex:none; border-radius:50%;
   background:#F5F4F2; padding:3px; display:grid; place-items:center }
 .lat-topo .selo svg{ width:100%; height:100%; display:block }
 .lat-topo b{ font-size:13.5px; font-weight:700; letter-spacing:.01em }
 .lat-topo b span{ color:var(--apoio); font-weight:400 }
 
-.perfil{ display:flex; align-items:center; gap:9px; padding:10px 14px;
-  border-top:1px solid var(--linha); border-bottom:1px solid var(--linha) }
+/* ── caixa de quem entrou ────────────────────────────────────────────────────
+   Refeita em 2026-08-06 no mesmo desenho da caixa da marca acima: RETRATO à
+   ESQUERDA, nome ao lado, e as ações abaixo — cada uma na sua própria caixa.
+   Antes o nome flutuava acima do avatar e "perfil · sair" era um par de links
+   de 9px espremidos embaixo: não parecia botão, não casava com o resto da
+   lateral e não havia caminho de volta para o workspace.
+   O retrato mostra a FOTO quando existe; antes mostrava sempre a inicial, então
+   quem trocava a foto concluía que o envio tinha falhado. */
+.perfil{ padding:10px 8px; border-top:1px solid var(--linha);
+  border-bottom:1px solid var(--linha) }
+.perfil .ident{ display:flex; align-items:center; gap:9px; padding:0 6px 9px }
 .perfil .av{ width:30px; height:30px; border-radius:50%; flex:none; display:grid;
   place-items:center; font-size:11px; font-weight:800; color:#14121f;
+  overflow:hidden; text-decoration:none;
   background:linear-gradient(135deg,var(--violeta),#6f63b8) }
-.perfil .quem{ min-width:0 }
+.perfil .av img{ width:100%; height:100%; object-fit:cover; display:block }
+.perfil .quem{ min-width:0; flex:1 }
 .perfil .nm{ font-size:12.5px; font-weight:600; line-height:1.3; color:var(--tinta);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block }
 .perfil .nm:hover{ color:var(--violeta-claro); text-decoration:none }
-.perfil .av{ text-decoration:none }
-.perfil .sai{ font-family:var(--mono); font-size:9px; letter-spacing:.06em;
-  color:var(--fraco) }
+
+/* As ações em caixa própria, como `.lat-acao`. O Workspace ocupa a linha
+   inteira porque é o caminho de volta ao trabalho — o que faltava. */
+.perfil .acoes{ display:grid; grid-template-columns:1fr 1fr; gap:4px }
+.perfil .acoes .larga{ grid-column:1 / -1 }
+.perfil .ac{ display:flex; align-items:center; justify-content:center; gap:5px;
+  padding:6px 8px; border-radius:7px; font-size:11.5px; color:var(--apoio);
+  border:1px solid var(--linha); background:var(--interno) }
+.perfil .ac:hover{ color:var(--tinta); border-color:var(--linha-forte);
+  text-decoration:none }
+.perfil .ac.viva{ background:var(--selecao); border-color:var(--violeta);
+  color:var(--tinta); font-weight:600 }
+.perfil .ac.sair:hover{ color:var(--vermelho); border-color:rgba(240,82,74,.45) }
 
 .sec{ font-family:var(--mono); font-size:9px; letter-spacing:.14em;
   text-transform:uppercase; color:var(--fraco); padding:14px 14px 7px }
@@ -82,8 +106,18 @@ a:hover{ text-decoration:underline }
 .lat-pe{ margin-top:auto; padding:12px 14px 0; border-top:1px solid var(--linha);
   font-family:var(--mono); font-size:9.5px; color:var(--fraco) }
 
-.trabalho{ padding:20px 22px 40px; min-width:0 }
-.trabalho > .interno{ max-width:64rem }
+/* A ÁREA DE TRABALHO ACOMPANHA A TELA.
+   Era `max-width:64rem` (1024px) fixo. No Deck cabia justo e parecia certo, mas
+   num monitor de 1920 sobravam **416px de vazio à direita** (medido) e as
+   caixas ficavam apertadas num canto com tela de sobra. O teto agora é generoso
+   e existe só para telas muito largas, onde uma linha atravessando 2500px
+   deixaria de ser legível.
+   A MEDIDA DE LEITURA passa a ser responsabilidade do TEXTO (`.leitura`), não
+   do contêiner: assim tabela, grade e cartão usam a largura toda e só o
+   parágrafo corrido se contém. */
+.trabalho{ padding:clamp(16px,1.6vw,28px) clamp(16px,1.8vw,32px) 40px; min-width:0 }
+.trabalho > .interno{ max-width:112rem }
+.leitura{ max-width:74ch }
 
 /* ── tipografia e blocos ─────────────────────────────────────────────────── */
 h1{ font-size:1.32rem; font-weight:800; letter-spacing:-.02em; margin:0 0 .2rem }
@@ -128,7 +162,7 @@ code{ font-family:var(--mono); font-size:.85em; background:var(--interno);
   padding:.1rem .32rem; border-radius:4px; color:var(--apoio) }
 pre{ font-family:var(--mono); font-size:.8rem }
 .rodape{ color:var(--fraco); font-size:.78rem; padding:1.8rem 0 0; margin-top:1.6rem;
-  border-top:1px solid var(--linha); max-width:64rem; line-height:1.6 }
+  border-top:1px solid var(--linha); max-width:74ch; line-height:1.6 }
 {% block estilo %}{% endblock %}
 </style>
 </head>
@@ -137,20 +171,38 @@ pre{ font-family:var(--mono); font-size:.8rem }
 <div class="casca{% if not usuario %} sozinha{% endif %}">
 {% if usuario %}
   <aside class="lateral">
-    <div class="lat-topo">
+    {# A marca leva para o início — que É a página do workspace. Era só um
+       desenho: de dentro do perfil ou dos bancos não havia como voltar ao
+       trabalho a não ser por uma corrida já existente na lista abaixo, e quem
+       ainda não tinha mandado nada ficava sem caminho nenhum. #}
+    <a class="lat-topo" href="/" title="Início — enviar ou abrir uma sequência">
       <span class="selo">{% include "_logo.html" %}</span>
       <b>EasyContig <span>BR</span></b>
-    </div>
+    </a>
 
     <div class="perfil">
-      <a href="/perfil" class="av" title="Seu perfil"
-        >{{ (usuario.nome or usuario.email)[:2]|upper }}</a>
-      <span class="quem">
-        <a class="nm" href="/perfil" title="{{ usuario.email }}"
-          >{{ usuario.nome or usuario.email }}</a><br>
-        <span class="sai"><a href="/perfil">perfil</a> ·
-          <a href="/sair">sair</a></span>
-      </span>
+      <div class="ident">
+        <a href="/perfil" class="av" title="Seu perfil">
+          {%- if perfil_lateral and perfil_lateral.foto -%}
+            <img src="/perfil/foto" alt="">
+          {%- else -%}
+            {{ ((perfil_lateral.nome if perfil_lateral else '') or usuario.nome
+                or usuario.email)[:2]|upper }}
+          {%- endif -%}
+        </a>
+        <span class="quem">
+          <a class="nm" href="/perfil" title="{{ usuario.email }}"
+            >{{ (perfil_lateral.nome if perfil_lateral else '') or usuario.nome
+                or usuario.email }}</a>
+        </span>
+      </div>
+      <div class="acoes">
+        <a class="ac larga{% if pagina is defined and pagina == 'inicio' %} viva{% endif %}"
+           href="/" title="Workspace: enviar ou abrir uma sequência">◧ Workspace</a>
+        <a class="ac{% if pagina is defined and pagina == 'perfil' %} viva{% endif %}"
+           href="/perfil">Perfil</a>
+        <a class="ac sair" href="/sair">Sair</a>
+      </div>
     </div>
 
     {# WorkFolder, e não "Corridas": é o armazenamento do perfil — o lugar onde

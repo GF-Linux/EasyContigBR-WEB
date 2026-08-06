@@ -57,7 +57,7 @@ de ferramenta, e o relatório separa as duas coisas (ADR 0047).
 ## Testes
 
 ```bash
-python -m pytest tests -q      # 192 testes
+python -m pytest tests -q      # 214 testes
 ```
 
 Os de `test_executor.py` rodam o pipeline de verdade e se pulam sozinhos quando

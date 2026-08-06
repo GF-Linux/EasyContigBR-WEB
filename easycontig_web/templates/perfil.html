@@ -2,17 +2,21 @@
 {% block titulo %}Perfil — EasyContig BR{% endblock %}
 
 {% block estilo %}
-.trabalho > .interno{ max-width:78rem }
-.cabeca{ display:flex; gap:1.1rem; align-items:flex-start; flex-wrap:wrap;
+/* Sem teto próprio: herda o da casca, que acompanha a tela (2026-08-06). O
+   `78rem` que estava aqui era mais um lugar prendendo a página num canto do
+   monitor, e o cabeçalho não cobria a largura disponível. */
+.cabeca{ display:flex; gap:1.4rem; align-items:flex-start; flex-wrap:wrap;
   background:var(--painel); border:1px solid var(--linha); border-radius:11px;
-  padding:1.1rem 1.2rem; margin-bottom:12px }
-.retrato{ position:relative; width:88px; height:88px; flex:none }
-.retrato .foto{ width:88px; height:88px; border-radius:50%; display:grid;
-  place-items:center; font-size:26px; font-weight:800; color:#14121f; overflow:hidden;
+  padding:1.2rem 1.4rem; margin-bottom:12px }
+.retrato{ position:relative; width:96px; height:96px; flex:none }
+.retrato .foto{ width:96px; height:96px; border-radius:50%; display:grid;
+  place-items:center; font-size:28px; font-weight:800; color:#14121f; overflow:hidden;
   background:linear-gradient(135deg,var(--violeta),#6f63b8);
   border:2px solid var(--linha-forte) }
 .retrato .foto img{ width:100%; height:100%; object-fit:cover }
-.quem{ flex:1; min-width:16rem }
+/* `flex:1` com `min-width` alto: o texto ocupa a faixa entre o retrato e o
+   botão em vez de ficar espremido numa coluna estreita com vazio ao lado. */
+.quem{ flex:1 1 28rem; min-width:min(28rem,100%) }
 .quem h1{ font-size:1.3rem; margin:0 }
 .quem .lab{ color:var(--apoio); font-size:.9rem; margin:.15rem 0 0 }
 .quem .mail{ font-family:var(--mono); font-size:.78rem; color:var(--fraco); margin:.3rem 0 0 }
@@ -21,6 +25,15 @@
   border:1px solid var(--linha-forte); border-radius:20px; padding:.22rem .6rem }
 .selo.esp{ font-style:italic; font-family:var(--sans); font-size:.74rem;
   border-color:rgba(145,132,217,.45); color:var(--violeta-claro) }
+
+/* Endereços de rede: só o ícone, como pedido. O nome vai no `title` e no
+   `aria-label` — ícone sozinho não diz nada a quem usa leitor de tela. */
+.redes{ display:flex; gap:.45rem; flex-wrap:wrap; margin-top:.85rem }
+.rede{ width:32px; height:32px; display:grid; place-items:center; border-radius:8px;
+  border:1px solid var(--linha-forte); color:var(--apoio); background:var(--interno) }
+.rede:hover{ color:var(--violeta-claro); border-color:var(--violeta);
+  text-decoration:none }
+.rede svg{ width:17px; height:17px; display:block; fill:currentColor }
 
 .numeros{ display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-bottom:12px }
 @media(max-width:760px){ .numeros{ grid-template-columns:repeat(2,1fr) } }
@@ -68,8 +81,25 @@ input[type=file]{ font-size:.82rem }
     <p class="mail">{{ perfil.email }}</p>
     {# As espécies moram no bloco "Portfólio", não aqui: repetir a mesma lista
        em dois lugares da mesma tela é ruído, e o cabeçalho é identidade. #}
+    {# A medida de leitura sobe de 52ch para 74ch: a 52 o texto ficava numa
+       coluna estreita com vazio à direita, exatamente o "espremido e junto"
+       relatado. 74ch ainda é medida legível e usa a faixa disponível. #}
     {% if perfil.sobre %}
-    <p class="sub" style="margin:.6rem 0 0;max-width:52ch">{{ perfil.sobre }}</p>
+    <p class="sub leitura" style="margin:.7rem 0 0">{{ perfil.sobre }}</p>
+    {% endif %}
+    {% if perfil.links %}
+    <div class="redes">
+      {% for l in perfil.links %}
+        {# `rel=noopener noreferrer`: são endereços de terceiros, e a aba aberta
+           não pode receber referência à nossa janela. O esquema já foi limitado
+           a http/https em `perfil._limpar_links` — o Jinja escapa o texto, não
+           o esquema de uma URL. #}
+        <a class="rede" href="{{ l.url }}" target="_blank" rel="noopener noreferrer"
+           title="{{ l.nome }} — {{ l.url }}" aria-label="{{ l.nome }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="{{ l.icone }}"/></svg>
+        </a>
+      {% endfor %}
+    </div>
     {% endif %}
   </div>
   {% if not editando %}
@@ -117,6 +147,13 @@ input[type=file]{ font-size:.82rem }
       <textarea id="marcadores" name="marcadores" rows="2"
         placeholder="18S rRNA, 16S rRNA, groEL, dsb, sodB"
         >{{ perfil.marcadores | join('\n') }}</textarea>
+
+      <label class="cmp" for="links">Endereços de rede</label>
+      <textarea id="links" name="links" rows="3"
+        placeholder="Um por linha. GitHub, ORCID, Lattes, LinkedIn, ResearchGate, Instagram e outros ganham ícone próprio; o resto aparece como globo.&#10;github.com/seu-usuario&#10;orcid.org/0000-0000-0000-0000"
+        >{{ perfil.links | map(attribute='url') | join('\n') }}</textarea>
+      <p class="vazio" style="margin:.35rem 0 0">Só o ícone aparece no perfil,
+        até oito endereços.</p>
 
       <label class="cmp" for="foto">Foto (opcional, até 2 MB)</label>
       <input type="file" id="foto" name="foto" accept=".png,.jpg,.jpeg,.webp">

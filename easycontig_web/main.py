@@ -219,8 +219,18 @@ def _casca(u: auth.Usuario) -> dict:
     A lista de corridas mora na lateral porque é o que a pessoa volta para
     consultar — o uso real é par a par (ADR 0051), e o que se acumula é o
     histórico. Fica curta de propósito: a lateral é atalho, não arquivo.
+
+    `perfil_lateral` traz nome e foto porque a lateral mostrava a INICIAL do
+    e-mail mesmo depois de a pessoa ter enviado a foto — que aparecia só na
+    página de perfil. Quem troca a foto e continua vendo "GU" conclui, com
+    razão, que o envio não funcionou.
     """
-    return {"usuario": u, "corridas": fila.listar(cfg.sqlite_path, dono=u.email, limite=25)}
+    p = perfil.pegar(cfg.sqlite_path, u.email) or {}
+    return {
+        "usuario": u,
+        "corridas": fila.listar(cfg.sqlite_path, dono=u.email, limite=25),
+        "perfil_lateral": {"nome": p.get("nome") or "", "foto": p.get("foto") or ""},
+    }
 
 
 def _lote_do_usuario(lote_id: str, u: auth.Usuario) -> dict:
@@ -242,7 +252,7 @@ def inicio(request: Request):
     if not u:
         return RedirectResponse("/entrar", status_code=303)
     return TEMPLATES.TemplateResponse(request, "inicio.html", {
-        **_casca(u),
+        **_casca(u), "pagina": "inicio",
         "lotes": fila.listar(cfg.sqlite_path, dono=u.email),
         "diagnostico": config.diagnostico(cfg),
         "trim": cfg.trim,
@@ -446,7 +456,7 @@ def pagina_perfil(request: Request, editando: int = 0):
             if n is not None:
                 reps.append({"lote": l, "n": n})
     return TEMPLATES.TemplateResponse(request, "perfil.html", {
-        **_casca(u),
+        **_casca(u), "pagina": "perfil",
         "perfil": perfil.pegar(cfg.sqlite_path, u.email),
         "relatorios": reps,
         "resumo": perfil.resumo_das_corridas(lotes, [x["n"] for x in reps]),
@@ -460,6 +470,7 @@ async def salvar_perfil(request: Request,
                         nome: str = Form(""), laboratorio: str = Form(""),
                         instituicao: str = Form(""), sobre: str = Form(""),
                         especies: str = Form(""), marcadores: str = Form(""),
+                        links: str = Form(""),
                         foto: UploadFile | None = File(None)):
     u = _exigir(request)
     # Salvar o perfil é escrita: sem teto, um laço no formulário grava foto atrás
@@ -489,7 +500,7 @@ async def salvar_perfil(request: Request,
             (pasta / Path(antigo).name).unlink(missing_ok=True)
     perfil.salvar(cfg.sqlite_path, u.email, nome=nome, laboratorio=laboratorio,
                   instituicao=instituicao, sobre=sobre, especies=especies,
-                  marcadores=marcadores, foto=nome_foto)
+                  marcadores=marcadores, foto=nome_foto, links=links)
     return RedirectResponse("/perfil", status_code=303)
 
 

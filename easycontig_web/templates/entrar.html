@@ -45,6 +45,17 @@
   border:1px solid var(--linha-forte); background:#fff; color:#1f2430 }
 .google:hover{ background:#f1f2f6 }
 .google svg{ width:18px; height:18px; flex:none }
+/* Desligado À VISTA. Antes o botão parecia inteiro e só o clique revelava que
+   faltava credencial: quem clicava concluía, com razão, que "o login do Google
+   não funciona" — quando o que falta se cria uma vez no console do Google
+   Cloud. Botão que parece ativo e não está é tela afirmando fato falso, na
+   porta de entrada. */
+.google.desligado{ background:#3a3e52; color:var(--apoio); cursor:not-allowed;
+  border-color:var(--linha-forte); opacity:.75 }
+.google.desligado:hover{ background:#3a3e52 }
+.google.desligado svg{ filter:grayscale(1); opacity:.65 }
+.aviso-google{ margin:.55rem 0 0; font-size:.8rem; color:var(--apoio);
+  line-height:1.55 }
 .ou{ display:flex; align-items:center; gap:.75rem; margin:1.2rem 0; color:var(--fraco);
   font-size:.72rem; font-family:var(--mono); letter-spacing:.1em }
 .ou::before,.ou::after{ content:""; flex:1; height:1px; background:var(--linha) }
@@ -81,7 +92,8 @@
        será. Sem CLIENT_ID ele avisa em vez de fingir que funcionou — nunca
        silenciosamente sem efeito. #}
     {% if not google_ok %}
-      <button class="google" type="button" id="g-desligado">
+      <button class="google desligado" type="button" id="g-desligado"
+              aria-disabled="true" title="Falta a credencial do Google nesta instalação">
           <svg viewBox="0 0 48 48" aria-hidden="true">
             <path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-2.7-.4-3.9H24v7.1h12.1c-.2 1.8-1.6 4.6-4.5 6.4l6.9 5.3c4.1-3.8 6.6-9.3 6.6-14.9z"/>
             <path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.3c-1.9 1.3-4.4 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7.1 5.5C8.1 41.1 15.4 46 24 46z"/>
@@ -90,9 +102,12 @@
           </svg>
         Entrar com Google
       </button>
-      <p class="sub" id="g-aviso" style="display:none;margin:.6rem 0 0">
-        O login pelo Google ainda não está configurado nesta instalação
-        (falta <code>GOOGLE_CLIENT_ID</code>). Use o campo abaixo.</p>
+      <p class="aviso-google" id="g-aviso">
+        <strong>Ainda não configurado nesta instalação.</strong> Falta o
+        <code>GOOGLE_CLIENT_ID</code>, que se cria uma vez no Google Cloud
+        Console (Credenciais → ID do cliente OAuth → Aplicativo da Web) e entra
+        no <code>.env</code> junto do <code>GOOGLE_CLIENT_SECRET</code>. Por
+        enquanto, use o campo abaixo.</p>
     {% else %}
       <a class="google" href="/auth/google">
         <svg viewBox="0 0 48 48" aria-hidden="true">
@@ -131,10 +146,9 @@
 
 {% if not google_ok %}
 <script>
-/* O botão existe para a tela parecer o que será — mas clicar nele não pode
-   parecer que funcionou e não fez nada. Ele diz o que falta. */
+/* O aviso já está visível (não depende deste script): o clique só leva o foco
+   para o campo que de fato funciona, em vez de não fazer nada. */
 document.getElementById("g-desligado").addEventListener("click", function () {
-  document.getElementById("g-aviso").style.display = "block";
   var e = document.getElementById("email");
   if (e) e.focus();
 });

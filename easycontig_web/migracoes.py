@@ -57,8 +57,24 @@ def _v1_referencia_no_lote(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE lotes ADD COLUMN referencia TEXT NOT NULL DEFAULT ''")
 
 
+def _v2_links_do_perfil(con: sqlite3.Connection) -> None:
+    """Endereços de rede do perfil (GitHub, ORCID, Lattes…).
+
+    ⚠️ Só altera se a tabela JÁ existe. Num banco novo, `perfil.criar_esquema()`
+    roda DEPOIS desta migração (e o `trabalhador` nem a chama), e o `_ESQUEMA` de
+    lá já traz a coluna — então não há o que migrar. Em banco antigo, a coluna é
+    acrescentada aqui. As duas ordens chegam ao mesmo lugar, que é o que uma
+    migração precisa garantir.
+    """
+    existe = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='perfis'").fetchone()
+    if existe and "links" not in _colunas(con, "perfis"):
+        con.execute("ALTER TABLE perfis ADD COLUMN links TEXT NOT NULL DEFAULT '[]'")
+
+
 MIGRACOES: list[tuple[int, str, object]] = [
     (1, "referencia gravada no lote", _v1_referencia_no_lote),
+    (2, "endereços de rede no perfil", _v2_links_do_perfil),
 ]
 
 VERSAO_ALVO = max(n for n, _d, _f in MIGRACOES) if MIGRACOES else 0
