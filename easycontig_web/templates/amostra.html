@@ -21,7 +21,7 @@
 /* Os dois cromatogramas dividem a sobra vertical em vez de ficarem com altura
    fixa: num monitor pequeno o traço saía espremido e sobrava um vão escuro
    embaixo da barra de ações. Mínimo de 9rem para o pico não virar risco. */
-.meio > .bl-topo, .meio > section:first-of-type, .acoes{ flex:none }
+.meio > .bl-topo, .meio > section:first-of-type, .meio > .acoes{ flex:none }
 #cromatogramas{ display:flex; flex-direction:column; gap:11px; flex:1 1 auto;
   min-height:0; overflow:hidden }
 #cromatogramas > .bloco{ flex:1 1 0; display:flex; flex-direction:column;
@@ -100,18 +100,27 @@
   font-size:11.5px; pointer-events:none; background:rgba(13,14,22,.6) }
 
 /* barra de ações */
-.acoes{ margin:2px auto 0; display:flex; gap:6px;
+/* ⚠️ TODA regra daqui é PREFIXADA por `.oficina`, e não é preciosismo.
+   `.acoes` e `.ac` são nomes que a LATERAL (base.html) também usa, e este bloco
+   entra na mesma folha, depois dela. Sem o prefixo, a barra de ferramentas do
+   cromatograma pintava a caixa do usuário na lateral: medido em 2026-08-06,
+   ela ia de 195px em x=8 para 123,6px em x=43,7, com borda violeta, raio de
+   11px e sombra — virava um cartãozinho flutuante e fora de esquadro. Foi o
+   "dimensionamento incorreto da box perfil/workspace" que o autor apontou três
+   vezes; eu tinha reproduzido na página INICIAL, onde este bloco não existe, e
+   por isso não via. */
+.oficina .acoes{ margin:2px auto 0; display:flex; gap:6px;
   align-items:center; background:var(--painel); border:1px solid var(--violeta);
   border-radius:11px; padding:7px 9px; box-shadow:0 10px 30px rgba(0,0,0,.55);
   width:max-content; max-width:100%; flex-wrap:wrap }
-.ac{ font-size:12px; font-weight:600; padding:6px 11px; border-radius:7px;
+.oficina .ac{ font-size:12px; font-weight:600; padding:6px 11px; border-radius:7px;
   border:1px solid var(--linha-forte); background:var(--interno); color:var(--apoio);
   display:inline-block; text-decoration:none; cursor:pointer }
-a.ac:hover{ text-decoration:none }
-.ac:hover:not(:disabled){ border-color:var(--violeta); color:var(--tinta);
+.oficina a.ac:hover{ text-decoration:none }
+.oficina .ac:hover:not(:disabled){ border-color:var(--violeta); color:var(--tinta);
   background:var(--interno) }
-.ac:disabled{ opacity:.4; cursor:not-allowed }
-.ac.perigo:hover:not(:disabled){ border-color:var(--vermelho); color:#ff9a94 }
+.oficina .ac:disabled{ opacity:.4; cursor:not-allowed }
+.oficina .ac.perigo:hover:not(:disabled){ border-color:var(--vermelho); color:#ff9a94 }
 .divisor{ width:1px; height:22px; background:var(--linha-forte); margin:0 2px }
 .dica-ac{ font-size:11px; color:var(--fraco); font-family:var(--mono) }
 
