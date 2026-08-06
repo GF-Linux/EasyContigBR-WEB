@@ -1,98 +1,215 @@
 {% extends "base.html" %}
+{% block titulo %}EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* A tela inicial É o workspace vazio, e não uma página de envio separada: mesma
+   estrutura de três colunas da amostra, com o centro esperando um par e a coluna
+   da direita já no lugar. Pedido do autor em 05/08 — "login → design da imagem
+   (sem a sequência) → aba de adicionar os arquivos". Antes daqui, entrar levava
+   a um formulário solto, e a tela do trabalho só existia dentro da amostra. */
+.trabalho{ padding:0 }
+.trabalho > .interno{ max-width:none }
+.trabalho > .interno > .rodape{ display:none }
+.oficina{ display:grid; grid-template-columns:minmax(0,1fr) 300px; min-height:100vh }
+@media(max-width:1150px){ .oficina{ grid-template-columns:1fr } }
+/* A coluna do meio OCUPA a altura: antes o conteúdo parava no meio da tela e
+   sobrava um vão escuro embaixo, que num monitor pequeno era metade da página. */
+.meio{ padding:13px; display:flex; flex-direction:column; gap:11px; min-width:0 }
+.bloco{ background:var(--painel); border:1px solid var(--linha); border-radius:10px }
+.bl-topo{ display:flex; align-items:center; gap:10px; padding:8px 13px;
+  border-bottom:1px solid var(--linha); flex-wrap:wrap }
+.bl-topo b{ font-size:12.5px; font-weight:700 }
+.bl-topo .aj{ font-size:11px; color:var(--fraco) }
+
+/* o vazio do centro tem a forma do que vai ocupá-lo: é convite, não tela branca */
+.aguardando{ border:1px dashed var(--linha-forte); border-radius:10px;
+  padding:2rem 1.4rem; text-align:center; background:#0d0e16;
+  /* cresce para tomar a sobra: é o espaço que o alinhamento e os dois
+     cromatogramas vão ocupar quando houver amostra aberta */
+  flex:1 1 auto; min-height:11rem; display:flex; flex-direction:column;
+  align-items:center; justify-content:center }
+.aguardando svg{ display:block; margin:0 auto .8rem; width:min(34rem,70%);
+  height:54px; opacity:.2 }
+.aguardando b{ display:block; color:var(--apoio); font-size:.92rem; margin-bottom:.25rem }
+.aguardando p{ margin:0 auto; max-width:44ch; font-size:.83rem; color:var(--fraco);
+  line-height:1.55 }
+
+.envio{ padding:13px }
+.dois-modos{ display:grid; grid-template-columns:1fr 1fr; gap:.6rem; margin-bottom:1rem }
+@media(max-width:620px){ .dois-modos{ grid-template-columns:1fr } }
+.modo{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
+  padding:.7rem .85rem .8rem 2.2rem; position:relative; cursor:pointer; display:block }
+.modo:hover{ border-color:var(--linha-forte) }
+.modo b{ display:block; font-size:.85rem; margin-bottom:.15rem }
+.modo span{ font-size:.78rem; color:var(--fraco); line-height:1.5; display:block }
+.modo input{ position:absolute; left:.85rem; top:.92rem; accent-color:var(--violeta);
+  width:14px; height:14px; cursor:pointer }
+.modo.destaque{ border-color:var(--violeta); background:var(--violeta-fundo) }
+.modo.destaque b{ color:var(--violeta-claro) }
+
+.lado{ background:var(--painel); border-left:1px solid var(--linha);
+  padding:14px 15px 22px; display:flex; flex-direction:column; gap:12px }
+@media(max-width:1150px){ .lado{ border-left:0; border-top:1px solid var(--linha) } }
+.lado .rot{ font-family:var(--mono); font-size:9px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--fraco); margin-bottom:6px }
+.metricas{ display:grid; grid-template-columns:1fr 1fr; gap:8px }
+.mt-vazio{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
+  padding:9px 11px }
+.mt-vazio b{ display:block; font-family:var(--mono); font-size:1.1rem; color:var(--fraco) }
+.mt-vazio s{ display:block; text-decoration:none; font-family:var(--mono);
+  font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--fraco);
+  margin-top:3px }
+.lq{ display:flex; justify-content:space-between; gap:1rem; padding:5px 0;
+  font-size:12px; border-bottom:1px solid var(--linha) }
+.lq span:last-child{ font-family:var(--mono) }
+{% endblock %}
+
 {% block conteudo %}
+<div class="oficina">
+  <div class="meio">
 
-{% set faltando = diagnostico | rejectattr(1) | list %}
-{% if faltando %}
-<div class="cartao">
-  <strong class="erro">Esta instalação está incompleta.</strong>
-  <p class="sub">Enquanto faltar alguma dependência, o lote roda mas o relatório
-  vem sem a parte correspondente — e <em>ausência de <code>blastn</code> não é
-  "nenhum acerto"</em>, é falta de ferramenta.</p>
-  <table>
-    {% for item, ok, detalhe in diagnostico %}
-    <tr><td style="width:8rem">{{ item }}</td>
-        <td class="{{ 'pronto' if ok else 'falhou' }}">{{ 'OK' if ok else 'FALTA' }}</td>
-        <td class="sub">{{ detalhe }}</td></tr>
-    {% endfor %}
-  </table>
-</div>
-{% endif %}
-
-<h2>Enviar uma corrida</h2>
-<div class="cartao">
-  <form id="envio" method="post" action="/lotes" enctype="multipart/form-data"
-        data-max-arquivos="{{ max_arquivos }}"
-        data-max-bytes="{{ max_mb * 1024 * 1024 }}">
-    <div class="campo">
-      <label class="sub" for="nome">Nome da corrida (só para você se achar depois)</label>
-      <input type="text" id="nome" name="nome" placeholder="ex.: F13719 #80649 27/07">
+    {% set faltando = diagnostico | rejectattr(1) | list %}
+    {% if faltando %}
+    <div class="bloco" style="border-color:rgba(240,82,74,.4)">
+      <div class="bl-topo"><b class="erro">Esta instalação está incompleta</b></div>
+      <div style="padding:11px 13px">
+        <p class="sub" style="margin:0 0 .7rem">Enquanto faltar uma dependência o lote
+        roda mas o relatório vem sem a parte correspondente — e <em>ausência de
+        <code>blastn</code> não é "nenhum acerto"</em>, é falta de ferramenta.</p>
+        <table>
+          {% for item, ok, detalhe in diagnostico %}
+          <tr><td style="width:7rem">{{ item }}</td>
+              <td class="{{ 'pronto' if ok else 'falhou' }}" style="width:5rem"
+                >{{ 'OK' if ok else 'FALTA' }}</td>
+              <td class="sub">{{ detalhe }}</td></tr>
+          {% endfor %}
+        </table>
+      </div>
     </div>
-    <div class="campo">
-      <label class="sub" for="arquivos">Arquivos <code>.ab1</code> — o par F+R de uma
-      amostra, ou a pasta inteira de uma corrida</label><br>
-      <input type="file" id="arquivos" name="arquivos" multiple
-             accept=".ab1,.abi,.scf" webkitdirectory-hint required
-             style="margin-top:.4rem">
-      <p id="resumo" class="sub" style="margin:.4rem 0 0"></p>
-    </div>
-
-    <button type="submit" id="botao-enviar"
-            {% if cota and not cota.pode_enviar %}disabled{% endif %}>Processar lote</button>
-
-    <div id="progresso" style="display:none; margin-top:.9rem">
-      <div class="barra"><i id="progresso-barra" style="width:0%"></i></div>
-      <p id="progresso-texto" class="sub" style="margin:.4rem 0 0" aria-live="polite"></p>
-    </div>
-
-    <p id="falha" class="erro" style="display:none; margin:.9rem 0 0" role="alert"></p>
-
-    <p class="sub" style="margin-bottom:0">
-      Dois arquivos viram uma amostra e abrem direto no cromatograma; uma pasta
-      vira um lote com a lista de amostras. Até {{ max_arquivos }} arquivos /
-      {{ max_mb }} MB por envio. Trim = {{ trim }} (valor medido, ADR 0042).
-      O pareamento F/R sai do <em>conteúdo</em> das leituras, não do nome do arquivo.
-    </p>
-
-    {% if cota %}
-    {# tamanho em texto de gente, com vírgula decimal — a tela nunca mostra bytes crus #}
-    {%- macro tam(bytes) -%}
-      {%- set m = bytes / 1048576 -%}
-      {%- if m >= 1024 -%}{{ ((m / 1024) | round(1)) | string | replace('.', ',') }} GB
-      {%- else -%}{{ (m | round(1)) | string | replace('.', ',') }} MB{%- endif -%}
-    {%- endmacro -%}
-    <p class="sub" style="margin:.35rem 0 0">
-      Nesta conta:
-      {{ cota.lotes_ativos }} corrida(s) em processamento{% if cota.max_lotes_ativos %} de {{ cota.max_lotes_ativos }}{% else %} (sem limite){% endif %} ·
-      {{ tam(cota.bytes_usados) }} ocupados{% if cota.max_bytes_conta %} de {{ tam(cota.max_bytes_conta) }}{% else %} (sem limite de espaço){% endif %}.
-    </p>
-    {% if not cota.pode_enviar %}
-    <p class="erro" style="margin:.35rem 0 0">{{ cota.motivo }}</p>
     {% endif %}
-    {% endif %}
-  </form>
-</div>
 
-<h2>Suas corridas</h2>
-{% if not lotes %}
-  <div class="cartao sub">Nenhuma ainda.</div>
-{% else %}
-<div class="cartao">
-<table>
-  <tr><th>corrida</th><th>situação</th><th>arquivos</th><th>enviada</th><th></th></tr>
-  {% for l in lotes %}
-  <tr>
-    <td><a href="/lotes/{{ l.id }}">{{ l.nome or l.id }}</a></td>
-    <td><span class="rotulo {{ l.status }}">{{ l.status.replace('_',' ') }}</span></td>
-    <td>{{ l.n_arquivos }}</td>
-    <td class="sub">{{ l.criado_em.replace('T',' ')[:16] }}</td>
-    <td>{% if l.status == 'pronto' %}
-        <a href="/lotes/{{ l.id }}/relatorio">relatório</a> ·
-        <a href="/lotes/{{ l.id }}/resultado.csv">CSV</a>{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table>
+    <div class="aguardando">
+      <svg viewBox="0 0 600 46" preserveAspectRatio="none" aria-hidden="true">
+        <path fill="none" stroke="#6E7490" stroke-width="1.5"
+              d="M0,40 Q12,8 24,40 T48,40 T72,40 T96,40 T120,40 T144,40 T168,40
+                 T192,40 T216,40 T240,40 T264,40 T288,40 T312,40 T336,40 T360,40
+                 T384,40 T408,40 T432,40 T456,40 T480,40 T504,40 T528,40 T552,40
+                 T576,40 T600,40"/>
+      </svg>
+      <b>Nenhuma amostra aberta</b>
+      <p>Mande um par F+R abaixo — ou escolha uma corrida na lateral — e o
+      alinhamento, os dois cromatogramas e a identificação aparecem aqui.</p>
+    </div>
+
+    <section class="bloco">
+      <div class="bl-topo">
+        <b>Adicionar arquivos</b>
+        <span class="aj">o par de uma amostra, ou a pasta inteira de uma corrida</span>
+      </div>
+      <div class="envio">
+        {# Escolha de verdade, não dois cartões decorativos: o modo decide o que
+           o campo de arquivo aceita. "Par" abre o seletor de ARQUIVOS e exige
+           exatamente dois; "corrida" abre o seletor de PASTA. Antes os dois
+           cartões eram enfeite e o campo era sempre o mesmo. #}
+        <div class="dois-modos" role="radiogroup" aria-label="O que você vai enviar">
+          <label class="modo destaque">
+            <input type="radio" name="modo" value="par" checked>
+            <b>Um par F+R</b>
+            <span>Dois arquivos <code>.ab1</code>. Abre direto no cromatograma,
+            pronto para editar base. É o caminho do dia a dia.</span>
+          </label>
+          <label class="modo">
+            <input type="radio" name="modo" value="lote">
+            <b>Uma corrida inteira</b>
+            <span>A pasta toda. Vira um lote com a lista de amostras, e você
+            escolhe qual par abrir.</span>
+          </label>
+        </div>
+
+        <form id="envio" method="post" action="/lotes" enctype="multipart/form-data"
+              data-max-arquivos="{{ max_arquivos }}"
+              data-max-bytes="{{ max_mb * 1024 * 1024 }}">
+          <div class="campo">
+            <label class="sub" for="nome">Nome (só para você achar depois)</label>
+            <input type="text" id="nome" name="nome"
+                   placeholder="ex.: amostra12 · BTF2+BTR2">
+          </div>
+          <div class="campo">
+            <label class="sub" for="arquivos" id="rot-arquivos">Os dois arquivos
+            <code>.ab1</code> da amostra</label><br>
+            <input type="file" id="arquivos" name="arquivos" multiple
+                   accept=".ab1,.abi,.scf" required style="margin-top:.4rem">
+            <p id="resumo" class="sub" style="margin:.4rem 0 0"></p>
+          </div>
+
+          <button type="submit" id="botao-enviar"
+                  {% if cota and not cota.pode_enviar %}disabled{% endif %}
+            >Processar lote</button>
+
+          <div id="progresso" style="display:none; margin-top:.9rem">
+            <div class="barra"><i id="progresso-barra" style="width:0%"></i></div>
+            <p id="progresso-texto" class="sub" style="margin:.4rem 0 0"
+               aria-live="polite"></p>
+          </div>
+          <p id="falha" class="erro" style="display:none; margin:.9rem 0 0"
+             role="alert"></p>
+
+          <p class="sub" style="margin:.8rem 0 0">
+            Até {{ max_arquivos }} arquivos / {{ max_mb }} MB por envio.
+            Trim = {{ trim }} (valor medido, ADR 0042). O pareamento F/R sai do
+            <em>conteúdo</em> das leituras, não do nome do arquivo.</p>
+
+          {% if cota %}
+          {%- macro tam(bytes) -%}
+            {%- set m = bytes / 1048576 -%}
+            {%- if m >= 1024 -%}{{ ((m / 1024) | round(1)) | string | replace('.', ',') }} GB
+            {%- else -%}{{ (m | round(1)) | string | replace('.', ',') }} MB{%- endif -%}
+          {%- endmacro -%}
+          <p class="sub" style="margin:.35rem 0 0">
+            Nesta conta: {{ cota.lotes_ativos }} em processamento{% if cota.max_lotes_ativos %}
+            de {{ cota.max_lotes_ativos }}{% else %} (sem limite){% endif %} ·
+            {{ tam(cota.bytes_usados) }} ocupados{% if cota.max_bytes_conta %}
+            de {{ tam(cota.max_bytes_conta) }}{% else %} (sem limite){% endif %}.</p>
+          {% if not cota.pode_enviar %}
+          <p class="erro" style="margin:.35rem 0 0">{{ cota.motivo }}</p>
+          {% endif %}
+          {% endif %}
+        </form>
+      </div>
+    </section>
+  </div>
+
+  {# A coluna da direita fica no lugar, vazia: sumir com ela aqui faria o layout
+     saltar quando a amostra abrisse. #}
+  <aside class="lado">
+    <div>
+      <div class="rot">identificação</div>
+      <p class="sub" style="margin:0;font-size:12px">Espécie, identidade, cobertura e
+      o acesso do GenBank aparecem aqui quando uma amostra estiver aberta.</p>
+    </div>
+    <div class="metricas">
+      <div class="mt-vazio"><b>—</b><s>identidade</s></div>
+      <div class="mt-vazio"><b>—</b><s>cobertura</s></div>
+      <div class="mt-vazio"><b>—</b><s>e-value</s></div>
+      <div class="mt-vazio"><b>—</b><s>consenso (pb)</s></div>
+    </div>
+    <div>
+      <div class="rot">esta instalação</div>
+      <div class="lq"><span>Trim</span><span>{{ trim }}</span></div>
+      <div class="lq"><span>Teto por envio</span><span>{{ max_arquivos }} arq.</span></div>
+      <div class="lq"><span>Retenção</span><span>{% if retencao_dias %}{{ retencao_dias }}
+        dias{% else %}não apaga{% endif %}</span></div>
+      {% for item, ok, detalhe in diagnostico %}
+      <div class="lq"><span>{{ item }}</span>
+        <span class="{{ 'pronto' if ok else 'falhou' }}"
+          >{{ 'ok' if ok else 'falta' }}</span></div>
+      {% endfor %}
+    </div>
+    <p class="sub" style="font-size:11px;margin-top:auto;line-height:1.55">
+      Motor: Tracy (Rausch et al., 2020) · BLAST contra banco local curado.
+      <strong>O relatório relata, não conclui.</strong> Uso em pesquisa.</p>
+  </aside>
 </div>
-{% endif %}
 
 <script>
 /* Envio com progresso e desfecho explícito.
@@ -120,6 +237,37 @@
   var falha = document.getElementById('falha');
 
   var ACEITAS = ['.ab1', '.abi', '.scf'];
+  // Do documento, e não do form: o grupo de modos fica ACIMA do <form> no
+  // HTML (é a decisão que precede o preenchimento), então buscá-lo pelo form
+  // devolvia zero elementos e o modo ficava preso em "par".
+  var modos = document.querySelectorAll('input[name=modo]');
+  var rotulo = document.getElementById('rot-arquivos');
+
+  function modoAtual() {
+    for (var i = 0; i < modos.length; i++) if (modos[i].checked) return modos[i].value;
+    return 'par';
+  }
+
+  /* O modo troca o SELETOR, não só o texto: em "corrida" o campo abre a escolha
+     de pasta (webkitdirectory), em "par" abre a de arquivos. Sem isto os dois
+     cartões eram enfeite — quem escolhesse "corrida inteira" continuava tendo
+     de selecionar arquivo por arquivo. */
+  function aplicarModo() {
+    var lote = modoAtual() === 'lote';
+    entrada.webkitdirectory = lote;
+    entrada.value = '';
+    resumo.textContent = '';
+    limparFalha();
+    rotulo.innerHTML = lote
+      ? 'A pasta da corrida'
+      : 'Os dois arquivos <code>.ab1</code> da amostra';
+    for (var i = 0; i < modos.length; i++) {
+      modos[i].closest('.modo').classList.toggle('destaque', modos[i].checked);
+    }
+    botao.textContent = lote ? 'Processar corrida' : 'Montar o par';
+  }
+  for (var m = 0; m < modos.length; m++) modos[m].addEventListener('change', aplicarModo);
+  aplicarModo();
   var maxArquivos = parseInt(form.getAttribute('data-max-arquivos'), 10) || 0;
   var maxBytes = parseInt(form.getAttribute('data-max-bytes'), 10) || 0;
   var enviando = false;
@@ -156,7 +304,7 @@
   function destravar() {
     enviando = false;
     botao.disabled = false;
-    botao.textContent = 'Processar lote';
+    botao.textContent = modoAtual() === 'lote' ? 'Processar corrida' : 'Montar o par';
     caixa.style.display = 'none';
     window.onbeforeunload = null;
   }
@@ -178,7 +326,17 @@
     var s = selecao();
     if (!s.n) {
       ev.preventDefault();
-      mostrarFalha('Nenhum arquivo .ab1/.abi/.scf na seleção. Escolha a pasta da corrida.');
+      mostrarFalha(modoAtual() === 'lote'
+        ? 'Nenhum arquivo .ab1/.abi/.scf nessa pasta.'
+        : 'Escolha os dois arquivos .ab1 da amostra.');
+      return;
+    }
+    // Em modo par o teto é 2, e não o do lote: mandar 30 arquivos aqui não é
+    // um par, e deixar passar produziria um lote com nome de amostra.
+    if (modoAtual() === 'par' && s.n !== 2) {
+      ev.preventDefault();
+      mostrarFalha('Um par são exatamente 2 arquivos, e a seleção tem ' + s.n
+        + '. Para mandar a corrida inteira, escolha "Uma corrida inteira" acima.');
       return;
     }
     // Conferido aqui só para não fazer o usuário subir 26 MB até o servidor

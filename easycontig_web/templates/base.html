@@ -59,6 +59,12 @@ a:hover{ text-decoration:underline }
   text-transform:uppercase; color:var(--fraco); padding:14px 14px 7px }
 .corridas{ display:flex; flex-direction:column; gap:1px; padding:0 8px;
   max-height:46vh; overflow-y:auto }
+.cr-linha{ display:flex; align-items:stretch; gap:2px }
+.cr-linha .cr{ flex:1; min-width:0 }
+.cr-acao{ display:grid; place-items:center; width:26px; border-radius:7px;
+  color:var(--fraco); font-size:13px; flex:none }
+.cr-acao:hover{ background:var(--interno); color:var(--violeta-claro);
+  text-decoration:none }
 .cr{ display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:7px;
   font-size:12.5px; color:var(--apoio); border:1px solid transparent }
 .cr:hover{ background:var(--interno); text-decoration:none; color:var(--tinta) }
@@ -142,20 +148,32 @@ pre{ font-family:var(--mono); font-size:.8rem }
       </span>
     </div>
 
-    {# A lista fica na lateral porque é o que a pessoa volta para consultar
-       (ADR 0051: o uso real é par a par, e o histórico é o que se acumula). #}
-    <div class="sec">Corridas</div>
+    {# WorkFolder, e não "Corridas": é o armazenamento do perfil — o lugar onde
+       a pessoa acha o que já mandou, abre o relatório e apaga. Fica logo abaixo
+       do nome porque pertence à conta, não à navegação (pedido do autor, 05/08).
+       O uso real é par a par (ADR 0051), então o que se acumula aqui é o
+       histórico. #}
+    <div class="sec">WorkFolder</div>
     <div class="corridas">
       {% for l in (corridas or []) %}
         {# Sem `?tela_do_lote=1` de propósito: uma corrida de UMA amostra — que é
            o caso normal, o par F+R da ADR 0051 — precisa cair direto na página
            da amostra. Pôr o parâmetro aqui anulava esse atalho em todo acesso
            pela lateral, que é justamente por onde a pessoa volta. #}
-        <a class="cr{% if lote is defined and lote and lote.id == l.id %} viva{% endif %}"
-           href="/lotes/{{ l.id }}" title="{{ l.status }}">
-          <i class="pt {{ l.status }}"></i>
-          <span class="nome">{{ l.nome or l.id }}</span>
-        </a>
+        <span class="cr-linha">
+          <a class="cr{% if lote is defined and lote and lote.id == l.id %} viva{% endif %}"
+             href="/lotes/{{ l.id }}" title="{{ l.status }}">
+            <i class="pt {{ l.status }}"></i>
+            <span class="nome">{{ l.nome or l.id }}</span>
+          </a>
+          {% if l.status == 'pronto' %}
+            {# Atalho direto para o relatório: sem ele, ver o relatório de um par
+               exigia abrir a amostra, voltar para o lote e só então clicar —
+               três passos para uma coisa só. #}
+            <a class="cr-acao" href="/lotes/{{ l.id }}/relatorio" target="_blank"
+               rel="noopener" title="Abrir o relatório desta corrida">▤</a>
+          {% endif %}
+        </span>
       {% else %}
         <span class="lat-acao fraco" style="font-size:11.5px">Nenhuma ainda.</span>
       {% endfor %}

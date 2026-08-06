@@ -8,9 +8,27 @@
 .trabalho{ padding:0 }
 .trabalho > .interno{ max-width:none }
 .trabalho > .interno > .rodape{ display:none }
-.oficina{ display:grid; grid-template-columns:minmax(0,1fr) 300px; min-height:100vh }
-@media(max-width:1150px){ .oficina{ grid-template-columns:1fr } }
-.meio{ padding:13px; display:flex; flex-direction:column; gap:11px; min-width:0 }
+/* Altura FIXA da viewport, não mínima: assim as peças dividem exatamente o que
+   há e a página não rola. Com `min-height` os cromatogramas cresciam além da
+   tela e o segundo ficava cortado — troquei um vão vazio por conteúdo fora de
+   vista, que é pior. */
+.oficina{ display:grid; grid-template-columns:minmax(0,1fr) 300px; height:100vh;
+  overflow:hidden }
+@media(max-width:1150px){ .oficina{ grid-template-columns:1fr;
+  height:auto; overflow:visible } }
+.meio{ padding:13px; display:flex; flex-direction:column; gap:11px;
+  min-width:0; min-height:0; overflow:hidden }
+/* Os dois cromatogramas dividem a sobra vertical em vez de ficarem com altura
+   fixa: num monitor pequeno o traço saía espremido e sobrava um vão escuro
+   embaixo da barra de ações. Mínimo de 9rem para o pico não virar risco. */
+.meio > .bl-topo, .meio > section:first-of-type, .acoes{ flex:none }
+#cromatogramas{ display:flex; flex-direction:column; gap:11px; flex:1 1 auto;
+  min-height:0; overflow:hidden }
+#cromatogramas > .bloco{ flex:1 1 0; display:flex; flex-direction:column;
+  min-height:7.5rem; overflow:hidden }
+#cromatogramas .tela-tr{ flex:1 1 auto; display:flex; flex-direction:column;
+  min-height:0 }
+#cromatogramas .tela-tr svg{ flex:1 1 auto; min-height:0 }
 
 .bloco{ background:var(--painel); border:1px solid var(--linha); border-radius:10px }
 .bl-topo{ display:flex; align-items:center; gap:10px; padding:8px 13px;
@@ -53,6 +71,7 @@
 .faixa-sel{ fill:rgba(145,132,217,.20); stroke:var(--violeta); stroke-width:1 }
 .faixa-mm{ fill:rgba(240,82,74,.13) }
 .tela-tr svg{ display:block; width:100%; height:112px }
+.tela-tr{ background:#0d0e16; position:relative; overflow:hidden }
 /* Faixa das letras: fora do SVG, porque lá dentro o eixo x é esticado e a
    letra vira um traço. Em % o alinhamento com o pico continua exato. */
 .bases-lin{ position:relative; height:19px; border-top:1px solid var(--linha) }
@@ -64,12 +83,14 @@
 .vazio-tr{ padding:1.6rem 1rem; text-align:center; color:var(--fraco); font-size:12px }
 
 /* barra de ações */
-.acoes{ position:sticky; bottom:12px; margin:2px auto 0; display:flex; gap:6px;
+.acoes{ margin:2px auto 0; display:flex; gap:6px;
   align-items:center; background:var(--painel); border:1px solid var(--violeta);
   border-radius:11px; padding:7px 9px; box-shadow:0 10px 30px rgba(0,0,0,.55);
   width:max-content; max-width:100%; flex-wrap:wrap }
 .ac{ font-size:12px; font-weight:600; padding:6px 11px; border-radius:7px;
-  border:1px solid var(--linha-forte); background:var(--interno); color:var(--apoio) }
+  border:1px solid var(--linha-forte); background:var(--interno); color:var(--apoio);
+  display:inline-block; text-decoration:none; cursor:pointer }
+a.ac:hover{ text-decoration:none }
 .ac:hover:not(:disabled){ border-color:var(--violeta); color:var(--tinta);
   background:var(--interno) }
 .ac:disabled{ opacity:.4; cursor:not-allowed }
@@ -80,7 +101,7 @@
 /* painel direito */
 .lado{ background:var(--painel); border-left:1px solid var(--linha);
   padding:14px 15px 22px; display:flex; flex-direction:column; gap:12px;
-  overflow-y:auto }
+  overflow-y:auto; min-height:0 }
 @media(max-width:1150px){ .lado{ border-left:0; border-top:1px solid var(--linha) } }
 .id-topo{ display:flex; align-items:center; gap:6px; font-family:var(--mono);
   font-size:9.5px; letter-spacing:.13em; text-transform:uppercase }
@@ -122,9 +143,18 @@
      data-traco="/api/lotes/{{ lote.id }}/amostras/{{ amostra.key|urlencode }}/traco">
 
   <div class="meio">
+    {# Barra da amostra com os destinos à mão. Antes, ver o relatório de um par
+       exigia clicar em "voltar" para descobrir que a tela do lote existia — o
+       caminho não era descoberto, era adivinhado. #}
     <div class="bl-topo" style="border:0;padding:2px 2px 0">
-      <a href="/lotes/{{ lote.id }}?tela_do_lote=1" class="sub">← {{ lote.nome or lote.id }}</a>
-      <b style="margin-left:8px">{{ amostra.key }}</b>
+      <a href="/lotes/{{ lote.id }}?tela_do_lote=1" class="sub"
+         title="Todas as amostras desta corrida">▤ {{ lote.nome or lote.id }}</a>
+      <b style="margin-left:4px">{{ amostra.key }}</b>
+      <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <a class="ac" href="/lotes/{{ lote.id }}/relatorio" target="_blank"
+           rel="noopener">Relatório da corrida</a>
+        <a class="ac" href="/lotes/{{ lote.id }}/resultado.csv">CSV</a>
+      </span>
     </div>
 
     {% if amostra.erro %}
