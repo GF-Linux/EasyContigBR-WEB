@@ -23,10 +23,11 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import amostras as mod_amostras
-from . import auth, config, cotas, executor, fila, retencao, traco
+from . import auth, config, cotas, executor, fila, perfil, retencao, traco
 
 cfg = config.carregar()
 fila.criar_esquema(cfg.sqlite_path)
+perfil.criar_esquema(cfg.sqlite_path)
 
 app = FastAPI(title="EasyContig BR — lotes", docs_url="/api/docs")
 
@@ -255,6 +256,69 @@ async def criar_lote(request: Request,
     # avisar da falta — ver o comentário de RECEBENDO em fila.py.
     fila.liberar_para_fila(cfg.sqlite_path, lote_id, gravados)
     return RedirectResponse(f"/lotes/{lote_id}", status_code=303)
+
+
+@app.get("/perfil", response_class=HTMLResponse)
+def pagina_perfil(request: Request, editando: int = 0):
+    u = _exigir(request)
+    lotes = fila.listar(cfg.sqlite_path, dono=u.email, limite=500)
+    reps = []
+    for l in lotes:
+        if l["status"] == fila.PRONTO:
+            r = _relatorio(l["id"])
+            if r:
+                reps.append({"lote": l, "rep": r,
+                             "n": len(r.get("samples") or [])})
+    return TEMPLATES.TemplateResponse(request, "perfil.html", {
+        **_casca(u),
+        "perfil": perfil.pegar(cfg.sqlite_path, u.email),
+        "relatorios": reps,
+        "resumo": perfil.resumo_das_corridas(lotes, [x["rep"] for x in reps]),
+        "cota": cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email),
+        "editando": bool(editando),
+    })
+
+
+@app.post("/perfil")
+async def salvar_perfil(request: Request,
+                        nome: str = Form(""), laboratorio: str = Form(""),
+                        instituicao: str = Form(""), sobre: str = Form(""),
+                        especies: str = Form(""), marcadores: str = Form(""),
+                        foto: UploadFile | None = File(None)):
+    u = _exigir(request)
+    nome_foto = None
+    if foto is not None and foto.filename:
+        ext = Path(foto.filename).suffix.lower()
+        if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise HTTPException(status_code=400,
+                                detail="a foto precisa ser .png, .jpg ou .webp")
+        dados = await foto.read(2 * 1024 * 1024 + 1)
+        if len(dados) > 2 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="a foto passa de 2 MB")
+        pasta = cfg.data_dir / "fotos"
+        pasta.mkdir(parents=True, exist_ok=True)
+        # Nome derivado do e-mail, não do arquivo enviado: nome de arquivo é
+        # entrada do usuário e não decide caminho em disco.
+        nome_foto = secrets.token_urlsafe(8) + ext
+        (pasta / nome_foto).write_bytes(dados)
+    perfil.salvar(cfg.sqlite_path, u.email, nome=nome, laboratorio=laboratorio,
+                  instituicao=instituicao, sobre=sobre, especies=especies,
+                  marcadores=marcadores, foto=nome_foto)
+    return RedirectResponse("/perfil", status_code=303)
+
+
+@app.get("/perfil/foto")
+def foto_do_perfil(request: Request):
+    """A foto sai por rota, e não de uma pasta estática servida direto: assim
+    ela continua sendo de quem entrou, e não um arquivo público adivinhável."""
+    u = _exigir(request)
+    p = perfil.pegar(cfg.sqlite_path, u.email)
+    if not p["foto"]:
+        raise HTTPException(status_code=404, detail="sem foto")
+    caminho = cfg.data_dir / "fotos" / Path(p["foto"]).name
+    if not caminho.exists():
+        raise HTTPException(status_code=404, detail="sem foto")
+    return FileResponse(caminho)
 
 
 def _relatorio(lote_id: str) -> dict | None:

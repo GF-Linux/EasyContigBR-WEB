@@ -50,8 +50,10 @@ a:hover{ text-decoration:underline }
   place-items:center; font-size:11px; font-weight:800; color:#14121f;
   background:linear-gradient(135deg,var(--violeta),#6f63b8) }
 .perfil .quem{ min-width:0 }
-.perfil .nm{ font-size:12.5px; font-weight:600; line-height:1.3;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.perfil .nm{ font-size:12.5px; font-weight:600; line-height:1.3; color:var(--tinta);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block }
+.perfil .nm:hover{ color:var(--violeta-claro); text-decoration:none }
+.perfil .av{ text-decoration:none }
 .perfil .sai{ font-family:var(--mono); font-size:9px; letter-spacing:.06em;
   color:var(--fraco) }
 
@@ -141,10 +143,13 @@ pre{ font-family:var(--mono); font-size:.8rem }
     </div>
 
     <div class="perfil">
-      <span class="av">{{ (usuario.nome or usuario.email)[:2]|upper }}</span>
+      <a href="/perfil" class="av" title="Seu perfil"
+        >{{ (usuario.nome or usuario.email)[:2]|upper }}</a>
       <span class="quem">
-        <span class="nm" title="{{ usuario.email }}">{{ usuario.nome or usuario.email }}</span><br>
-        <a class="sai" href="/sair">sair</a>
+        <a class="nm" href="/perfil" title="{{ usuario.email }}"
+          >{{ usuario.nome or usuario.email }}</a><br>
+        <span class="sai"><a href="/perfil">perfil</a> ·
+          <a href="/sair">sair</a></span>
       </span>
     </div>
 
