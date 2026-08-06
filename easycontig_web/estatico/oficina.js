@@ -99,6 +99,7 @@
       b.onclick = () => remover([+b.dataset.l]));
     document.getElementById("b-todas").onclick = () =>
       remover(est.d.leituras.map((_, i) => i));
+    montarTracos();
     $("#acoes").style.display = "flex";
   }
 
@@ -135,26 +136,79 @@
     $("#q-ed").textContent = est.removidas;
   }
 
+  // O traço em si NUNCA muda: editar base mexe no rótulo e no consenso, não no
+  // sinal medido. Então ele é desenhado UMA vez, e o clique só move o viewBox e
+  // as faixas.
+  //
+  // Antes tudo era reescrito por innerHTML a cada seleção — 16.940 pontos e
+  // 197 KB de atributo POR cromatograma, reanalisados e repintados do zero.
+  // Medido: 33 ms do clique até o quadro pintado (2 frames), e no Deck pior.
+  // O script custava 8 ms; o resto era o navegador repintando polilinha que
+  // continuava idêntica.
+  function montarTracos() {
+    est.d.leituras.forEach((l, i) => {
+      const svg = document.getElementById("svg-" + i);
+      if (!svg) return;
+      svg.innerHTML = '<g class="faixas"></g><g class="linhas"></g>';
+      svg.onclick = ev => {
+        const r = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal;
+        selecionar(Math.round(vb.x + (ev.clientX - r.left) / r.width * vb.width));
+      };
+    });
+  }
+
+  /* Recorta os pontos da JANELA visível. É a correção que resolveu o atraso.
+     Duas tentativas antes desta não ajudaram, e vale registrar por quê:
+       — desenhar a polilinha uma vez só e trocar o viewBox: 33 → 36 ms, nada.
+         Reescrever o atributo não era o custo.
+       — o DOM do alinhamento: medido em 0,4 ms, não era ele.
+     O custo era RASTERIZAR: 16.940 pontos por cromatograma continuavam no
+     documento e eram repintados inteiros a cada mudança de janela, mesmo os
+     ~95% fora da vista. Recortando, sobram ~500 por canal. */
+  function recorte(plano, i0, i1) {
+    const partes = [];
+    let atual = [];
+    for (let k = 0; k < plano.length; k += 2) {
+      const x = plano[k];
+      if (x === null) {                       // quebra vinda do gap
+        if (atual.length > 1) partes.push(atual.join(" "));
+        atual = [];
+        continue;
+      }
+      if (x < i0 - 1 || x > i1 + 1) {
+        if (atual.length > 1) partes.push(atual.join(" "));
+        atual = [];
+        continue;
+      }
+      atual.push(x + "," + plano[k + 1]);
+    }
+    if (atual.length > 1) partes.push(atual.join(" "));
+    return partes;
+  }
+
   function desenhaTracos() {
     const [i0, i1] = janela(), mm = mismatches();
     est.d.leituras.forEach((l, i) => {
       const svg = document.getElementById("svg-" + i);
       if (!svg) return;
-      svg.setAttribute("viewBox", `${i0} 0 ${i1 - i0} 132`);
-      let s = "";
-      mm.filter(c => c >= i0 && c < i1).forEach(c =>
-        s += `<rect class="faixa-mm" x="${c - .5}" y="0" width="1" height="104"/>`);
-      if (est.sel !== null && est.sel >= i0 && est.sel < i1)
+      svg.setAttribute("viewBox", `${i0} 0 ${i1 - i0} 112`);
+
+      svg.querySelector(".linhas").innerHTML = "ACGT".split("").map(ch =>
+        recorte(l.canais[ch] || [], i0, i1)
+          .map(pt => `<polyline class="tr ${ch}" points="${pt}"/>`).join("")
+      ).join("");
+
+      let s = mm.filter(c => c >= i0 && c < i1)
+        .map(c => `<rect class="faixa-mm" x="${c - .5}" y="0" width="1" height="104"/>`)
+        .join("");
+      if (est.sel !== null && est.sel >= i0 && est.sel < i1) {
         s += `<rect class="faixa-sel" x="${est.sel - .5}" y="0" width="1" height="104"`
            + ` vector-effect="non-scaling-stroke"/>`;
-      "ACGT".split("").forEach(ch =>
-        (l.canais[ch] || "").split("|").filter(Boolean).forEach(p =>
-          s += `<polyline class="tr ${ch}" points="${p}"/>`));
-      svg.innerHTML = s;
+      }
+      svg.querySelector(".faixas").innerHTML = s;
 
-      // As letras NÃO vão dentro do SVG: com `preserveAspectRatio="none"` o
-      // eixo x é esticado ~13× e cada letra virava um traço horizontal
-      // ilegível. Numa faixa HTML posicionada em %, elas saem redondas.
+      // As letras ficam FORA do SVG: com `preserveAspectRatio="none"` o eixo x é
+      // esticado ~13× e cada letra virava um traço horizontal ilegível.
       const faixa = document.getElementById("bases-" + i);
       faixa.innerHTML = l.bases.filter(([c]) => c >= i0 && c < i1)
         .map(([col, base]) => {
@@ -166,10 +220,8 @@
       faixa.querySelectorAll(".bl").forEach(e =>
         e.onclick = () => selecionar(+e.dataset.col));
 
-      // Painel vazio lê como "não montou", e é falso: a leitura simplesmente não
-      // alcança esta região do contig. Dizer isso é o conserto — foi o que fez a
-      // leitura reversa parecer quebrada quando a janela abria antes do início
-      // dela.
+      // Painel vazio lê como "não montou", e é falso: a leitura simplesmente
+      // não alcança esta região do contig.
       const nada = !l.bases.some(([c]) => c >= i0 && c < i1);
       let aviso = svg.parentElement.querySelector(".fora");
       if (nada && !aviso) {
@@ -180,10 +232,6 @@
       } else if (!nada && aviso) {
         aviso.remove();
       }
-      svg.onclick = ev => {
-        const r = svg.getBoundingClientRect();
-        selecionar(Math.round(i0 + (ev.clientX - r.left) / r.width * (i1 - i0)));
-      };
     });
   }
 

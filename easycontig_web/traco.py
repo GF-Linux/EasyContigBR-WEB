@@ -93,25 +93,30 @@ def montar(cfg: Config, lote_dir: Path, amostra: dict):
         return None
 
 
-def _linha(pos: list[float], picos: list[float], alt: int = 100,
-           topo: float = 1.0) -> str:
-    """Uma polilinha SVG em coordenada de coluna. `NaN` vira quebra de traço.
+def _pontos(pos: list[float], picos: list[float], alt: int = 100,
+            topo: float = 1.0) -> list:
+    """O traço como lista plana [x, y, x, y, …] em coordenada de coluna.
 
-    A quebra existe porque `chromatogram_data_columns` marca com NaN a coluna em
-    que a leitura tem gap: desenhar por cima ligaria dois picos que não são
-    vizinhos no dado, e o traço passaria a afirmar uma continuidade inexistente.
+    `null, null` marca quebra: `chromatogram_data_columns` põe NaN na coluna em
+    que a leitura tem gap, e ligar por cima uniria dois picos que não são
+    vizinhos no dado — o traço passaria a afirmar uma continuidade inexistente.
+
+    Vai como NÚMEROS, e não como string de `points` pronta, porque o navegador
+    precisa recortar a janela visível: um SVG com os 17 mil pontos da leitura
+    inteira é rasterizado por completo a cada mudança de janela, e era daí que
+    vinha o atraso ao mexer no cromatograma (medido).
     """
-    partes, atual = [], []
+    saida: list = []
+    quebrado = True
     for x, y in zip(pos, picos):
         if y is None or (isinstance(y, float) and math.isnan(y)):
-            if len(atual) > 1:
-                partes.append(" ".join(atual))
-            atual = []
+            if not quebrado:
+                saida.extend((None, None))
+                quebrado = True
             continue
-        atual.append(f"{x:.2f},{alt - min(y / topo, 1.0) * alt * 0.94:.1f}")
-    if len(atual) > 1:
-        partes.append(" ".join(atual))
-    return "|".join(partes)          # o navegador quebra em "|" e faz N polilinhas
+        saida.extend((round(x, 2), round(alt - min(y / topo, 1.0) * alt * 0.94, 1)))
+        quebrado = False
+    return saida
 
 
 def para_navegador(asm, amostra: dict, passo: int = 2) -> dict | None:
@@ -149,7 +154,7 @@ def para_navegador(asm, amostra: dict, passo: int = 2) -> dict | None:
     for r in asm.reads:
         d = brutos[r.name]
         pos = d["pos"][::passo]
-        canais = {c: _linha(pos, d["peak" + c][::passo], topo=topos[r.name])
+        canais = {c: _pontos(pos, d["peak" + c][::passo], topo=topos[r.name])
                   for c in "ACGT"}
         info = next((x for x in (amostra.get("reads") or [])
                      if isinstance(x, dict) and x.get("name") == r.name), {})
