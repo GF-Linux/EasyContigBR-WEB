@@ -369,3 +369,44 @@ def test_producao_bem_configurada_nao_reclama(monkeypatch):
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "x" * 32)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
     assert config.conferir_producao() == []
+
+
+# ══════════════════════════════ XSS pelo cabeçalho do FASTA (achado em 06/08)
+def test_o_titulo_do_banco_sai_escapado_do_javascript():
+    """XSS ARMAZENADO confirmado com prova de execução em 2026-08-06.
+
+    A cadeia: um FASTA com cabeçalho `>REF001 <img src=x onerror=…>` vira o
+    `stitle` do BLAST → vira `titulo` na resposta da consulta → caía em
+    `innerHTML` no `oficina.js`. Provado no navegador: `window.INVADIU` executou
+    e o `<img>` entrou no DOM.
+
+    A mesma porta valia para o NOME DA LEITURA (que sai do nome do arquivo
+    enviado) e vale para qualquer texto vindo do NCBI, que é de fora.
+
+    Este teste guarda a regra no arquivo: todo dado externo passa por `esc()`
+    antes de virar HTML. Ler o fonte é o jeito de travar isso sem navegador.
+    """
+    js = (Path(__file__).parent.parent / "easycontig_web" / "estatico"
+          / "oficina.js").read_text()
+    assert "const esc =" in js, "a função de escape sumiu"
+
+    # nenhuma interpolação de dado externo pode aparecer sem esc()
+    for cru in ["${h.titulo}", "${h.accession}", "${l.nome}", "${l.primer}",
+                "${l.q_rotulo}", "+ motivo +"]:
+        assert cru not in js, f"{cru} entra em innerHTML sem escapar"
+
+    for esperado in ["${esc(h.titulo)}", "${esc(h.accession)}", "${esc(l.nome)}"]:
+        assert esperado in js, f"{esperado} não está escapado"
+
+
+def test_cabecalho_de_fasta_hostil_nao_quebra_a_montagem_do_banco(app):
+    """O payload pode entrar no banco — o que não pode é virar HTML depois."""
+    from easycontig_web import bancos
+    if not TEM_BLAST:
+        pytest.skip("makeblastdb não está nesta máquina")
+    bid = bancos.id_do_usuario("a@ufrrj.br", "hostil")
+    e = bancos.montar_do_usuario(
+        app.cfg.data_dir, bid,
+        ">REF001 <img src=x onerror=alert(1)>\n" + "ACGT" * 30 + "\n",
+        blast_bin=app.cfg.blast_bin)
+    assert e["montado"] and e["sequencias"] == 1

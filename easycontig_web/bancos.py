@@ -196,7 +196,7 @@ def montar(data_dir: Path, banco_id: str, blast_bin: Path | None = None,
                               retstart=ini, retmax=passo).decode("utf-8", "replace"))
         time.sleep(PAUSA)
     texto = "".join(partes)
-    baixadas = texto.count(">")
+    baixadas = sum(1 for l in texto.splitlines() if l.startswith(">"))
     if baixadas < n * 0.9:
         raise RuntimeError(
             f"o NCBI devolveu {baixadas} de {n} sequências; banco não montado")
@@ -246,7 +246,10 @@ def montar_do_usuario(data_dir: Path, banco_id: str, fasta_texto: str,
     É o caso de quem tem sequência do próprio grupo ainda não publicada: ela
     passa a poder comparar contra o que é dela sem que o dado saia da conta.
     """
-    if fasta_texto.count(">") == 0:
+    # Conta LINHA que começa com ">", não todo ">" do texto: um `>` dentro da
+    # descrição (`>REF001 <img …>`) inflava o número mostrado na tela.
+    n_seqs = sum(1 for l in fasta_texto.splitlines() if l.startswith(">"))
+    if n_seqs == 0:
         raise ValueError("o arquivo não parece um FASTA (nenhuma linha começa com >)")
     destino = prefixo(data_dir, banco_id).parent
     destino.mkdir(parents=True, exist_ok=True)
@@ -264,7 +267,7 @@ def montar_do_usuario(data_dir: Path, banco_id: str, fasta_texto: str,
         fasta.unlink(missing_ok=True)
     from datetime import datetime, timezone
     (prefixo(data_dir, banco_id).with_suffix(".meta.json")).write_text(json.dumps({
-        "sequencias": fasta_texto.count(">"), "termo": "enviado pelo usuário",
+        "sequencias": n_seqs, "termo": "enviado pelo usuário",
         "baixado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }, ensure_ascii=False))
     return estado(data_dir, banco_id)

@@ -16,6 +16,18 @@
   if (!raiz) return;
   const $ = s => document.querySelector(s);
 
+  /* Escapa antes de virar HTML. Existe porque um XSS ARMAZENADO foi confirmado
+     em 06/08 com prova de execução: um FASTA com o cabeçalho
+     `>REF001 <img src=x onerror=…>` vira o `stitle` do BLAST, o `stitle` vira
+     `titulo` na resposta da consulta, e o `titulo` caía em `innerHTML`.
+     A mesma porta valia para o NOME DA LEITURA, que sai do nome do arquivo
+     enviado — e vale para qualquer texto que venha do NCBI, que é de fora.
+     Regra daqui em diante: nada que não seja literal do nosso código entra em
+     `innerHTML` sem passar por aqui. */
+  const esc = v => String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
   const est = { d: null, seq: [], sel: null, pilha: [], removidas: 0, exportado: true };
 
   // Rascunho guardado no navegador, por amostra. O consenso só vira definitivo
@@ -77,7 +89,7 @@
 
   function semTraco(motivo) {
     $("#aln").innerHTML = '<p class="sub" style="margin:0">Alinhamento indisponível: '
-      + motivo + ". As medidas ao lado continuam valendo.</p>";
+      + esc(motivo) + ". As medidas ao lado continuam valendo.</p>";
   }
 
   // ── consenso e mismatches: mesma regra do núcleo ──────────────────────────
@@ -105,9 +117,10 @@
     alvo.innerHTML = est.d.leituras.map((l, i) => `
       <section class="bloco" style="margin-bottom:11px">
         <div class="cr-topo">
-          <span class="nome">${l.nome}</span>
-          <span class="meta">sentido ${l.sentido}${l.primer ? " · primer " + l.primer : ""}
-            ${l.q_medio ? " · Q" + l.q_medio + " " + l.q_rotulo : ""}</span>
+          <span class="nome">${esc(l.nome)}</span>
+          <span class="meta">sentido ${esc(l.sentido)}${
+            l.primer ? " · primer " + esc(l.primer) : ""}${
+            l.q_medio ? " · Q" + esc(l.q_medio) + " " + esc(l.q_rotulo) : ""}</span>
           <span class="leg">
             <s><i style="background:var(--verde)"></i>A</s>
             <s><i style="background:var(--azul)"></i>C</s>
@@ -117,7 +130,7 @@
         </div>
         <div class="tela-tr">
           <svg id="svg-${i}" preserveAspectRatio="none"
-               aria-label="Cromatograma de ${l.nome}"></svg>
+               aria-label="Cromatograma de ${esc(l.nome)}"></svg>
           <div class="bases-lin" id="bases-${i}"></div>
         </div>
       </section>`).join("");
@@ -128,8 +141,8 @@
     bs.innerHTML = est.d.leituras.map((l, i) =>
       `<button class="ac perigo" type="button" data-l="${i}" disabled>${
         est.d.leituras.length > 2
-          ? (l.primer || l.sentido + (i + 1))
-          : "só do " + l.sentido
+          ? esc(l.primer || l.sentido + (i + 1))
+          : "só do " + esc(l.sentido)
       }</button>`).join("")
       + `<button class="ac perigo" id="b-todas" type="button" disabled>${
           est.d.leituras.length > 2 ? "de todas" : "dos dois"}</button>`;
@@ -155,12 +168,12 @@
       const col = i0 + k;
       return `<span class="b ${cls(b)}${mm.includes(col) ? " mm" : ""}`
         + `${est.sel === col ? " sel" : ""}${b === "-" ? " morta" : ""}"`
-        + ` data-col="${col}">${b === "-" ? "·" : b}</span>`;
+        + ` data-col="${col}">${b === "-" ? "·" : esc(b)}</span>`;
     }).join("");
     let h = "";
     est.d.leituras.forEach((l, i) => {
       h += `<div class="aln-l"><span class="aln-n">${l.sentido === "F" ? "→" : "←"} `
-         + `${l.nome}</span><span>${linha(est.seq[i])}</span></div>`;
+         + `${esc(l.nome)}</span><span>${linha(est.seq[i])}</span></div>`;
     });
     h += `<div class="aln-l"><span class="aln-n regua">régua (×10)</span><span class="regua">`
        + Array.from({ length: i1 - i0 }, (_, k) =>
@@ -255,7 +268,7 @@
           const morta = est.seq[i][Math.round(col)] === "-";
           return `<span class="bl ${morta ? "morta " : ""}${cls(base)}"`
                + ` style="left:${(col - i0 + .5) / (i1 - i0) * 100}%"`
-               + ` data-col="${Math.round(col)}">${morta ? "·" : base}</span>`;
+               + ` data-col="${Math.round(col)}">${morta ? "·" : esc(base)}</span>`;
         }).join("");
       faixa.querySelectorAll(".bl").forEach(e =>
         e.onclick = () => selecionar(+e.dataset.col));
@@ -365,10 +378,10 @@
             return;
           }
           saida.innerHTML = d.hits.map(h =>
-            `<div class="hit"><span class="org">${h.titulo}</span>`
-            + `<span class="num">${String(h.identidade).replace(".", ",")}%</span>`
-            + ` · cobertura ${String(h.cobertura).replace(".", ",")}%`
-            + ` · <span class="acc">${h.accession}</span></div>`).join("");
+            `<div class="hit"><span class="org">${esc(h.titulo)}</span>`
+            + `<span class="num">${esc(String(h.identidade).replace(".", ","))}%</span>`
+            + ` · cobertura ${esc(String(h.cobertura).replace(".", ","))}%`
+            + ` · <span class="acc">${esc(h.accession)}</span></div>`).join("");
         })
         .catch(() => { saida.innerHTML =
           '<span class="erro">Não foi possível consultar agora.</span>'; })
