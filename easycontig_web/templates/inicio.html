@@ -35,6 +35,9 @@
   line-height:1.55 }
 
 .envio{ padding:13px }
+select{ font:inherit; font-size:.9rem; padding:.55rem .7rem; width:100%;
+  border:1px solid var(--linha-forte); border-radius:8px; background:var(--interno);
+  color:var(--tinta) }
 .dois-modos{ display:grid; grid-template-columns:1fr 1fr; gap:.6rem; margin-bottom:1rem }
 @media(max-width:620px){ .dois-modos{ grid-template-columns:1fr } }
 .modo{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
@@ -129,8 +132,25 @@
         <form id="envio" method="post" action="/lotes" enctype="multipart/form-data"
               data-max-arquivos="{{ max_arquivos }}"
               data-max-bytes="{{ max_mb * 1024 * 1024 }}">
+          {# A referência é a PRIMEIRA decisão, e é obrigatória: montar consenso
+             sem ter contra o que comparar produz um "não achei" sem significado.
+             O curado vem marcado porque é o que validou tudo até aqui. #}
           <div class="campo">
-            <label class="sub" for="nome">Nome (só para você achar depois)</label>
+            <label class="sub" for="referencia">1 · Referência para identificar</label>
+            <select id="referencia" name="referencia" required>
+              {% for r in referencias %}
+              <option value="{{ r.id }}"{% if loop.first %} selected{% endif %}
+                >{{ r.nome }} — {{ r.detalhe }}</option>
+              {% endfor %}
+            </select>
+            <p class="sub" style="margin:.35rem 0 0;font-size:.79rem">
+              Mais grupos em <a href="/bancos">Bancos de referência</a>. O banco
+              escolhido fica gravado na corrida e sai no relatório.
+            </p>
+          </div>
+
+          <div class="campo">
+            <label class="sub" for="nome">2 · Nome (só para você achar depois)</label>
             <input type="text" id="nome" name="nome"
                    placeholder="ex.: amostra12 · BTF2+BTR2">
           </div>
@@ -259,8 +279,8 @@
     resumo.textContent = '';
     limparFalha();
     rotulo.innerHTML = lote
-      ? 'A pasta da corrida'
-      : 'Os dois arquivos <code>.ab1</code> da amostra';
+      ? '3 · A pasta da corrida'
+      : '3 · Os dois arquivos <code>.ab1</code> da amostra';
     for (var i = 0; i < modos.length; i++) {
       modos[i].closest('.modo').classList.toggle('destaque', modos[i].checked);
     }

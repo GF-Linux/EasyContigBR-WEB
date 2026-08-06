@@ -70,6 +70,26 @@ def _br(valor) -> str:
 TEMPLATES.env.filters["br"] = _br
 
 
+@app.middleware("http")
+async def _sem_cache(request: Request, call_next):
+    """Página com sessão não vai para o cache do navegador.
+
+    Sem isto, apagar uma corrida e apertar VOLTAR trazia de volta a página dela
+    do cache — com o botão "Apagar agora" e tudo —, e qualquer clique ali dava
+    404. A corrida "sumia" sem explicação, que foi a queixa. Com `no-store` o
+    voltar refaz a requisição e vê o 404 honesto, que a tela de erro explica.
+
+    Vale também para quem sai da conta num computador compartilhado: sem isto o
+    histórico do navegador ainda mostraria o relatório de quem entrou antes.
+    Arquivos estáticos ficam de fora — o JS do workspace se beneficia do cache.
+    """
+    resposta = await call_next(request)
+    if not request.url.path.startswith("/estatico/"):
+        resposta.headers["Cache-Control"] = "no-store, must-revalidate"
+        resposta.headers["Pragma"] = "no-cache"
+    return resposta
+
+
 @app.exception_handler(HTTPException)
 def _erro(request: Request, exc: HTTPException):
     """Quem veio pelo navegador recebe página; quem veio por API recebe JSON.
@@ -109,6 +129,29 @@ def _exigir(request: Request) -> auth.Usuario:
     return u
 
 
+def _referencias(u: auth.Usuario) -> list[dict]:
+    """As referências que esta conta pode escolher para identificar.
+
+    O curado vem primeiro e é o padrão: é o que produziu todos os resultados
+    validados até aqui (ADR 0037). Os demais só aparecem depois de montados —
+    oferecer o que não está pronto seria oferecer um erro.
+    """
+    itens = [{"id": "curado", "nome": "Banco curado do laboratório",
+              "detalhe": "18S + 16S · RAIC 2026 · o que validou os resultados até aqui",
+              "grupo": "Padrão"}]
+    for c in bancos.POR_ID.values():
+        if bancos.existe(cfg.data_dir, c.id):
+            e = bancos.estado(cfg.data_dir, c.id)
+            itens.append({"id": c.id, "nome": f"{c.nome} · {c.marcador}",
+                          "detalhe": f"{e.get('sequencias')} sequências do GenBank",
+                          "grupo": c.grupo})
+    for b in bancos.meus_bancos(cfg.data_dir, u.email):
+        itens.append({"id": b["id"], "nome": b["apelido"],
+                      "detalhe": f"{b.get('sequencias')} sequências suas",
+                      "grupo": "Meus bancos"})
+    return itens
+
+
 def _casca(u: auth.Usuario) -> dict:
     """O que a barra lateral precisa, em qualquer página.
 
@@ -146,6 +189,7 @@ def inicio(request: Request):
         "max_mb": cfg.max_bytes // (1024 * 1024),
         "cota": cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email),
         "retencao_dias": cfg.retencao_dias,
+        "referencias": _referencias(u),
     })
 
 
@@ -201,8 +245,26 @@ def sair(request: Request):
 @app.post("/lotes")
 async def criar_lote(request: Request,
                      arquivos: list[UploadFile] = File(...),
-                     nome: str = Form("")):
+                     nome: str = Form(""),
+                     referencia: str = Form("")):
     u = _exigir(request)
+
+    # TRAVA: sem referência escolhida não se processa. Montar o consenso sem ter
+    # contra o que comparar produz um relatório que só diz "não achei" — e "não
+    # achei" sem banco declarado é uma frase sem significado. Escolher passa a
+    # ser parte do envio, e a escolha fica gravada no lote.
+    referencia = (referencia or "").strip()
+    if not referencia:
+        raise HTTPException(status_code=400,
+                            detail="escolha a referência antes de processar")
+    permitidos = {"curado"} | set(bancos.POR_ID) | {
+        b["id"] for b in bancos.meus_bancos(cfg.data_dir, u.email)}
+    if referencia not in permitidos:
+        raise HTTPException(status_code=400, detail="referência desconhecida")
+    if referencia != "curado" and not bancos.existe(cfg.data_dir, referencia):
+        raise HTTPException(
+            status_code=400,
+            detail="essa referência ainda não foi montada nesta instalação")
 
     aceitos = [a for a in arquivos
                if Path(a.filename or "").suffix.lower() in EXT_ACEITAS]
@@ -225,7 +287,8 @@ async def criar_lote(request: Request,
         raise HTTPException(status_code=413, detail=situacao.motivo)
 
     lote_id = fila.novo_lote(cfg.sqlite_path, dono=u.email,
-                             nome=nome.strip() or "lote", n_arquivos=len(aceitos))
+                             nome=nome.strip() or "lote", n_arquivos=len(aceitos),
+                             referencia=referencia)
     p = executor.pastas_do_lote(cfg, lote_id)
     p["entrada"].mkdir(parents=True, exist_ok=True)
 

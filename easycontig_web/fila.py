@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS lotes (
     total         INTEGER NOT NULL DEFAULT 0,
     etapa         TEXT NOT NULL DEFAULT '',
     erro          TEXT NOT NULL DEFAULT '',
+    referencia    TEXT NOT NULL DEFAULT '',   -- banco escolhido para identificar
     criado_em     TEXT NOT NULL,
     iniciado_em   TEXT,
     terminado_em  TEXT
@@ -71,16 +72,29 @@ def criar_esquema(caminho: Path) -> None:
     caminho.parent.mkdir(parents=True, exist_ok=True)
     with conectar(caminho) as con:
         con.executescript(_ESQUEMA)
+        # Coluna nova em banco que já existe: sem isto, atualizar o servidor
+        # derrubaria as corridas antigas em vez de apenas não saber a referência
+        # delas.
+        colunas = {r[1] for r in con.execute("PRAGMA table_info(lotes)")}
+        if "referencia" not in colunas:
+            con.execute("ALTER TABLE lotes ADD COLUMN referencia TEXT NOT NULL DEFAULT ''")
 
 
-def novo_lote(caminho: Path, *, dono: str, nome: str, n_arquivos: int) -> str:
-    """Abre o lote em RECEBENDO — invisível para o trabalhador até liberar."""
+def novo_lote(caminho: Path, *, dono: str, nome: str, n_arquivos: int,
+              referencia: str = "") -> str:
+    """Abre o lote em RECEBENDO — invisível para o trabalhador até liberar.
+
+    `referencia` é o banco escolhido para identificar. Fica GRAVADO no lote, e
+    não lido da configuração na hora de rodar: assim o relatório continua
+    interpretável mesmo que a instalação mude de banco depois — a pergunta "o
+    que este resultado comparou contra o quê" tem resposta no próprio registro.
+    """
     lote_id = secrets.token_urlsafe(9)
     with conectar(caminho) as con:
         con.execute(
-            "INSERT INTO lotes (id, dono, nome, status, n_arquivos, criado_em)"
-            " VALUES (?,?,?,?,?,?)",
-            (lote_id, dono, nome, RECEBENDO, n_arquivos, _agora()),
+            "INSERT INTO lotes (id, dono, nome, status, n_arquivos, criado_em,"
+            " referencia) VALUES (?,?,?,?,?,?,?)",
+            (lote_id, dono, nome, RECEBENDO, n_arquivos, _agora(), referencia),
         )
     return lote_id
 

@@ -37,8 +37,28 @@ def _motor(cfg: Config) -> TracyEngine:
     return TracyEngine(cfg.tracy_bin) if cfg.tracy_bin else TracyEngine()
 
 
+def bancos_do_lote(cfg: Config, referencia: str) -> tuple:
+    """Qual banco identifica esta corrida. Devolve (db_18s, db_16s, rotulo).
+
+    `curado` é o banco do RAIC 2026 — o que produziu todos os resultados
+    validados até aqui (ADR 0037). Qualquer outro é uma escolha explícita de
+    quem enviou, e vai gravada no lote para o relatório continuar interpretável.
+    """
+    if not referencia or referencia == "curado":
+        return cfg.db_18s, cfg.db_16s, "curado (RAIC 2026)"
+    from . import bancos
+    pref = bancos.prefixo(cfg.data_dir, referencia)
+    if not bancos.existe(cfg.data_dir, referencia):
+        raise ValueError(f"o banco '{referencia}' não está montado nesta instalação")
+    c = bancos.POR_ID.get(referencia)
+    rotulo = f"{c.nome} · {c.marcador}" if c else referencia.split("_", 2)[-1]
+    # Um banco só: o motor recebe como 18S e o 16S fica de fora, porque a
+    # escolha aqui é do usuário e não uma cascata 18S→16S.
+    return pref, None, rotulo
+
+
 def executar(cfg: Config, lote_id: str, *, nome: str = "", n_esperado: int = 0,
-             progresso=None) -> BatchReport:
+             referencia: str = "", progresso=None) -> BatchReport:
     """Monta e identifica o lote já gravado em disco; grava HTML+JSON+CSV."""
     p = pastas_do_lote(cfg, lote_id)
     traces = batch.find_traces(p["entrada"])
@@ -63,13 +83,14 @@ def executar(cfg: Config, lote_id: str, *, nome: str = "", n_esperado: int = 0,
         import os
         os.environ["EASYCONTIG_BLAST_BIN"] = str(cfg.blast_bin)
 
+    db18, db16, _rotulo = bancos_do_lote(cfg, referencia)
     rep = batch.run_batch(
         traces,
         engine=_motor(cfg),
         out_dir=p["trabalho"],
         trim=cfg.trim,
-        db_18s=cfg.db_18s,
-        db_16s=cfg.db_16s,
+        db_18s=db18,
+        db_16s=db16,
         folder=nome or lote_id,
         progress=progresso,
     )

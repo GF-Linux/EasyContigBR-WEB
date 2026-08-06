@@ -51,7 +51,9 @@ def rodar_um(cfg: config.Config) -> bool:
             fila.progresso(cfg.sqlite_path, lote_id, feito, total, etapa or "")
 
         rep = executor.executar(cfg, lote_id, nome=lote["nome"],
-                                n_esperado=lote["n_arquivos"], progresso=_prog)
+                                n_esperado=lote["n_arquivos"],
+                                referencia=lote.get("referencia") or "",
+                                progresso=_prog)
         fila.concluir(cfg.sqlite_path, lote_id)
         log.info("lote %s: pronto em %.1f s (%d amostras)",
                  lote_id, time.perf_counter() - t0, len(rep.samples))

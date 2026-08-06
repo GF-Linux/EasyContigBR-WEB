@@ -33,6 +33,11 @@ def _entrar(c, email="gustavo@ufrrj.br"):
     return c
 
 
+# Toda corrida declara contra o que identifica (trava de 2026-08-06). "curado"
+# é o banco do RAIC, que é o padrão e o que validou os resultados até aqui.
+REF = {"referencia": "curado"}
+
+
 def _envio(nomes):
     return [("arquivos", (n, (AB1 / n).read_bytes(), "application/octet-stream"))
             for n in nomes]
@@ -45,7 +50,7 @@ def test_sem_login_a_raiz_manda_para_entrar(cliente):
 
 
 def test_sem_login_nao_se_cria_lote(cliente):
-    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]))
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]), data=REF)
     assert r.status_code == 401
 
 
@@ -78,7 +83,7 @@ def test_lote_criado_fica_recebendo_e_depois_na_fila(cliente):
     _entrar(cliente)
     r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1",
                                              "amostra12_R_BTR2.ab1"]),
-                     data={"nome": "corrida"}, follow_redirects=False)
+                     data={"nome": "corrida", **REF}, follow_redirects=False)
     assert r.status_code == 303
     lote_id = r.headers["location"].rsplit("/", 1)[-1]
     lote = fila.pegar(main.cfg.sqlite_path, lote_id)
@@ -90,7 +95,8 @@ def test_lote_criado_fica_recebendo_e_depois_na_fila(cliente):
 
 def test_arquivo_que_nao_e_trace_e_recusado(cliente):
     _entrar(cliente)
-    r = cliente.post("/lotes", files=[("arquivos", ("notas.txt", b"nada", "text/plain"))])
+    r = cliente.post("/lotes", files=[("arquivos", ("notas.txt", b"nada", "text/plain"))],
+                          data=REF)
     assert r.status_code == 400
 
 
@@ -99,7 +105,7 @@ def test_extensao_estranha_e_ignorada_mas_o_ab1_passa(cliente):
     _entrar(cliente)
     envio = _envio(["amostra12_F_BTF2.ab1", "amostra12_R_BTR2.ab1"])
     envio.append(("arquivos", ("leia-me.txt", b"nada", "text/plain")))
-    r = cliente.post("/lotes", files=envio, follow_redirects=False)
+    r = cliente.post("/lotes", files=envio, data=REF, follow_redirects=False)
     lote_id = r.headers["location"].rsplit("/", 1)[-1]
     assert fila.pegar(main.cfg.sqlite_path, lote_id)["n_arquivos"] == 2
 
@@ -112,7 +118,7 @@ def test_teto_de_arquivos(tmp_path, monkeypatch):
     from easycontig_web import main
     importlib.reload(main)
     c = _entrar(TestClient(main.app))
-    r = c.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1", "amostra12_R_BTR2.ab1"]))
+    r = c.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1", "amostra12_R_BTR2.ab1"]), data=REF)
     assert r.status_code == 413
 
 
@@ -123,7 +129,7 @@ def test_nome_com_travessia_de_caminho_vira_so_o_nome(cliente):
     dados = (AB1 / "amostra12_F_BTF2.ab1").read_bytes()
     envio = [("arquivos", ("../../../fora.ab1", dados, "application/octet-stream")),
              ("arquivos", ("sub/dir/amostra12_R_BTR2.ab1", dados, "application/octet-stream"))]
-    r = cliente.post("/lotes", files=envio, follow_redirects=False)
+    r = cliente.post("/lotes", files=envio, data=REF, follow_redirects=False)
     lote_id = r.headers["location"].rsplit("/", 1)[-1]
     entrada = executor.pastas_do_lote(main.cfg, lote_id)["entrada"]
     nomes = sorted(p.name for p in entrada.iterdir())
@@ -135,7 +141,7 @@ def test_nome_com_travessia_de_caminho_vira_so_o_nome(cliente):
 def test_um_usuario_nao_enxerga_o_lote_do_outro(cliente):
     """.ab1 não publicado do laboratório não pode vazar por link colado."""
     _entrar(cliente, "gustavo@ufrrj.br")
-    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]),
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]), data=REF,
                      follow_redirects=False)
     lote_id = r.headers["location"].rsplit("/", 1)[-1]
 
@@ -149,7 +155,7 @@ def test_um_usuario_nao_enxerga_o_lote_do_outro(cliente):
 
 def test_resultado_so_sai_com_o_lote_pronto(cliente):
     _entrar(cliente)
-    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]),
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]), data=REF,
                      follow_redirects=False)
     lote_id = r.headers["location"].rsplit("/", 1)[-1]
     assert cliente.get(f"/lotes/{lote_id}/relatorio").status_code == 409
@@ -171,7 +177,7 @@ def test_rota_do_traco_exige_sessao(cliente):
 def test_traco_de_lote_alheio_da_404(cliente):
     """O traço carrega o conteúdo do .ab1: a checagem de dono vale aqui também."""
     _entrar(cliente, "gustavo@ufrrj.br")
-    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]),
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]), data=REF,
                      follow_redirects=False)
     lote_id = r.headers["location"].rsplit("/", 1)[-1]
 
@@ -179,3 +185,67 @@ def test_traco_de_lote_alheio_da_404(cliente):
     _entrar(cliente, "outra@ufrrj.br")
     assert cliente.get(
         f"/api/lotes/{lote_id}/amostras/amostra12/traco").status_code == 404
+
+
+# --- a trava da referência ----------------------------------------------------
+def test_sem_referencia_nao_processa(cliente):
+    """Montar consenso sem ter contra o que comparar produz um "não achei" que
+    não significa nada. Escolher a referência é parte do envio."""
+    _entrar(cliente)
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]))
+    assert r.status_code == 400
+    assert "referência" in r.json()["detail"]
+
+
+def test_referencia_inventada_e_recusada(cliente):
+    _entrar(cliente)
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]),
+                     data={"referencia": "../etc/passwd"})
+    assert r.status_code == 400
+
+
+def test_referencia_nao_montada_e_recusada(cliente):
+    """Existe no catálogo mas ninguém baixou: oferecer seria oferecer um erro."""
+    _entrar(cliente)
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]),
+                     data={"referencia": "cestoda_coi"})
+    assert r.status_code == 400
+    assert "montada" in r.json()["detail"]
+
+
+def test_a_referencia_escolhida_fica_gravada_no_lote(cliente):
+    """Sem isto o relatório não sabe dizer contra o que comparou."""
+    from easycontig_web import fila, main
+    _entrar(cliente)
+    r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]),
+                     data=REF, follow_redirects=False)
+    lote_id = r.headers["location"].rsplit("/", 1)[-1]
+    assert fila.pegar(main.cfg.sqlite_path, lote_id)["referencia"] == "curado"
+
+
+# --- fluxo indevido -----------------------------------------------------------
+def test_pagina_com_sessao_nao_vai_para_o_cache(cliente):
+    """Sem isto, apagar uma corrida e apertar VOLTAR trazia a página dela de
+    volta do cache — com o botão de apagar e tudo — e qualquer clique dava 404.
+    A corrida "sumia" sem explicação."""
+    _entrar(cliente)
+    r = cliente.get("/")
+    assert "no-store" in r.headers.get("cache-control", "")
+
+
+def test_estatico_continua_cacheavel(cliente):
+    """O JS do workspace se beneficia do cache; a regra é para página, não asset."""
+    r = cliente.get("/estatico/oficina.js")
+    assert r.status_code == 200
+    assert "no-store" not in r.headers.get("cache-control", "")
+
+
+def test_perfil_ignora_e_mail_na_url(cliente):
+    """Não existe caminho para o perfil de outra pessoa: o perfil é sempre o da
+    sessão, e passar `?email=` de alguém não muda isso."""
+    _entrar(cliente, "gustavo@ufrrj.br")
+    r = cliente.get("/perfil?email=outra@ufrrj.br")
+    assert r.status_code == 200
+    assert "gustavo@ufrrj.br" in r.text
+    assert "outra@ufrrj.br" not in r.text
+    assert cliente.get("/perfil/outra@ufrrj.br").status_code == 404
