@@ -57,11 +57,33 @@ def google_configurado() -> bool:
 def dominio_ok(email: str, dominio_permitido: str) -> bool:
     """Sem domínio configurado, qualquer conta entra — de propósito, para o
     desenvolvimento local não exigir configuração. Em produção o `.env` define
-    `EASYCONTIG_DOMINIO` e a checagem passa a valer."""
+    `EASYCONTIG_DOMINIO` e a checagem passa a valer.
+
+    **O SUBDOMÍNIO ENTRA JUNTO** (2026-08-06). A comparação era do domínio
+    inteiro, e universidade brasileira reparte o e-mail por unidade: com
+    `ufrrj.br` na lista, `@ppgcv.ufrrj.br` e `@lhv.ufrrj.br` eram RECUSADOS —
+    justamente o pessoal do laboratório para quem o app é feito, e a recusa
+    chegaria como "conta fora do domínio", sem pista do motivo.
+
+    O ponto exigido antes do sufixo é o que separa filho de sósia: `ufrrj.br`
+    cobre `lhv.ufrrj.br`, e **não** cobre `falso-ufrrj.br`, que é um domínio de
+    outro dono. Quem quiser o domínio exato e nada abaixo dele escreve `=`
+    na frente: `=ufrrj.br`."""
     if not dominio_permitido:
         return True
-    permitidos = {d.strip().lower() for d in dominio_permitido.split(",") if d.strip()}
-    return "@" in email and email.rsplit("@", 1)[-1].lower() in permitidos
+    if "@" not in email:
+        return False
+    de = email.rsplit("@", 1)[-1].lower().strip().rstrip(".")
+    for bruto in dominio_permitido.split(","):
+        d = bruto.strip().lower().lstrip("@").rstrip(".")
+        if not d:
+            continue
+        if d.startswith("="):
+            if de == d[1:]:
+                return True
+        elif de == d or de.endswith("." + d):
+            return True
+    return False
 
 
 AUTORIZA = "https://accounts.google.com/o/oauth2/v2/auth"

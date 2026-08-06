@@ -28,7 +28,13 @@
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
-  const est = { d: null, seq: [], sel: null, pilha: [], removidas: 0, exportado: true };
+  /* `desloc` é a LENTE, em colunas: quanto a janela andou por arrasto, à parte
+     da coluna marcada. Existe porque a janela era definida só por `sel`, e então
+     não havia como caminhar pelo contig sem mudar a marca — e a marca é
+     referência de trabalho (é nela que "remover base" age), não posição de
+     rolagem. */
+  const est = { d: null, seq: [], sel: null, desloc: 0, pilha: [], removidas: 0,
+                exportado: true };
 
   // Rascunho guardado no navegador, por amostra. O consenso só vira definitivo
   // na exportação (ADR 0052) — isto não muda essa regra, só evita que recarregar
@@ -174,10 +180,23 @@
 
   // janela visível: 74 colunas, como no desenho aprovado. Rolar move as DUAS.
   const JAN = 74;
+  const meia = () => Math.floor(JAN / 2);
+  const inicioNatural = () =>
+    (est.sel === null ? meia() : est.sel) - meia();   // sem arrasto: marca no meio
+  const tetoJanela = () => Math.max(0, est.d.largura - JAN);
+
   function janela() {
-    const meio = est.sel === null ? Math.floor(JAN / 2) : est.sel;
-    let i = Math.max(0, Math.min(meio - Math.floor(JAN / 2), est.d.largura - JAN));
-    return [Math.max(0, i), Math.min(est.d.largura, Math.max(0, i) + JAN)];
+    const i = Math.max(0, Math.min(
+      Math.round(inicioNatural() + est.desloc), tetoJanela()));
+    return [i, Math.min(est.d.largura, i + JAN)];
+  }
+
+  /* O arrasto acumula em `desloc`, mas a janela é presa nas pontas do contig.
+     Sem prender `desloc` também, puxar 5 telas além do fim guardaria 5 telas de
+     dívida e o caminho de volta começaria por um trecho morto. */
+  function limitarDesloc() {
+    const base = inicioNatural();
+    est.desloc = Math.max(-base, Math.min(tetoJanela() - base, est.desloc));
   }
 
   /* ── o alinhamento REAPROVEITA os nós ──────────────────────────────────────
@@ -283,8 +302,86 @@
         const r = cv.getBoundingClientRect(), [i0, i1] = janela();
         selecionar(Math.round(i0 + (ev.clientX - r.left) / r.width * (i1 - i0)));
       };
+      ligarArrasto(cv.parentElement, cv);
     });
     ajustarCanvas();
+  }
+
+  /* ── arrastar o traço para o lado ──────────────────────────────────────────
+     Antes NÃO HAVIA arrasto: o gesto chegava ao fim como um `click` na coluna
+     onde a mão soltou, e clicar recentra a janela ali. O efeito para quem usa é
+     o desenho andando para o lado CONTRÁRIO da mão — medido: puxando de 25% a
+     75% da largura, a primeira coluna visível ia de 211 para 230.
+
+     Agora o traço acompanha a mão, como em qualquer mapa: puxar para a DIREITA
+     traz o que está à esquerda. A marca não sai do lugar — quem anda é a lente
+     (`est.desloc`), não a coluna escolhida.
+
+     `pointer*` e não `mouse*` porque o alvo é o Deck: o mesmo código atende
+     dedo, caneta e mouse, e `setPointerCapture` mantém o arrasto vivo quando a
+     mão sai do quadro no meio do movimento. */
+  const ARRASTO_MIN = 4;        // px: abaixo disto a pessoa quis clicar
+
+  let quadro = 0;
+  function pedirQuadro() {      // um render por quadro, não um por evento
+    if (quadro) return;
+    quadro = requestAnimationFrame(() => { quadro = 0; render(); });
+  }
+
+  function ligarArrasto(tela, cv) {
+    let puxando = null, arrastou = false;
+
+    tela.addEventListener("pointerdown", ev => {
+      if (ev.pointerType === "mouse" && ev.button !== 0) return;
+      puxando = {
+        id: ev.pointerId, x: ev.clientX, desloc0: est.desloc,
+        largura: cv.getBoundingClientRect().width || 1, andou: false,
+      };
+    });
+
+    tela.addEventListener("pointermove", ev => {
+      if (!puxando || ev.pointerId !== puxando.id) return;
+      // Sem botão apertado não há arrasto: cobre o caso de a mão soltar fora do
+      // quadro antes do limiar, quando ainda não há captura para nos avisar.
+      if (ev.buttons === 0) { puxando = null; return; }
+      const dx = ev.clientX - puxando.x;
+      if (!puxando.andou) {
+        if (Math.abs(dx) < ARRASTO_MIN) return;
+        puxando.andou = true;
+        tela.classList.add("puxando");
+        /* A captura entra AQUI, e não no `pointerdown`: no Chromium ela
+           redireciona também o `click` de compatibilidade para o elemento que
+           capturou, e com ela no início o clique parava de chegar ao canvas —
+           marcar uma base pelo traço deixava de funcionar. Achado pelo teste
+           `test_clique_curto_dentro_do_traco_continua_marcando`. */
+        tela.setPointerCapture(ev.pointerId);
+      }
+      // O sinal é o ponto do pedido: `- dx` faz o conteúdo seguir a mão.
+      est.desloc = puxando.desloc0 - dx / puxando.largura * JAN;
+      limitarDesloc();
+      pedirQuadro();
+    });
+
+    const solta = ev => {
+      if (!puxando || ev.pointerId !== puxando.id) return;
+      arrastou = puxando.andou;
+      puxando = null;
+      tela.classList.remove("puxando");
+      if (tela.hasPointerCapture(ev.pointerId)) tela.releasePointerCapture(ev.pointerId);
+    };
+    tela.addEventListener("pointerup", solta);
+    tela.addEventListener("pointercancel", solta);
+
+    /* Na captura, antes dos ouvintes do canvas e da faixa de letras: quem
+       arrastou não escolheu a base onde soltou a mão. Sem isto todo arrasto
+       terminaria marcando uma base ao acaso — e recentrando a janela, que é
+       exatamente o defeito que este bloco existe para tirar. */
+    tela.addEventListener("click", ev => {
+      if (!arrastou) return;
+      arrastou = false;
+      ev.stopPropagation();
+      ev.preventDefault();
+    }, true);
   }
 
   /* ── por que CANVAS, e não SVG ──────────────────────────────────────────────
@@ -416,7 +513,19 @@
 
   // ── seleção: sempre nas DUAS leituras (é o acoplamento pedido) ────────────
   function selecionar(col) {
+    const [antes] = janela();
+    const tinha = est.sel !== null;
     est.sel = Math.max(0, Math.min(col, est.d.largura - 1));
+    /* Marcar uma base que JÁ ESTÁ na tela não pode mexer na tela: quem arrastou
+       até aqui e clicou no pico que veio ver perderia o lugar na hora do clique.
+       Fora da janela (⚠ próximo erro, desfazer numa coluna distante) a janela
+       vai atrás e recentra, que é o comportamento antigo. */
+    if (tinha && est.sel >= antes && est.sel < antes + JAN) {
+      est.desloc = antes - (est.sel - meia());
+    } else {
+      est.desloc = 0;
+    }
+    limitarDesloc();
     document.querySelectorAll("#botoes-remover [data-l]").forEach(b => {
       const v = est.seq[+b.dataset.l][est.sel];
       b.disabled = !(v && v !== "-");

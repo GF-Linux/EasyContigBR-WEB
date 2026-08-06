@@ -158,3 +158,53 @@ def test_botao_do_google_desligado_diz_o_motivo_sem_precisar_de_clique(tmp_path,
         "o motivo continua escondido até o clique")
     assert "GOOGLE_CLIENT_ID" in html and "Google Cloud" in html, (
         "o aviso não diz o que fazer")
+
+
+# ───────────────────────────────── a caixa de quem entrou tem que caber
+# Vem do print do autor em 2026-08-06: "a caixa do print está com as dimensões
+# incorretas". Medido no navegador, lateral de 212px:
+#   • o nome pedia 169px numa caixa de 138 e saía "Gustavo Gonçalves …";
+#   • cada botão media 37,2px apesar de o CSS declarar `min-height:32px` —
+#     herdavam `line-height:1.6` do corpo, 15% a mais em três botões;
+#   • o retrato ficava em x=17 e o selo da marca logo acima em x=14 — dois
+#     círculos de 30px desalinhados por 3px.
+def _regra(html: str, seletor: str) -> str:
+    """O bloco `{...}` da regra CSS, sem os comentários que a explicam."""
+    corpo = html.split(seletor + "{", 1)
+    assert len(corpo) == 2, f"regra `{seletor}` sumiu da folha"
+    return corpo[1].split("}", 1)[0]
+
+
+def test_o_nome_de_quem_entrou_nao_e_cortado_numa_linha(cliente):
+    regra = _regra(cliente.get("/").text, ".perfil .nm")
+    assert "white-space:nowrap" not in regra, (
+        "o nome voltou a caber numa linha só — numa lateral de 212px isso "
+        "corta o sobrenome, que é o que distingue duas contas do mesmo lab")
+    assert "-webkit-line-clamp:2" in regra, "o nome perdeu o limite de 2 linhas"
+
+
+def test_os_botoes_da_caixa_tem_a_altura_que_declaram(cliente):
+    regra = _regra(cliente.get("/").text, ".perfil .ac")
+    assert "line-height:1.2" in regra, (
+        "sem `line-height` explícito o botão herda o 1.6 do corpo e sai com "
+        "37,2px onde o `min-height` promete 32")
+
+
+def test_o_retrato_alinha_com_o_selo_da_marca(cliente):
+    """São dois círculos de 30px empilhados; 3px de diferença entre eles é o
+    que fazia a caixa parecer torta."""
+    html = cliente.get("/").text
+    import re
+
+    def recuo_esquerdo(regra: str) -> int:
+        m = re.search(r"padding:\s*([\w. ]+)", regra)
+        assert m, f"sem padding em `{regra}`"
+        partes = m.group(1).split()
+        # padding: cima  lados  baixo   → o lado é o segundo valor
+        return int(float(partes[1].replace("px", "")))
+
+    marca = recuo_esquerdo(_regra(html, ".lat-topo"))          # 14px
+    caixa = recuo_esquerdo(_regra(html, ".perfil"))            # 8px
+    ident = recuo_esquerdo(_regra(html, ".perfil .ident"))     # + 6px
+    assert caixa + ident == marca, (
+        f"retrato em {caixa + ident}px, selo da marca em {marca}px")

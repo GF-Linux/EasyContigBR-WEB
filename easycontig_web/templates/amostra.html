@@ -68,8 +68,17 @@
    por clique no desktop — no Deck, o "parece 30 quadros por segundo" relatado.
    As cores das quatro bases moram no JS (`COR`), porque canvas não lê CSS;
    são as mesmas variáveis da paleta, copiadas com o nome ao lado. */
-.tela-tr{ background:#0d0e16; position:relative; overflow:hidden }
-.tela-tr canvas.tr-cv{ display:block; width:100%; height:112px; cursor:crosshair }
+/* `touch-action:pan-y`: no Deck o dedo arrastando NA HORIZONTAL é nosso (andar
+   pelo contig) e o arrasto vertical continua sendo rolagem da página. Com
+   `none` a página inteira travaria em cima do traço; sem nada, o navegador
+   engoliria o gesto antes de ele virar `pointermove`. */
+.tela-tr{ background:#0d0e16; position:relative; overflow:hidden;
+  touch-action:pan-y }
+/* A mão aberta é o convite ao gesto novo; clicar para marcar a base continua
+   valendo e está dito na barra do alinhamento. */
+.tela-tr canvas.tr-cv{ display:block; width:100%; height:112px; cursor:grab }
+.tela-tr.puxando canvas.tr-cv{ cursor:grabbing }
+.tela-tr.puxando .bl{ cursor:grabbing }
 /* Faixa das letras: fora do desenho, porque no traço o eixo x é esticado e a
    letra viraria um risco. Em % o alinhamento com o pico continua exato. */
 .bases-lin{ position:relative; height:19px; border-top:1px solid var(--linha) }
@@ -196,7 +205,11 @@ a.ac:hover{ text-decoration:none }
     <section class="bloco">
       <div class="bl-topo">
         <b>Alinhamento</b>
-        <span class="aj">clique numa base para marcá-la nos dois cromatogramas</span>
+        {# O arrasto vai dito aqui porque não tem barra nem seta que o anuncie:
+           o traço é canvas, e gesto sem affordance visível é gesto que não
+           existe para quem chega. #}
+        <span class="aj">clique numa base para marcá-la nos dois cromatogramas ·
+          arraste o traço para o lado para andar pelo contig</span>
         <span class="dir"><span id="m-pb">{{ amostra.consenso_pb }}</span> pb ·
           {{ amostra.cobertura_media|br or "—" }}× ·
           <em><span id="m-mm">—</span> mismatch</em></span>
