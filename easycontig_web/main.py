@@ -23,9 +23,21 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import amostras as mod_amostras
-from . import auth, bancos, config, cotas, executor, fila, perfil, retencao, traco
+from . import (auth, bancos, config, cotas, executor, fila, limites, perfil,
+               retencao, traco)
 
 cfg = config.carregar()
+
+# ⚠️ Trava de arranque: `EASYCONTIG_PRODUCAO=1` recusa subir com a porta aberta.
+# Fica atrás de uma variável para o desenvolvimento local não precisar de nada,
+# e o `docker-compose` de produção a define.
+if os.environ.get("EASYCONTIG_PRODUCAO") == "1":
+    _problemas = config.conferir_producao()
+    if _problemas:
+        raise RuntimeError(
+            "EASYCONTIG_PRODUCAO=1 e a configuração não está pronta:\n  - "
+            + "\n  - ".join(_problemas))
+
 fila.criar_esquema(cfg.sqlite_path)
 perfil.criar_esquema(cfg.sqlite_path)
 
@@ -68,6 +80,26 @@ def _br(valor) -> str:
 
 
 TEMPLATES.env.filters["br"] = _br
+
+
+@app.middleware("http")
+async def _limite_de_leitura(request: Request, call_next):
+    """Teto de leitura no middleware, e não rota a rota: assim uma rota nova já
+    nasce protegida em vez de depender de alguém lembrar.
+
+    ⚠️ Conta por IP e NÃO por conta, de propósito: middleware roda por fora do
+    `SessionMiddleware` e `request.session` ainda não existe aqui. Ler a sessão
+    daqui derrubava toda requisição com "SessionMiddleware must be installed".
+    Por IP resolve o que este teto existe para resolver — um laço martelando —,
+    e o teto por conta já existe onde importa (envio, banco).
+    """
+    if request.method == "GET" and not request.url.path.startswith("/estatico/"):
+        try:
+            limites.conferir("leitura", request, None)
+        except HTTPException as e:
+            return JSONResponse({"detail": e.detail}, status_code=429,
+                                headers=e.headers or {})
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -220,6 +252,9 @@ def pagina_entrar(request: Request, erro: str = "", proximo: str = ""):
 
 @app.post("/entrar")
 def entrar_dev(request: Request, email: str = Form(...), proximo: str = Form("")):
+    # Teto no login: sem ele, tentar e-mail atrás de e-mail é adivinhação de
+    # graça — e no modo `dev` cada tentativa que acerta o formato ENTRA.
+    limites.conferir("login", request)
     if auth.modo() != "dev":
         raise HTTPException(status_code=403, detail="login de desenvolvimento desligado")
     email = email.strip().lower()
@@ -235,6 +270,40 @@ def entrar_dev(request: Request, email: str = Form(...), proximo: str = Form("")
     return RedirectResponse(destino, status_code=303)
 
 
+def _redirect_uri(request: Request) -> str:
+    """O endereço de volta do Google. Tem que casar EXATAMENTE com o cadastrado
+    no console — daí sair da configuração, e não da URL da requisição, que atrás
+    de um proxy reverso vem com o host errado."""
+    base = os.environ.get("EASYCONTIG_URL_BASE", "").rstrip("/")
+    return (base or str(request.base_url).rstrip("/")) + "/auth/google/volta"
+
+
+@app.get("/auth/google")
+def entrar_google(request: Request):
+    limites.conferir("login", request)
+    if auth.modo() != "google" or not auth.google_configurado():
+        raise HTTPException(status_code=404, detail="login pelo Google não configurado")
+    return RedirectResponse(auth.url_de_ida(request, _redirect_uri(request)),
+                            status_code=303)
+
+
+@app.get("/auth/google/volta")
+def volta_google(request: Request, code: str = "", state: str = "", error: str = ""):
+    if auth.modo() != "google" or not auth.google_configurado():
+        raise HTTPException(status_code=404, detail="login pelo Google não configurado")
+    if error or not code:
+        return RedirectResponse(f"/entrar?erro={quote(error or 'entrada cancelada')}",
+                                status_code=303)
+    u = auth.usuario_da_volta(request, code, state, _redirect_uri(request))
+    if not auth.dominio_ok(u.email, cfg.dominio_permitido):
+        # O Google prova QUEM é; o domínio decide SE entra (ADR 0050).
+        return RedirectResponse(
+            f"/entrar?erro=conta+fora+do+dominio+{quote(cfg.dominio_permitido)}",
+            status_code=303)
+    auth.entrar_na_sessao(request, u)
+    return RedirectResponse("/", status_code=303)
+
+
 @app.get("/sair")
 def sair(request: Request):
     auth.sair_da_sessao(request)
@@ -248,6 +317,7 @@ async def criar_lote(request: Request,
                      nome: str = Form(""),
                      referencia: str = Form("")):
     u = _exigir(request)
+    limites.conferir("envio", request, u.email)
 
     # TRAVA: sem referência escolhida não se processa. Montar o consenso sem ter
     # contra o que comparar produz um relatório que só diz "não achei" — e "não
@@ -403,7 +473,8 @@ def pagina_bancos(request: Request, erro: str = "", feito: str = ""):
 def montar_banco(request: Request, banco_id: str):
     """Baixa do NCBI e monta. Síncrono de propósito: são segundos para os
     pequenos, e quem aperta está olhando. Os grandes avisam o tamanho antes."""
-    _exigir(request)
+    u = _exigir(request)
+    limites.conferir("banco", request, u.email)
     if banco_id not in bancos.POR_ID:
         raise HTTPException(status_code=404, detail="banco desconhecido")
     try:

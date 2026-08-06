@@ -78,9 +78,10 @@ Sirva atrás de um proxy reverso com TLS — o compose publica só em `127.0.0.1
 
 ## O que ainda não está feito
 
-- **Login Google** — o código está escrito em `auth.py` mas **nunca foi
-  exercitado**: depende de um CLIENT_ID/SECRET do Google Cloud. Até alguém rodar
-  com credencial real, considere não testado. Hoje só o modo `dev` funciona.
+- **Login Google** — o fluxo está inteiro (`/auth/google` e a volta, com `state`
+  contra CSRF e exigência de `email_verified`), mas **nunca foi exercitado com
+  credencial real**: depende de um CLIENT_ID/SECRET do Google Cloud. Até alguém
+  rodar de verdade, considere não testado.
 - **O prazo de retenção** — o mecanismo existe (`retencao.py`: expurgo por prazo,
   botão "apagar agora", aviso da data na página do lote), mas **o número de dias
   não tem dono**. `EASYCONTIG_RETENCAO_DIAS` vem `0` no exemplo — desligado, o

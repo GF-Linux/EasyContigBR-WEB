@@ -127,9 +127,15 @@ def _meta(data_dir: Path, banco_id: str) -> dict:
 
 
 def estado(data_dir: Path, banco_id: str) -> dict:
-    """O que a tela precisa saber: está montado, com quantas, de quando."""
+    """O que a tela precisa saber: está montado, com quantas, de quando.
+
+    As chaves são SEMPRE as mesmas, montado ou não. Devolver um dicionário curto
+    para o caso "não montado" quebrava a página inteira de bancos assim que
+    sobrasse uma pasta pela metade — e a página quebrada não voltava sozinha.
+    """
     if not existe(data_dir, banco_id):
-        return {"montado": False}
+        return {"montado": False, "sequencias": 0, "baixado_em": "",
+                "bytes": 0, "termo": ""}
     m = _meta(data_dir, banco_id)
     raiz = prefixo(data_dir, banco_id).parent
     bytes_ = sum(f.stat().st_size for f in raiz.glob("*") if f.is_file())
@@ -248,6 +254,12 @@ def montar_do_usuario(data_dir: Path, banco_id: str, fasta_texto: str,
     fasta.write_text(fasta_texto, encoding="utf-8")
     try:
         _makeblastdb(blast_bin, fasta, prefixo(data_dir, banco_id))
+    except Exception:
+        # Um envio que falha não pode deixar rastro: a pasta pela metade ficava
+        # na listagem e derrubava a página de bancos toda vez que ela abrisse.
+        import shutil
+        shutil.rmtree(destino, ignore_errors=True)
+        raise
     finally:
         fasta.unlink(missing_ok=True)
     from datetime import datetime, timezone
@@ -267,6 +279,9 @@ def meus_bancos(data_dir: Path, email: str) -> list[dict]:
     for d in sorted(raiz.iterdir()):
         if d.is_dir() and d.name.startswith(f"meu_{conta}_"):
             e = estado(data_dir, d.name)
+            if not e["montado"]:
+                # pasta órfã de um envio que falhou: não é banco, não se lista
+                continue
             e["id"] = d.name
             e["apelido"] = d.name.split("_", 2)[2]
             saida.append(e)

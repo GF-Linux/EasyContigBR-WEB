@@ -42,6 +42,28 @@ class Config:
         return self.data_dir / "fila.sqlite3"
 
 
+def conferir_producao() -> list[str]:
+    """O que não pode ficar como está fora do desenvolvimento.
+
+    Aviso em arquivo de exemplo não é trava: quem sobe o servidor lê o comando,
+    não o `.env.example`. Estes três itens viram erro no arranque porque cada um
+    é um jeito silencioso de o serviço nascer aberto.
+    """
+    problemas = []
+    if os.environ.get("EASYCONTIG_AUTH", "dev").lower() == "dev":
+        problemas.append(
+            "EASYCONTIG_AUTH=dev aceita QUALQUER e-mail sem senha — nunca em servidor")
+    if not os.environ.get("EASYCONTIG_SECRET_KEY"):
+        problemas.append(
+            "EASYCONTIG_SECRET_KEY não definida: a chave é regerada a cada arranque "
+            "e todas as sessões caem junto")
+    if os.environ.get("EASYCONTIG_HTTPS_ONLY", "0") != "1":
+        problemas.append(
+            "EASYCONTIG_HTTPS_ONLY=1 não está ligado: o cookie de sessão pode "
+            "trafegar em claro")
+    return problemas
+
+
 def carregar() -> Config:
     cfg = Config(
         data_dir=_path("EASYCONTIG_DATA_DIR", "./dados"),
