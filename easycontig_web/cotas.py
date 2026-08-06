@@ -107,6 +107,46 @@ def bytes_da_pasta(raiz: Path) -> int:
     return total
 
 
+# --------------------------------------------------------------- memória curta
+#
+# Medido em 2026-08-06: com 40 corridas de 80 arquivos guardadas — o acúmulo
+# normal de uma conta, não um caso extremo — `situacao()` gastava **23,03 ms**
+# só percorrendo pastas, e isso era ~68% do tempo da PÁGINA INICIAL, que a
+# chama a cada visita. O `os.walk` cresce com o histórico, para sempre.
+#
+# O que torna o cache exato, e não uma aproximação: **pasta de lote terminado
+# não muda mais**. Depois de `pronto` ou `falhou` ninguém escreve ali — só a
+# faxina, que apaga a pasta inteira. Então o tamanho de um lote terminado é uma
+# constante, e recalculá-lo a cada visita é trabalho jogado fora. Lote ativo
+# (`recebendo`/`rodando`) está sendo escrito neste instante e continua sendo
+# medido no disco, toda vez.
+#
+# A promessa da função acima segue de pé: o disco continua sendo a única fonte.
+# A entrada só é usada se a pasta AINDA EXISTE — um `os.stat`, não um walk —,
+# então um lote apagado à mão some da conta na visita seguinte, que era
+# exatamente o modo de falha que um campo no banco teria.
+_TERMINADOS = (fila.PRONTO, fila.FALHOU)
+_medidos: dict[str, int] = {}
+
+
+def esquecer(lote_id: str) -> None:
+    """Tira um lote da memória curta. Existe para os testes e para quem quiser
+    forçar a remedição; o caminho normal de invalidação é a pasta sumir."""
+    _medidos.pop(lote_id, None)
+
+
+def _bytes_do_lote(lotes_dir: Path, lote_id: str, status: str) -> int:
+    if status not in _TERMINADOS:
+        return bytes_da_pasta(lotes_dir / lote_id)
+    raiz = lotes_dir / lote_id
+    if not raiz.exists():
+        _medidos.pop(lote_id, None)
+        return 0
+    if lote_id not in _medidos:
+        _medidos[lote_id] = bytes_da_pasta(raiz)
+    return _medidos[lote_id]
+
+
 def _lotes_da_conta(sqlite_path: Path, email: str) -> list[tuple[str, str]] | None:
     """(id, status) dos lotes do dono — None quando o banco não respondeu."""
     try:
@@ -133,7 +173,8 @@ def situacao(sqlite_path: Path, lotes_dir: Path, email: str) -> Cota:
     ativos = sum(1 for _id, status in linhas if status in _ATIVOS)
     # Conta o disco de TODOS os lotes, inclusive `pronto` e `falhou`: eles
     # continuam ocupando espaço, e é espaço que o usuário pediu para guardar.
-    usados = sum(bytes_da_pasta(lotes_dir / lote_id) for lote_id, _s in linhas)
+    usados = sum(_bytes_do_lote(lotes_dir, lote_id, status)
+                 for lote_id, status in linhas)
 
     if max_lotes and ativos >= max_lotes:
         return Cota(ativos, max_lotes, usados, max_bytes, False,

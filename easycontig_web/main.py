@@ -50,6 +50,48 @@ app = FastAPI(title="EasyContig BR — lotes", docs_url="/api/docs")
 # isto, a página da amostra puxaria três vezes mais pela rede sem ganho nenhum.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
+
+# ⚠️ A POSIÇÃO DESTE BLOCO É O QUE O FAZ FUNCIONAR — não mova para junto dos
+# outros middlewares lá embaixo. `add_middleware` empilha de dentro para fora:
+# quem é registrado DEPOIS fica por FORA. Registrando o limitador aqui, entre o
+# GZip e o Session, ele passa a rodar POR DENTRO do `SessionMiddleware` e
+# `request.session` existe quando ele roda. Registrado depois do Session — que
+# era como estava — ele roda por fora, a sessão ainda não foi decodificada, e
+# só sobra o IP.
+#
+# Isso deixou de ser detalhe quando se mediu o efeito: contando por IP, o teto
+# de 300 leituras/60 s é do PRÉDIO, não da pessoa. A página do lote pergunta o
+# estado de 3 em 3 s, ou seja 0,33 req/s por aba aberta — **15 abas no mesmo IP
+# esgotam o teto**, e a universidade inteira sai por um NAT. Quem seria barrado
+# é justamente o laboratório em dia de corrida.
+@app.middleware("http")
+async def _limite_de_leitura(request: Request, call_next):
+    """Teto de leitura no middleware, e não rota a rota: assim uma rota nova já
+    nasce protegida em vez de depender de alguém lembrar.
+
+    Conta por CONTA quando há sessão e cai para o IP quando não há — que é o
+    comportamento que `limites.chave()` já implementava e este middleware não
+    conseguia usar. O caminho anônimo continua contado por IP, e é o que se quer:
+    ali o IP é a única identidade que existe.
+    """
+    if request.method == "GET" and not request.url.path.startswith("/estatico/"):
+        quem = None
+        try:
+            u = auth.usuario_da_sessao(request)
+            quem = u.email if u else None
+        except Exception:                       # noqa: BLE001
+            # Sessão ilegível (cookie de uma chave antiga, por exemplo) não pode
+            # derrubar a requisição: cai para o IP, que é o teto de quem não
+            # está identificado. O limite é convivência, não autenticação.
+            quem = None
+        try:
+            limites.conferir("leitura", request, quem)
+        except HTTPException as e:
+            return JSONResponse({"detail": e.detail}, status_code=429,
+                                headers=e.headers or {})
+    return await call_next(request)
+
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("EASYCONTIG_SECRET_KEY") or secrets.token_urlsafe(32),
@@ -80,26 +122,6 @@ def _br(valor) -> str:
 
 
 TEMPLATES.env.filters["br"] = _br
-
-
-@app.middleware("http")
-async def _limite_de_leitura(request: Request, call_next):
-    """Teto de leitura no middleware, e não rota a rota: assim uma rota nova já
-    nasce protegida em vez de depender de alguém lembrar.
-
-    ⚠️ Conta por IP e NÃO por conta, de propósito: middleware roda por fora do
-    `SessionMiddleware` e `request.session` ainda não existe aqui. Ler a sessão
-    daqui derrubava toda requisição com "SessionMiddleware must be installed".
-    Por IP resolve o que este teto existe para resolver — um laço martelando —,
-    e o teto por conta já existe onde importa (envio, banco).
-    """
-    if request.method == "GET" and not request.url.path.startswith("/estatico/"):
-        try:
-            limites.conferir("leitura", request, None)
-        except HTTPException as e:
-            return JSONResponse({"detail": e.detail}, status_code=429,
-                                headers=e.headers or {})
-    return await call_next(request)
 
 
 @app.middleware("http")
@@ -395,18 +417,22 @@ async def criar_lote(request: Request,
 def pagina_perfil(request: Request, editando: int = 0):
     u = _exigir(request)
     lotes = fila.listar(cfg.sqlite_path, dono=u.email, limite=500)
+    # Só a CONTAGEM de amostras é lida de cada relatório — é tudo o que a tabela
+    # e o resumo usam. Antes esta página decodificava o `relatorio.json` inteiro
+    # de cada corrida da conta (25,89 ms para 40; o teto aqui é 500) para no fim
+    # tirar um inteiro de cada um. Ver `amostras.contar_amostras`.
     reps = []
     for l in lotes:
         if l["status"] == fila.PRONTO:
-            r = _relatorio(l["id"])
-            if r:
-                reps.append({"lote": l, "rep": r,
-                             "n": len(r.get("samples") or [])})
+            n = mod_amostras.contar_amostras(
+                executor.pastas_do_lote(cfg, l["id"])["relatorio_json"])
+            if n is not None:
+                reps.append({"lote": l, "n": n})
     return TEMPLATES.TemplateResponse(request, "perfil.html", {
         **_casca(u),
         "perfil": perfil.pegar(cfg.sqlite_path, u.email),
         "relatorios": reps,
-        "resumo": perfil.resumo_das_corridas(lotes, [x["rep"] for x in reps]),
+        "resumo": perfil.resumo_das_corridas(lotes, [x["n"] for x in reps]),
         "cota": cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email),
         "editando": bool(editando),
     })

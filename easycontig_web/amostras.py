@@ -94,6 +94,51 @@ def carregar(relatorio_json: Path) -> dict | None:
     return rep
 
 
+# ------------------------------------------------- quantas amostras, e só isso
+#
+# Medido em 2026-08-06: a página do perfil abria e decodificava o
+# `relatorio.json` de CADA corrida da conta — 25,89 ms para 40 delas, e o teto
+# ali é 500 lotes, não 50. O que ela faz com todo esse JSON é contar `samples`:
+# a tabela mostra o número e o resumo o soma. Um relatório de 40 amostras tem
+# 64 KB e produzia um inteiro.
+#
+# Guardar o JSON inteiro em memória resolveria o tempo e criaria um problema
+# pior (dezenas de MB por conta ativa). O que se guarda é o inteiro.
+#
+# A validação é `mtime`+tamanho, e não "lote pronto não muda mais": um `os.stat`
+# custa microssegundos e não depende de eu ter razão sobre o ciclo de vida do
+# arquivo. Se o relatório for regravado, o número é recontado.
+_contagens: dict[str, tuple[int, int, int]] = {}      # caminho -> (mtime, tam, n)
+
+
+def contar_amostras(relatorio_json: Path) -> int | None:
+    """Quantas amostras o relatório tem. `None` quando não há relatório válido.
+
+    Mesma resposta que `len(carregar(...)["samples"])`, sem pagar a decodificação
+    de novo a cada visita.
+    """
+    caminho = Path(relatorio_json)
+    try:
+        st = caminho.stat()
+    except OSError:
+        _contagens.pop(str(caminho), None)
+        return None
+
+    chave = str(caminho)
+    marca = (st.st_mtime_ns, st.st_size)
+    guardado = _contagens.get(chave)
+    if guardado and guardado[:2] == marca:
+        return guardado[2]
+
+    rep = carregar(caminho)
+    if rep is None:
+        _contagens.pop(chave, None)
+        return None
+    n = len(rep.get("samples") or [])
+    _contagens[chave] = (*marca, n)
+    return n
+
+
 def resumo(rep: dict) -> dict:
     """Contagens do lote para o cabeçalho. Só contagem — nada de nota ou score.
 

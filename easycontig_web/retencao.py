@@ -223,6 +223,11 @@ def apagar_lote(sqlite_path: Path, lotes_dir: Path, lote_id: str) -> bool:
 
     if tinha_pasta and not linhas:
         log.warning("lote %s tinha pasta em disco e nenhuma linha na fila", lote_id)
+    # Nada a avisar para `cotas`: a memória curta de lá se invalida sozinha ao
+    # ver que a pasta sumiu. Chamar `cotas.esquecer()` daqui acoplaria este
+    # módulo (que é sem dependências de propósito) e ainda por cima resolveria
+    # menos — só valeria dentro deste processo, e quem apaga é o trabalhador
+    # enquanto quem lê a cota é o servidor web.
     return bool(tinha_pasta or linhas)
 
 
