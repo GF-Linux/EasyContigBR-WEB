@@ -34,10 +34,11 @@ log = logging.getLogger("easycontig.retencao")
 # dado de pesquisa tem dono humano (autor + orientadora) e ainda não foi
 # decidido; até lá, acumular é o erro reversível e apagar é o irreversível.
 #
-# 90 dias continua sendo a SUGESTÃO documentada no `.env.example` (tempo entre a
-# corrida chegar e o pessoal terminar de olhar, com folga) — sugestão, não padrão.
+# 30 dias é o prazo DECIDIDO pelo autor em 2026-08-06 e é o que vai no
+# `.env.example`. Aqui continua 0 porque este é o padrão de quem não configurou
+# nada, e instalação que não decidiu não deve apagar dado de ninguém.
 DIAS_PADRAO = 0
-DIAS_SUGERIDO = 90
+DIAS_SUGERIDO = 30
 
 # Os estados em que a pasta está sendo escrita NESTE INSTANTE por outro processo:
 # um upload em curso ou o trabalhador montando. Apagar por baixo deles é o mesmo

@@ -549,6 +549,10 @@ def pagina_amostra(request: Request, lote_id: str, chave: str):
         raise HTTPException(status_code=404, detail="amostra não encontrada no lote")
     return TEMPLATES.TemplateResponse(request, "amostra.html", {
         **_casca(u), "lote": lote, "amostra": a,
+        # só os bancos montados: oferecer o que não está pronto é oferecer erro
+        "consultaveis": [r for r in _referencias(u)
+                         if r["id"] != (lote.get("referencia") or "curado")],
+        "referencia_usada": lote.get("referencia") or "curado",
     })
 
 

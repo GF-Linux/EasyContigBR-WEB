@@ -136,6 +136,21 @@ a.ac:hover{ text-decoration:none }
 .exp .fila{ display:flex; gap:6px } .exp .fila .ac{ flex:1; text-align:center }
 .rascunho{ display:flex; gap:6px; font-size:10.5px; color:var(--ambar); margin-top:7px;
   line-height:1.45 }
+.consulta{ background:var(--interno); border:1px solid var(--linha);
+  border-radius:9px; padding:11px }
+.consulta .rot{ font-family:var(--mono); font-size:9px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--fraco); margin-bottom:5px }
+.consulta select{ font:inherit; font-size:.82rem; padding:.4rem .5rem; width:100%;
+  border:1px solid var(--linha-forte); border-radius:7px; background:var(--painel);
+  color:var(--tinta) }
+#saida-consulta{ margin-top:.6rem; font-size:11px }
+#saida-consulta .hit{ padding:.35rem 0; border-bottom:1px solid var(--linha) }
+#saida-consulta .hit:last-child{ border:0 }
+#saida-consulta .org{ font-style:italic; color:var(--apoio); display:block;
+  line-height:1.4 }
+#saida-consulta .num{ font-family:var(--mono); color:var(--tinta) }
+#saida-consulta .acc{ font-family:var(--mono); color:var(--violeta-claro);
+  font-size:10px }
 .ressalva{ font-size:11.5px; color:var(--apoio); line-height:1.5; margin:0 0 .5rem }
 .ressalva .rg{ color:var(--fraco); font-family:var(--mono); font-size:10px }
 {% endblock %}
@@ -194,6 +209,12 @@ a.ac:hover{ text-decoration:none }
       <span id="botoes-remover" style="display:flex;gap:6px;flex-wrap:wrap"></span>
       <span class="divisor"></span>
       <button class="ac" id="b-undo" type="button" disabled>↺ Desfazer</button>
+      <span class="divisor"></span>
+      {# Amplitude: a ponta da leitura tem sinal fraco de verdade e some no zoom
+         natural. Ampliar não muda o dado, muda a lente — o rótulo diz o fator
+         para ninguém ler pico ampliado como pico alto. #}
+      <button class="ac" id="b-amp" type="button" title="Ampliar o traço (não muda o dado)"
+        >amp 1×</button>
     </div>
   </div>
 
@@ -230,6 +251,25 @@ a.ac:hover{ text-decoration:none }
     {% endif %}
     {% endif %}
 
+    {# Consulta a OUTRO banco. Rotulada como consulta, e nunca substituindo o
+       veredito: quem identificou esta amostra foi o banco gravado na corrida
+       (ADR 0037). Por botão, nunca automático. #}
+    {% if consultaveis %}
+    <div class="consulta">
+      <div class="rot">comparar com outro banco</div>
+      <p class="sub" style="font-size:11px;margin:0 0 .5rem">Não muda o resultado
+      acima — é uma segunda opinião, e sai rotulada como tal.</p>
+      <select id="banco-consulta">
+        {% for r in consultaveis %}
+        <option value="{{ r.id }}">{{ r.nome }}</option>
+        {% endfor %}
+      </select>
+      <button class="ac" id="b-consultar" type="button"
+              style="width:100%;margin-top:.45rem">Consultar</button>
+      <div id="saida-consulta"></div>
+    </div>
+    {% endif %}
+
     <div class="qual">
       <div class="rot">qualidade do contig</div>
       <div class="lq"><span>Cobertura média</span>
@@ -244,6 +284,8 @@ a.ac:hover{ text-decoration:none }
         <span class="pronto">{{ r.q_rotulo }} ({{ r.q_medio }})</span></div>
       {% endfor %}
       <div class="lq"><span>Bases removidas</span><span id="q-ed">0</span></div>
+      <div class="lq"><span>Referência</span><span>{{ referencia_usada
+        if referencia_usada != "curado" else "curada" }}</span></div>
     </div>
 
     <div class="exp">
@@ -254,6 +296,9 @@ a.ac:hover{ text-decoration:none }
         <button class="ac" id="b-fasta" type="button">FASTA</button>
         <button class="ac" id="b-txt" type="button">Texto</button>
       </div>
+      <div class="rascunho" id="rascunho-antigo" style="display:none">
+        ↻ <span>Rascunho recuperado de <time></time> — as edições que você fez
+        antes de sair continuam aqui.</span></div>
       <div class="rascunho" id="rascunho" style="display:none">
         ⚠ <span>Há edições não exportadas. Sair desta página perde o que você
         corrigiu.</span></div>

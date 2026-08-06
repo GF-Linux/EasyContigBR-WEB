@@ -18,12 +18,50 @@
 
   const est = { d: null, seq: [], sel: null, pilha: [], removidas: 0, exportado: true };
 
+  // Rascunho guardado no navegador, por amostra. O consenso só vira definitivo
+  // na exportação (ADR 0052) — isto não muda essa regra, só evita que recarregar
+  // a página perca a correção. O `.ab1` em disco continua intocado, e o rascunho
+  // é do navegador de quem editou, não do servidor.
+  const CHAVE = "easycontig:rascunho:" + location.pathname;
+
+  function guardarRascunho() {
+    try {
+      if (!est.removidas) { localStorage.removeItem(CHAVE); return; }
+      localStorage.setItem(CHAVE, JSON.stringify({
+        seq: est.seq.map(s => s.join("")), removidas: est.removidas,
+        quando: new Date().toISOString(),
+      }));
+    } catch (e) { /* modo anônimo ou cota cheia: seguir sem rascunho */ }
+  }
+
+  function lerRascunho() {
+    try { return JSON.parse(localStorage.getItem(CHAVE) || "null"); }
+    catch (e) { return null; }
+  }
+
   fetch(raiz.dataset.traco, { headers: { accept: "application/json" } })
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(d => {
       if (!d.disponivel) { semTraco(d.motivo); return; }
       est.d = d;
       est.seq = d.leituras.map(l => l.alinhada.split(""));
+
+      // Rascunho anterior desta amostra: só entra se ainda casar com o traço
+      // (mesmo nº de leituras e mesma largura). Se a corrida foi reprocessada,
+      // aplicar edição velha em cima de alinhamento novo apagaria a base errada.
+      const r = lerRascunho();
+      if (r && r.seq && r.seq.length === est.seq.length
+          && r.seq.every((s, i) => s.length === est.seq[i].length)) {
+        est.seq = r.seq.map(s => s.split(""));
+        est.removidas = r.removidas || 0;
+        est.exportado = false;
+        const av = document.getElementById("rascunho-antigo");
+        if (av) {
+          av.style.display = "flex";
+          av.querySelector("time").textContent =
+            new Date(r.quando).toLocaleString("pt-BR").slice(0, 16);
+        }
+      }
       montar();
       // Abre onde as leituras SE SOBREPÕEM, não na coluna 0. Numa amostra em que
       // a reversa começa na coluna 30, abrir no início deixava metade do painel
@@ -180,7 +218,9 @@
         atual = [];
         continue;
       }
-      atual.push(x + "," + plano[k + 1]);
+      // y = 100 na base; ampliar é puxar o pico para cima sem sair do quadro
+      const y = plano[k + 1];
+      atual.push(x + "," + (amp === 1 ? y : Math.max(6, 100 - (100 - y) * amp).toFixed(1)));
     }
     if (atual.length > 1) partes.push(atual.join(" "));
     return partes;
@@ -263,12 +303,14 @@
       }
     });
     est.exportado = false;
+    guardarRascunho();
     selecionar(est.sel);
   }
   $("#b-undo").onclick = () => {
     const s = est.pilha.pop(); if (!s) return;
     est.seq = s.seq; est.removidas = s.rem; est.exportado = false;
     $("#b-undo").disabled = !est.pilha.length;
+    guardarRascunho();
     selecionar(est.sel === null ? 0 : est.sel);
   };
 
@@ -294,10 +336,59 @@
     a.click();
     URL.revokeObjectURL(url);
     est.exportado = true;
+    // Exportou: o rascunho cumpriu o papel e sai. Guardá-lo depois disso faria a
+    // próxima visita ressuscitar uma edição que já virou arquivo.
+    try { localStorage.removeItem(CHAVE); } catch (e) {}
+    const av = document.getElementById("rascunho-antigo");
+    if (av) av.style.display = "none";
     render();
   }
   $("#b-fasta").onclick = () => exportar("fasta");
   $("#b-txt").onclick = () => exportar("txt");
+
+  // ── consulta a outro banco: é segunda opinião, não veredito ──────────────
+  const btConsulta = document.getElementById("b-consultar");
+  if (btConsulta) {
+    btConsulta.onclick = () => {
+      const banco = document.getElementById("banco-consulta").value;
+      const saida = document.getElementById("saida-consulta");
+      btConsulta.disabled = true;
+      saida.innerHTML = '<span class="sub">consultando…</span>';
+      const base = raiz.dataset.traco.replace(/\/traco$/, "/consultar");
+      fetch(base + "?banco=" + encodeURIComponent(banco),
+            { headers: { accept: "application/json" } })
+        .then(r => r.ok ? r.json() : Promise.reject(r))
+        .then(d => {
+          if (!d.hits.length) {
+            saida.innerHTML = '<span class="sub">Nenhum acerto nesse banco. '
+              + 'Isso descreve o banco consultado, não a amostra.</span>';
+            return;
+          }
+          saida.innerHTML = d.hits.map(h =>
+            `<div class="hit"><span class="org">${h.titulo}</span>`
+            + `<span class="num">${String(h.identidade).replace(".", ",")}%</span>`
+            + ` · cobertura ${String(h.cobertura).replace(".", ",")}%`
+            + ` · <span class="acc">${h.accession}</span></div>`).join("");
+        })
+        .catch(() => { saida.innerHTML =
+          '<span class="erro">Não foi possível consultar agora.</span>'; })
+        .finally(() => { btConsulta.disabled = false; });
+    };
+  }
+
+  // ── amplitude do traço ───────────────────────────────────────────────────
+  // A ponta da leitura tem sinal fraco de verdade, e no zoom natural ela some.
+  // Ampliar é o que o desktop chama de "Amp 1×": não muda o dado, muda a lente —
+  // e o rótulo diz o fator, para ninguém ler pico ampliado como pico alto.
+  let amp = 1;
+  const btAmp = document.getElementById("b-amp");
+  if (btAmp) {
+    btAmp.onclick = () => {
+      amp = amp >= 8 ? 1 : amp * 2;
+      btAmp.textContent = "amp " + amp + "×";
+      render();
+    };
+  }
 
   // Sair com edição pendente perde trabalho em silêncio — o mesmo gênero de
   // defeito das "33 de 40 amostras". O aviso do navegador é a única trava real.
