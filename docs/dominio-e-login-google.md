@@ -91,9 +91,16 @@ Let's Encrypt bate no nome, então ele precisa já resolver.
   e **nenhum deles é sensível** — então publicar o app **não** passa pela
   verificação demorada do Google.
 
-> Enquanto a tela ficar em **Teste**, só entram os e-mails da lista de usuários
-> de teste (limite de 100) e o consentimento expira a cada 7 dias. Para o
-> laboratório usar de verdade, **Publicar**.
+> ⚠️ **A lista de "usuários de teste" NÃO é uma porta — medido em 2026-08-06.**
+> Com a tela em *Testando* e **um** e-mail na lista, o autor entrou com **três**
+> contas diferentes, duas delas fora da lista (`juaredpokemon@gmail.com` e
+> `jared@ufrrj.br`). Eu tinha escrito aqui o contrário, e estava errado.
+>
+> O motivo é o mesmo que torna a publicação fácil: a trava de usuário de teste e
+> a verificação do Google existem para escopos **sensíveis**, e os nossos três
+> não são. Sem verificação exigida, não há gate. Ou seja: **quem decide quem
+> entra é o `EASYCONTIG_DOMINIO`, e só ele** — a tela do Google prova a
+> identidade, não a autorização.
 
 ### 4.2. O ID do cliente
 

@@ -61,6 +61,21 @@ def conferir_producao() -> list[str]:
         problemas.append(
             "EASYCONTIG_HTTPS_ONLY=1 não está ligado: o cookie de sessão pode "
             "trafegar em claro")
+    # ⚠️ Medido em 2026-08-06: com a tela de consentimento em "Testando" e UM
+    # e-mail na lista de usuários de teste, TRÊS contas diferentes entraram —
+    # duas fora da lista. A trava de usuário de teste vale para escopos
+    # sensíveis, e `openid email profile` não são. Ou seja: o Google prova a
+    # identidade e NÃO restringe o acesso; quem restringe é esta variável, e só
+    # ela. Em branco num servidor público, qualquer conta Google do mundo entra
+    # e passa a mandar `.ab1` para o volume `dados/`.
+    # Não decidimos a política aqui — ela é do laboratório. Exigimos que ela
+    # esteja ESCRITA: uma lista, ou `*` para declarar aberto de propósito.
+    if not os.environ.get("EASYCONTIG_DOMINIO", "").strip():
+        problemas.append(
+            "EASYCONTIG_DOMINIO está em branco: quem pode entrar não foi "
+            "decidido, e a lista de usuários de teste do Google NÃO restringe "
+            "nada (medido). Ponha os domínios (ex.: `ufrrj.br`) ou `*` para "
+            "declarar que é aberto de propósito")
     return problemas
 
 

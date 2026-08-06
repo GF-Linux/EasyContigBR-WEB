@@ -109,6 +109,11 @@ def dominio_ok(email: str, dominio_permitido: str) -> bool:
         return True
     if "@" not in email:
         return False
+    # `*` = aberto POR ESCRITO. Existe para que "qualquer conta entra" possa ser
+    # uma decisão declarada em vez de um campo em branco — em produção o campo
+    # em branco passa a ser recusado (`conferir_producao`).
+    if "*" in {d.strip() for d in dominio_permitido.split(",")}:
+        return True
     de = email.rsplit("@", 1)[-1].lower().strip().rstrip(".")
     for bruto in dominio_permitido.split(","):
         d = bruto.strip().lower().lstrip("@").rstrip(".")

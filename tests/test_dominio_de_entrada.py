@@ -203,3 +203,48 @@ def test_estado_invalido_continua_sendo_400_e_nao_502(monkeypatch):
     with _pytest.raises(HTTPException) as e:
         _auth.usuario_da_volta(_RequestFalso("certo"), "cod", "forjado", "u")
     assert e.value.status_code == 400
+
+
+# ── aberto tem que ser declarado, não herdado ────────────────────────────────
+# 2026-08-06, medido pelo autor: tela de consentimento em "Testando", UM e-mail
+# na lista de usuários de teste, e TRÊS contas entraram — duas fora da lista.
+# A trava de usuário de teste do Google vale para escopos SENSÍVEIS, e
+# `openid email profile` não são. O Google prova a identidade e não restringe
+# nada: quem restringe é o EASYCONTIG_DOMINIO, e só ele.
+from easycontig_web import config as _config
+
+
+def test_asterisco_abre_por_escrito():
+    for email in ("a@gmail.com", "b@empresa.com", "c@ufrrj.br"):
+        assert dominio_ok(email, "*"), email
+
+
+def test_asterisco_numa_lista_tambem_abre():
+    """Se `*` está lá, o resto da lista não estreita nada — e é bom que seja
+    óbvio, para ninguém achar que `ufrrj.br,*` restringe alguma coisa."""
+    assert dominio_ok("a@gmail.com", "ufrrj.br,*")
+
+
+def test_producao_recusa_subir_com_a_porta_indefinida(monkeypatch):
+    monkeypatch.setenv("EASYCONTIG_AUTH", "google")
+    monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "x")
+    monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
+    monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
+    problemas = _config.conferir_producao()
+    assert any("EASYCONTIG_DOMINIO" in p for p in problemas), (
+        "produção aceita subir sem ninguém ter decidido quem entra")
+
+
+@_pytest.mark.parametrize("valor", ["ufrrj.br", "ufrrj.br,usp.br", "*"])
+def test_producao_aceita_a_porta_declarada(monkeypatch, valor):
+    """Tanto faz se é restrita ou aberta — o que se exige é que esteja escrita."""
+    monkeypatch.setenv("EASYCONTIG_AUTH", "google")
+    monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "x")
+    monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
+    monkeypatch.setenv("EASYCONTIG_DOMINIO", valor)
+    assert not any("EASYCONTIG_DOMINIO" in p for p in _config.conferir_producao())
+
+
+def test_em_desenvolvimento_o_branco_continua_valendo():
+    """Sem EASYCONTIG_PRODUCAO nada disso roda: o local não pede configuração."""
+    assert dominio_ok("qualquer@gmail.com", "")

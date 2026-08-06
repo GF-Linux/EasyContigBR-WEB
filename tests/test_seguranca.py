@@ -351,16 +351,23 @@ def test_resposta_de_429_diz_quando_tentar_de_novo(app, monkeypatch):
 
 # ══════════════════════════════════════════════════ trava de produção
 def test_producao_recusa_subir_com_a_porta_aberta(monkeypatch):
-    """Aviso em `.env.example` não é trava: quem sobe o servidor lê o comando."""
+    """Aviso em `.env.example` não é trava: quem sobe o servidor lê o comando.
+
+    Passaram a ser QUATRO em 2026-08-06: o autor mediu que a lista de usuários
+    de teste do Google não restringe nada com escopos não sensíveis — três
+    contas entraram com uma só na lista. Então `EASYCONTIG_DOMINIO` em branco
+    significa "ninguém decidiu quem entra", e isso não sobe."""
     from easycontig_web import config
     monkeypatch.setenv("EASYCONTIG_AUTH", "dev")
     monkeypatch.delenv("EASYCONTIG_SECRET_KEY", raising=False)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "0")
+    monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     p = config.conferir_producao()
-    assert len(p) == 3
+    assert len(p) == 4
     assert any("dev" in x for x in p)
     assert any("SECRET_KEY" in x for x in p)
     assert any("HTTPS" in x for x in p)
+    assert any("EASYCONTIG_DOMINIO" in x for x in p)
 
 
 def test_producao_bem_configurada_nao_reclama(monkeypatch):
@@ -368,6 +375,7 @@ def test_producao_bem_configurada_nao_reclama(monkeypatch):
     monkeypatch.setenv("EASYCONTIG_AUTH", "google")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "x" * 32)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
+    monkeypatch.setenv("EASYCONTIG_DOMINIO", "ufrrj.br")
     assert config.conferir_producao() == []
 
 
