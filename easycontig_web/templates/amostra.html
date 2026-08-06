@@ -81,6 +81,8 @@
 .bases-lin .bl:hover{ background:var(--linha-forte) }
 .bases-lin .bl.morta{ opacity:.4; text-decoration:line-through }
 .vazio-tr{ padding:1.6rem 1rem; text-align:center; color:var(--fraco); font-size:12px }
+.fora{ position:absolute; inset:0; display:grid; place-items:center; color:var(--fraco);
+  font-size:11.5px; pointer-events:none; background:rgba(13,14,22,.6) }
 
 /* barra de ações */
 .acoes{ margin:2px auto 0; display:flex; gap:6px;
@@ -154,6 +156,9 @@ a.ac:hover{ text-decoration:none }
         <a class="ac" href="/lotes/{{ lote.id }}/relatorio" target="_blank"
            rel="noopener">Relatório da corrida</a>
         <a class="ac" href="/lotes/{{ lote.id }}/resultado.csv">CSV</a>
+        {# Volta para a bancada — a lista de todas as corridas. Sem isto, sair de
+           uma amostra exigia passar pela tela do lote, que é outra coisa. #}
+        <a class="ac" href="/" title="Bancada — todas as corridas">⌂ Bancada</a>
       </span>
     </div>
 
@@ -185,9 +190,7 @@ a.ac:hover{ text-decoration:none }
       <button class="ac" id="b-erro" type="button">⚠ Próximo erro</button>
       <span class="divisor"></span>
       <span class="dica-ac">remover base</span>
-      <button class="ac perigo" id="b-del0" type="button" disabled>só do F</button>
-      <button class="ac perigo" id="b-del1" type="button" disabled>só do R</button>
-      <button class="ac perigo" id="b-del2" type="button" disabled>dos dois</button>
+      <span id="botoes-remover" style="display:flex;gap:6px;flex-wrap:wrap"></span>
       <span class="divisor"></span>
       <button class="ac" id="b-undo" type="button" disabled>↺ Desfazer</button>
     </div>

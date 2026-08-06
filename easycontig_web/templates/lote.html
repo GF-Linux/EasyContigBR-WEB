@@ -1,5 +1,15 @@
 {% extends "base.html" %}
 {% block titulo %}{{ lote.nome or lote.id }} — EasyContig BR{% endblock %}
+{% block estilo %}
+/* A tela do lote é uma TABELA de amostras: prender em 64rem deixava metade de um
+   monitor largo vazia e ainda espremia as colunas, quebrando "Hepatozoon canis"
+   e "2 ressalva(s)" em duas linhas. Ela usa a largura que tem. */
+.trabalho > .interno{ max-width:none }
+.cartao{ padding:1rem 1.15rem }
+td{ white-space:nowrap }
+td:first-child a{ font-family:var(--mono); font-size:.85em }
+{% endblock %}
+
 {% block conteudo %}
 
 {% if recarregar %}

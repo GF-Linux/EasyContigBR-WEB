@@ -25,8 +25,15 @@
       est.d = d;
       est.seq = d.leituras.map(l => l.alinhada.split(""));
       montar();
+      // Abre onde as leituras SE SOBREPÕEM, não na coluna 0. Numa amostra em que
+      // a reversa começa na coluna 30, abrir no início deixava metade do painel
+      // dela vazio — e um painel vazio lê como "não montou", que é falso.
+      const cob = d.cobertura || [];
+      const inicio = cob.findIndex(c => c >= 2);
       const mm = mismatches();
-      if (mm.length) selecionar(mm[0]); else render();
+      const noMeio = mm.find(c => inicio < 0 || c >= inicio);
+      selecionar(noMeio !== undefined ? noMeio
+                 : (inicio >= 0 ? inicio + Math.floor(JAN / 2) : 0));
     })
     .catch(() => semTraco("não foi possível carregar o traço agora"));
 
@@ -76,6 +83,22 @@
           <div class="bases-lin" id="bases-${i}"></div>
         </div>
       </section>`).join("");
+    // Um botão por leitura, gerado: a amostra pode ter 2 leituras (o par) ou 4
+    // (dois pares de primers, como na pasta do Hepatozoon). Botões fixos "só do
+    // F" / "só do R" só davam conta do primeiro caso.
+    const bs = document.getElementById("botoes-remover");
+    bs.innerHTML = est.d.leituras.map((l, i) =>
+      `<button class="ac perigo" type="button" data-l="${i}" disabled>${
+        est.d.leituras.length > 2
+          ? (l.primer || l.sentido + (i + 1))
+          : "só do " + l.sentido
+      }</button>`).join("")
+      + `<button class="ac perigo" id="b-todas" type="button" disabled>${
+          est.d.leituras.length > 2 ? "de todas" : "dos dois"}</button>`;
+    bs.querySelectorAll("[data-l]").forEach(b =>
+      b.onclick = () => remover([+b.dataset.l]));
+    document.getElementById("b-todas").onclick = () =>
+      remover(est.d.leituras.map((_, i) => i));
     $("#acoes").style.display = "flex";
   }
 
@@ -142,6 +165,21 @@
         }).join("");
       faixa.querySelectorAll(".bl").forEach(e =>
         e.onclick = () => selecionar(+e.dataset.col));
+
+      // Painel vazio lê como "não montou", e é falso: a leitura simplesmente não
+      // alcança esta região do contig. Dizer isso é o conserto — foi o que fez a
+      // leitura reversa parecer quebrada quando a janela abria antes do início
+      // dela.
+      const nada = !l.bases.some(([c]) => c >= i0 && c < i1);
+      let aviso = svg.parentElement.querySelector(".fora");
+      if (nada && !aviso) {
+        aviso = document.createElement("div");
+        aviso.className = "fora";
+        aviso.textContent = "esta leitura não cobre esta região do contig";
+        svg.parentElement.appendChild(aviso);
+      } else if (!nada && aviso) {
+        aviso.remove();
+      }
       svg.onclick = ev => {
         const r = svg.getBoundingClientRect();
         selecionar(Math.round(i0 + (ev.clientX - r.left) / r.width * (i1 - i0)));
@@ -152,11 +190,13 @@
   // ── seleção: sempre nas DUAS leituras (é o acoplamento pedido) ────────────
   function selecionar(col) {
     est.sel = Math.max(0, Math.min(col, est.d.largura - 1));
-    est.d.leituras.forEach((_, i) => {
-      const b = est.seq[i][est.sel];
-      $("#b-del" + i).disabled = !(b && b !== "-");
+    document.querySelectorAll("#botoes-remover [data-l]").forEach(b => {
+      const v = est.seq[+b.dataset.l][est.sel];
+      b.disabled = !(v && v !== "-");
     });
-    $("#b-del2").disabled = !est.seq.some(s => s[est.sel] && s[est.sel] !== "-");
+    const algum = est.seq.some(s => s[est.sel] && s[est.sel] !== "-");
+    const todas = document.getElementById("b-todas");
+    if (todas) todas.disabled = !algum;
     render();
   }
 
@@ -177,10 +217,6 @@
     est.exportado = false;
     selecionar(est.sel);
   }
-  $("#b-del0").onclick = () => remover([0]);
-  $("#b-del1").onclick = () => remover([1]);
-  $("#b-del2").onclick = () => remover([0, 1]);
-
   $("#b-undo").onclick = () => {
     const s = est.pilha.pop(); if (!s) return;
     est.seq = s.seq; est.removidas = s.rem; est.exportado = false;

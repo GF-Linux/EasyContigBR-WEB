@@ -21,12 +21,16 @@
   background:radial-gradient(70% 60% at 20% 20%,rgba(14,151,130,.16) 0,transparent 60%),
              radial-gradient(60% 60% at 85% 85%,rgba(145,132,217,.14) 0,transparent 60%),
              #14151F }
-.pt-marca .selo{ width:128px; height:128px; border-radius:50%; background:#F5F4F2;
-  padding:11px; display:grid; place-items:center;
+.pt-marca .selo{ width:118px; height:118px; border-radius:50%; background:#F5F4F2;
+  padding:10px; display:grid; place-items:center; margin:0 auto;
   box-shadow:0 0 0 1px rgba(255,255,255,.12),0 10px 34px rgba(0,0,0,.5) }
+/* O bloco todo é uma coluna centrada com largura própria: sem isto o selo e o
+   texto ficavam centrados em relação a caixas diferentes e não batiam entre si. */
+.pt-marca > div{ display:flex; flex-direction:column; align-items:center;
+  max-width:38ch }
 .pt-marca .selo svg{ width:100%; height:100%; display:block }
 .pt-marca h1{ font-size:clamp(1.6rem,3vw,2.15rem); font-weight:800; letter-spacing:-.03em;
-  margin:1.5rem 0 .55rem; line-height:1.08 }
+  margin:1.25rem 0 .5rem; line-height:1.08; text-align:center }
 .pt-marca p{ color:var(--apoio); max-width:36ch; margin:0 auto; font-size:.95rem }
 .creds{ display:flex; gap:.45rem; flex-wrap:wrap; margin-top:1.4rem;
   justify-content:center }

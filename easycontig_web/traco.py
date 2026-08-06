@@ -21,7 +21,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from app.core.assembly import build_pair_assembly, chromatogram_data_columns
+from app.core.assembly import (build_pair_assembly, chromatogram_data_columns,
+                               parse_assembly)
 from app.core.tracy_engine import TracyEngine
 
 from .config import Config
@@ -47,10 +48,23 @@ def montar(cfg: Config, lote_dir: Path, amostra: dict):
     valendo.
     """
     leituras = [r for r in (amostra.get("reads") or []) if isinstance(r, dict)]
-    if len(leituras) != 2:
-        # `build_pair_assembly` é para o par F+R, que é o caso normal (ADR 0051).
-        # Grupos maiores usam `assemble`, e o caminho deles não passa por aqui.
+    if len(leituras) < 2:
         return None
+
+    trabalho = lote_dir / "trabalho"
+
+    # Amostra com MAIS de duas leituras (a pasta do Hepatozoon tem 4 por amostra,
+    # dois pares de primers): o lote a montou com `engine.assemble`, que grava um
+    # `.json` com os traços já alinhados. Reaproveitar esse arquivo é melhor que
+    # remontar — sai de graça e é exatamente o que o relatório usou.
+    if len(leituras) > 2:
+        j = trabalho / f"{amostra['key']}.json"
+        if not j.exists():
+            return None
+        try:
+            return parse_assembly(j)
+        except Exception:                   # noqa: BLE001
+            return None
 
     def caminho(r: dict) -> Path | None:
         p = Path(r.get("file") or "")
@@ -70,7 +84,6 @@ def montar(cfg: Config, lote_dir: Path, amostra: dict):
     if not cf or not cr:
         return None
 
-    trabalho = lote_dir / "trabalho"
     trabalho.mkdir(parents=True, exist_ok=True)
     try:
         return build_pair_assembly(_motor(cfg), cf, cr,
@@ -108,7 +121,7 @@ def para_navegador(asm, amostra: dict, passo: int = 2) -> dict | None:
     corta o peso pela metade. O traço inteiro de um par são ~108 KB comprimidos
     (medido); com passo 2, metade disso.
     """
-    if asm is None or len(asm.reads) != 2:
+    if asm is None or len(asm.reads) < 2:
         return None
 
     leituras, brutos, topos = [], {}, {}
