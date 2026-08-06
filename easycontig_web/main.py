@@ -9,6 +9,7 @@ outro processo — é a diferença entre aguentar 100 pessoas e cair com 20
 from __future__ import annotations
 
 import os
+import sys
 import secrets
 import shutil
 from pathlib import Path
@@ -37,6 +38,16 @@ if os.environ.get("EASYCONTIG_PRODUCAO") == "1":
         raise RuntimeError(
             "EASYCONTIG_PRODUCAO=1 e a configuração não está pronta:\n  - "
             + "\n  - ".join(_problemas))
+
+# ⚠️ O `GOOGLE_CLIENT_ID` errado é MUDO deste lado: `google_configurado()` aceita
+# qualquer texto, e o erro só aparece na página do Google (`401 invalid_client`,
+# "The OAuth client was not found") depois de a pessoa escolher a conta. Aviso,
+# não trava: quem sabe se o cliente existe é o Google, e recusar subir por causa
+# de um formato seria trocar um palpite por outro.
+if os.environ.get("EASYCONTIG_AUTH", "dev").lower() == "google":
+    _queixa = auth.queixa_do_client_id()
+    if _queixa:
+        print("\n  ⚠️  " + _queixa + "\n", file=sys.stderr, flush=True)
 
 fila.criar_esquema(cfg.sqlite_path)
 perfil.criar_esquema(cfg.sqlite_path)

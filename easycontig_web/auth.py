@@ -28,6 +28,7 @@ O que ele faz, e por quê:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
@@ -52,6 +53,41 @@ def modo() -> str:
 def google_configurado() -> bool:
     return bool(os.environ.get("GOOGLE_CLIENT_ID")
                 and os.environ.get("GOOGLE_CLIENT_SECRET"))
+
+
+# Um ID de cliente do Google é `<números>-<letras>.apps.googleusercontent.com`.
+FORMA_CLIENT_ID = re.compile(r"^\d+-[a-z0-9_]+\.apps\.googleusercontent\.com$")
+
+
+def queixa_do_client_id(valor: str | None = None) -> str:
+    """Diz o que há de errado com o `GOOGLE_CLIENT_ID`, ou `""` se está bem.
+
+    Existe porque o erro do outro lado é mudo: um valor que não corresponde a
+    cliente nenhum só se revela na página do Google, como
+    `401 invalid_client — The OAuth client was not found`, depois de a pessoa já
+    ter escolhido a conta. Nada no nosso lado protesta: `google_configurado()`
+    aceita qualquer texto não vazio.
+
+    Aconteceu em 2026-08-06 com o autor. Os três casos abaixo são os que dá para
+    ver **sem falar com o Google**, e cobrem o que de fato acontece: reticências
+    de exemplo copiadas da receita, aspas vindas do `.env`, e espaço de
+    copiar-e-colar. Não é validação de credencial — o Google segue sendo o único
+    que sabe se o cliente existe."""
+    bruto = os.environ.get("GOOGLE_CLIENT_ID", "") if valor is None else valor
+    if not bruto:
+        return ""                                  # ausente é outro assunto
+    if bruto != bruto.strip():
+        return ("GOOGLE_CLIENT_ID tem espaço ou quebra de linha nas pontas — "
+                "o Google compara a string inteira")
+    if bruto.strip('"\'') != bruto:
+        return ("GOOGLE_CLIENT_ID veio com aspas em volta; no `.env` o valor "
+                "vai cru, sem aspas")
+    if not FORMA_CLIENT_ID.match(bruto):
+        return (f"GOOGLE_CLIENT_ID não tem a forma de um ID do Google "
+                f"(`<números>-<letras>.apps.googleusercontent.com`): {bruto!r}. "
+                "Se ainda tem `…` ou `<>`, é o exemplo da receita, não a "
+                "credencial")
+    return ""
 
 
 def dominio_ok(email: str, dominio_permitido: str) -> bool:

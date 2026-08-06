@@ -88,3 +88,42 @@ def test_um_tld_na_lista_abre_o_pais_inteiro():
     """Não é defeito, é consequência — mas quem escrever `br` no `.env` precisa
     saber que acabou de liberar qualquer endereço brasileiro."""
     assert dominio_ok("alguem@empresa-privada.br", "br")
+
+
+# ── o GOOGLE_CLIENT_ID errado é mudo deste lado ──────────────────────────────
+# 2026-08-06: o autor cadastrou o cliente no console e o Google respondeu
+# `401 invalid_client — The OAuth client was not found`, depois de ele já ter
+# escolhido a conta. Nada no nosso lado protestou: `google_configurado()` aceita
+# qualquer texto não vazio, inclusive as reticências da receita do `docs/`.
+from easycontig_web.auth import queixa_do_client_id
+
+
+def test_id_bem_formado_nao_gera_queixa():
+    assert queixa_do_client_id(
+        "123456789012-ab1cd2ef3gh4ij5kl6mn7op8qr9st0uv.apps.googleusercontent.com") == ""
+
+
+def test_ausente_nao_gera_queixa():
+    """Faltar é outro assunto — quem trata é `google_configurado()`."""
+    assert queixa_do_client_id("") == ""
+
+
+def test_as_reticencias_da_receita_sao_pegas():
+    """O caso real: a receita do docs/ traz `…apps.googleusercontent.com` como
+    exemplo, e rodar aquilo literalmente dá exatamente `invalid_client`."""
+    q = queixa_do_client_id("…apps.googleusercontent.com")
+    assert q and "exemplo da receita" in q
+
+
+def test_aspas_vindas_do_env_sao_pegas():
+    q = queixa_do_client_id('"123-abc.apps.googleusercontent.com"')
+    assert q and "aspas" in q
+
+
+def test_espaco_de_copiar_e_colar_e_pego():
+    q = queixa_do_client_id(" 123-abc.apps.googleusercontent.com\n")
+    assert q and "espaço" in q
+
+
+def test_id_de_outro_provedor_nao_passa_por_google():
+    assert queixa_do_client_id("meu-app-id") != ""

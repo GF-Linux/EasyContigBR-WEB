@@ -130,8 +130,8 @@ Copiar o **ID do cliente** e a **chave secreta** ao final.
 EASYCONTIG_PRODUCAO=1
 EASYCONTIG_URL_BASE=https://easycontigbr.com.br
 EASYCONTIG_AUTH=google
-GOOGLE_CLIENT_ID=…apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=…
+GOOGLE_CLIENT_ID=<COLE AQUI>.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=<COLE AQUI>
 EASYCONTIG_SECRET_KEY=<saída de `python3 -c "import secrets;print(secrets.token_urlsafe(48))"`>
 EASYCONTIG_HTTPS_ONLY=1
 
@@ -218,13 +218,34 @@ exercitado — só do `localhost` cadastrado em §4.2:
 cd ~/Desktop/easycontig-web
 set -a; . ./.env; set +a
 EASYCONTIG_AUTH=google \
-GOOGLE_CLIENT_ID=…  GOOGLE_CLIENT_SECRET=… \
+GOOGLE_CLIENT_ID=<COLE AQUI>.apps.googleusercontent.com \
+GOOGLE_CLIENT_SECRET=<COLE AQUI> \
 EASYCONTIG_URL_BASE=http://localhost:8099 \
   .venv/bin/uvicorn easycontig_web.main:app --port 8099
 ```
 
 Abrir <http://localhost:8099/entrar> e clicar em **Entrar com Google**. Sem
 `EASYCONTIG_PRODUCAO=1`, porque em `localhost` não há HTTPS.
+
+### Quando o Google responde `401 invalid_client`
+
+`Acesso bloqueado: erro de autorização — The OAuth client was not found`
+aconteceu na primeira tentativa, em 2026-08-06. O erro é **da página do Google,
+antes de qualquer código nosso**, e quer dizer uma coisa só: a string enviada em
+`client_id` não corresponde a cliente nenhum lá. **Não tem relação com a conta**
+— por isso falha igual em qualquer e-mail — nem com `EASYCONTIG_DOMINIO`.
+
+Em ordem de probabilidade:
+
+1. **O `<COLE AQUI>` desta receita foi rodado literalmente.** Desde então o
+   servidor reclama disso no arranque (`queixa_do_client_id`).
+2. **Aspas ou espaço** vindos do `.env` — o Google compara a string inteira.
+   Conferir com `printf '[%s]\n' "$GOOGLE_CLIENT_ID"`, que mostra as pontas.
+3. **O cliente é de outro tipo.** Tem de ser **Aplicativo da Web**; "App para
+   computador"/"Android" geram IDs que não servem para este fluxo.
+4. **Projeto errado** no console — o seletor no topo da página.
+5. **Recém-criado.** Alguns minutos até valer. Se as quatro acima estiverem
+   descartadas, esperar e repetir.
 
 O que isso prova, e que nenhum teste prova: que o `state` volta e confere, que o
 Google devolve `email_verified`, e que o `EASYCONTIG_DOMINIO` recusa conta de
