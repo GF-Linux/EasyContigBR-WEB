@@ -93,22 +93,40 @@
   }
 
   // ── consenso e mismatches: mesma regra do núcleo ──────────────────────────
-  function consenso() {
-    const out = [];
+  /* Consenso e discordâncias varrem o contig INTEIRO (656 colunas na amostra
+     real), e eram recalculados a cada interação — quatro passadas completas por
+     clique, uma alocação de array por coluna, para responder a uma pergunta que
+     só muda quando alguém EDITA uma base. Agora são calculados uma vez e
+     guardados; `invalidar()` é chamado de todo caminho que mexe em `est.seq`.
+
+     Uma passada só serve às duas respostas: elas leem exatamente as mesmas
+     colunas. */
+  let _cache = null;
+
+  function invalidar() { _cache = null; }
+
+  function calcular() {
+    if (_cache) return _cache;
+    const cons = [], mm = [];
+    const n = est.seq.length;
     for (let c = 0; c < est.d.largura; c++) {
-      const col = est.seq.map(s => s[c]).filter(b => b && b !== "-" && b !== "N");
-      out.push(col.length ? col[0] : "-");
+      let primeira = null, divergiu = false, vistas = 0;
+      for (let i = 0; i < n; i++) {
+        const b = est.seq[i][c];
+        if (!b || b === "-" || b === "N") continue;
+        vistas++;
+        if (primeira === null) primeira = b;
+        else if (b !== primeira) divergiu = true;
+      }
+      cons.push(primeira === null ? "-" : primeira);
+      if (vistas > 1 && divergiu) mm.push(c);
     }
-    return out;
+    _cache = { cons, mm, mmSet: new Set(mm) };
+    return _cache;
   }
-  function mismatches() {
-    const m = [];
-    for (let c = 0; c < est.d.largura; c++) {
-      const col = est.seq.map(s => s[c]).filter(b => b && b !== "-" && b !== "N");
-      if (col.length > 1 && col.some(b => b !== col[0])) m.push(c);
-    }
-    return m;
-  }
+
+  function consenso() { return calcular().cons; }
+  function mismatches() { return calcular().mm; }
   const cls = b => b === "-" || b === "." ? "bgap" : "b" + b.toUpperCase();
 
   // ── desenho ───────────────────────────────────────────────────────────────
@@ -129,8 +147,8 @@
           </span>
         </div>
         <div class="tela-tr">
-          <svg id="svg-${i}" preserveAspectRatio="none"
-               aria-label="Cromatograma de ${esc(l.nome)}"></svg>
+          <canvas id="cv-${i}" class="tr-cv"
+                  aria-label="Cromatograma de ${esc(l.nome)}"></canvas>
           <div class="bases-lin" id="bases-${i}"></div>
         </div>
       </section>`).join("");
@@ -162,28 +180,89 @@
     return [Math.max(0, i), Math.min(est.d.largura, Math.max(0, i) + JAN)];
   }
 
+  /* ── o alinhamento REAPROVEITA os nós ──────────────────────────────────────
+     Antes esta função remontava o `innerHTML` inteiro a cada seleção. Medido no
+     desktop: **3,0 ms** só para reescrever o alinhamento, mais 1,6 ms por faixa
+     de letras — contra 0,1 ms do traço depois que ele virou canvas. Ou seja, o
+     custo tinha migrado do desenho para o TEXTO, e insistir no traço não
+     resolveria mais nada.
+
+     A quantidade de colunas visíveis é fixa (JAN), então os nós podem ser
+     criados uma vez e só atualizados: `textContent` e `className` em vez de
+     analisar marcação e construir árvore de novo. O clique passa a ser tratado
+     por delegação, num ouvinte só, em vez de um por span. */
+  let alnPronto = false;
+  const alnCel = [];        // [linha][coluna] → span
+
+  function montarAln() {
+    const el = $("#aln");
+    const n = JAN;
+    el.innerHTML = "";
+    alnCel.length = 0;
+    const faz = (rotulo, classeRot, guardar) => {
+      const div = document.createElement("div");
+      div.className = "aln-l";
+      const r = document.createElement("span");
+      r.className = "aln-n" + (classeRot ? " " + classeRot : "");
+      r.textContent = rotulo;
+      const corpo = document.createElement("span");
+      if (classeRot === "regua") corpo.className = "regua";
+      const linha = [];
+      for (let k = 0; k < n; k++) {
+        const s = document.createElement("span");
+        s.className = "b";
+        corpo.appendChild(s);
+        linha.push(s);
+      }
+      div.append(r, corpo);
+      el.appendChild(div);
+      if (guardar) alnCel.push(linha); else alnCel.push(linha);
+      return linha;
+    };
+    est.d.leituras.forEach(l =>
+      faz((l.sentido === "F" ? "→ " : "← ") + l.nome, "", true));
+    faz("régua (×10)", "regua", true);
+    faz("Contig", "forte", true);
+
+    // Delegação: um ouvinte para o bloco inteiro, e não um por célula.
+    el.onclick = ev => {
+      const alvo = ev.target.closest(".b[data-col]");
+      if (alvo) selecionar(+alvo.dataset.col);
+    };
+    alnPronto = true;
+  }
+
   function desenhaAln() {
-    const [i0, i1] = janela(), mm = mismatches(), c = consenso();
-    const linha = (arr, extra) => arr.slice(i0, i1).map((b, k) => {
-      const col = i0 + k;
-      return `<span class="b ${cls(b)}${mm.includes(col) ? " mm" : ""}`
-        + `${est.sel === col ? " sel" : ""}${b === "-" ? " morta" : ""}"`
-        + ` data-col="${col}">${b === "-" ? "·" : esc(b)}</span>`;
-    }).join("");
-    let h = "";
-    est.d.leituras.forEach((l, i) => {
-      h += `<div class="aln-l"><span class="aln-n">${l.sentido === "F" ? "→" : "←"} `
-         + `${esc(l.nome)}</span><span>${linha(est.seq[i])}</span></div>`;
-    });
-    h += `<div class="aln-l"><span class="aln-n regua">régua (×10)</span><span class="regua">`
-       + Array.from({ length: i1 - i0 }, (_, k) =>
-           `<span class="b">${(i0 + k + 1) % 10 === 0 ? "|" : "·"}</span>`).join("")
-       + `</span></div>`;
-    h += `<div class="aln-l"><span class="aln-n forte">Contig</span><span>${linha(c)}</span></div>`;
-    const el = $("#aln"); el.innerHTML = h;
-    el.querySelectorAll(".b[data-col]").forEach(s =>
-      s.onclick = () => selecionar(+s.dataset.col));
-    $("#m-mm").textContent = mm.length;
+    if (!alnPronto) montarAln();
+    const [i0, i1] = janela(), mm = new Set(mismatches()), c = consenso();
+    const n = i1 - i0;
+    const linhas = est.d.leituras.length;
+
+    const pinta = (celulas, arr) => {
+      for (let k = 0; k < celulas.length; k++) {
+        const s = celulas[k];
+        if (k >= n) { s.style.display = "none"; continue; }
+        s.style.display = "";
+        const col = i0 + k, b = arr[col];
+        s.textContent = b === "-" ? "·" : (b === undefined ? " " : b);
+        s.className = "b " + cls(b)
+          + (mm.has(col) ? " mm" : "")
+          + (est.sel === col ? " sel" : "")
+          + (b === "-" ? " morta" : "");
+        s.dataset.col = col;
+      }
+    };
+    for (let i = 0; i < linhas; i++) pinta(alnCel[i], est.seq[i]);
+
+    const regua = alnCel[linhas];
+    for (let k = 0; k < regua.length; k++) {
+      if (k >= n) { regua[k].style.display = "none"; continue; }
+      regua[k].style.display = "";
+      regua[k].textContent = (i0 + k + 1) % 10 === 0 ? "|" : "·";
+    }
+    pinta(alnCel[linhas + 1], c);
+
+    $("#m-mm").textContent = mm.size;
     $("#q-ed").textContent = est.removidas;
   }
 
@@ -198,90 +277,137 @@
   // continuava idêntica.
   function montarTracos() {
     est.d.leituras.forEach((l, i) => {
-      const svg = document.getElementById("svg-" + i);
-      if (!svg) return;
-      svg.innerHTML = '<g class="faixas"></g><g class="linhas"></g>';
-      svg.onclick = ev => {
-        const r = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal;
-        selecionar(Math.round(vb.x + (ev.clientX - r.left) / r.width * vb.width));
+      const cv = document.getElementById("cv-" + i);
+      if (!cv) return;
+      cv.onclick = ev => {
+        const r = cv.getBoundingClientRect(), [i0, i1] = janela();
+        selecionar(Math.round(i0 + (ev.clientX - r.left) / r.width * (i1 - i0)));
       };
+    });
+    ajustarCanvas();
+  }
+
+  /* ── por que CANVAS, e não SVG ──────────────────────────────────────────────
+     O traço era SVG e cada mudança de janela reescrevia `innerHTML` de quatro
+     polilinhas por leitura. Medido no desktop: **9,0 ms de trabalho síncrono**
+     por clique — analisar a marcação, recalcular estilo e refazer o layout de
+     nós que o navegador acabara de criar. No Deck isso multiplica, e é o
+     "parece 30 quadros por segundo" relatado por quem usa.
+
+     ⚠️ Antes de trocar, uma medição minha estava ERRADA e quase virou conclusão:
+     eu cronometrava esperando dois quadros, e o navegador em modo headless roda
+     a 30 Hz — então "não fazer nada" também dava 33 ms. O piso do arnês não é
+     custo do código. O número que vale é o trabalho SÍNCRONO acima.
+
+     Canvas é desenho imediato: sem nó, sem estilo, sem layout. O mesmo traço
+     custa uma passada de `lineTo`. E a amplitude, que no SVG obrigava a
+     recalcular todos os pontos em texto, vira uma multiplicação no desenho. */
+  const ALTURA_LOGICA = 112;          // mesmo sistema de coordenadas de antes
+
+  function ajustarCanvas() {
+    // `devicePixelRatio`: sem isto o traço sai borrado em tela HiDPI — e o Deck
+    // ligado a uma TV 4K é exatamente esse caso.
+    const dpr = window.devicePixelRatio || 1;
+    est.d.leituras.forEach((_l, i) => {
+      const cv = document.getElementById("cv-" + i);
+      if (!cv) return;
+      const r = cv.getBoundingClientRect();
+      const w = Math.max(1, Math.round(r.width * dpr));
+      const h = Math.max(1, Math.round(r.height * dpr));
+      if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
     });
   }
 
-  /* Recorta os pontos da JANELA visível. É a correção que resolveu o atraso.
-     Duas tentativas antes desta não ajudaram, e vale registrar por quê:
-       — desenhar a polilinha uma vez só e trocar o viewBox: 33 → 36 ms, nada.
-         Reescrever o atributo não era o custo.
-       — o DOM do alinhamento: medido em 0,4 ms, não era ele.
-     O custo era RASTERIZAR: 16.940 pontos por cromatograma continuavam no
-     documento e eram repintados inteiros a cada mudança de janela, mesmo os
-     ~95% fora da vista. Recortando, sobram ~500 por canal. */
-  function recorte(plano, i0, i1) {
-    const partes = [];
-    let atual = [];
-    for (let k = 0; k < plano.length; k += 2) {
-      const x = plano[k];
-      if (x === null) {                       // quebra vinda do gap
-        if (atual.length > 1) partes.push(atual.join(" "));
-        atual = [];
-        continue;
-      }
-      if (x < i0 - 1 || x > i1 + 1) {
-        if (atual.length > 1) partes.push(atual.join(" "));
-        atual = [];
-        continue;
-      }
-      // y = 100 na base; ampliar é puxar o pico para cima sem sair do quadro
-      const y = plano[k + 1];
-      atual.push(x + "," + (amp === 1 ? y : Math.max(6, 100 - (100 - y) * amp).toFixed(1)));
+  const COR = { A: "#3FB950", C: "#58A6FF", G: "#C6CBE0", T: "#F0524A" };
+
+  function desenhaUmTraco(cv, leitura, i0, i1, mm) {
+    const ctx = cv.getContext("2d");
+    const W = cv.width, H = cv.height;
+    const cols = i1 - i0;
+    const px = c => (c - i0) / cols * W;            // coluna → pixel
+    const py = y => y / ALTURA_LOGICA * H;          // y lógico → pixel
+
+    ctx.clearRect(0, 0, W, H);
+
+    // faixas: discordância e coluna escolhida, atrás do traço
+    ctx.fillStyle = "rgba(240,82,74,.13)";
+    for (const c of mm) {
+      if (c >= i0 && c < i1) ctx.fillRect(px(c - .5), 0, W / cols, py(104));
     }
-    if (atual.length > 1) partes.push(atual.join(" "));
-    return partes;
+    if (est.sel !== null && est.sel >= i0 && est.sel < i1) {
+      ctx.fillStyle = "rgba(145,132,217,.20)";
+      ctx.fillRect(px(est.sel - .5), 0, W / cols, py(104));
+      ctx.strokeStyle = "#9184D9";
+      ctx.lineWidth = Math.max(1, (window.devicePixelRatio || 1));
+      ctx.strokeRect(px(est.sel - .5), 0, W / cols, py(104));
+    }
+
+    ctx.lineWidth = 1.25 * (window.devicePixelRatio || 1);
+    ctx.lineJoin = "round";
+    for (const ch of "ACGT") {
+      const plano = leitura.canais[ch] || [];
+      ctx.beginPath();
+      ctx.strokeStyle = COR[ch];
+      let caneta = false;
+      for (let k = 0; k < plano.length; k += 2) {
+        const x = plano[k];
+        if (x === null) { caneta = false; continue; }     // quebra do gap
+        if (x < i0 - 1 || x > i1 + 1) { caneta = false; continue; }
+        // y=100 é a base; ampliar puxa o pico para cima sem sair do quadro
+        const yl = plano[k + 1];
+        const y = amp === 1 ? yl : Math.max(6, 100 - (100 - yl) * amp);
+        if (caneta) ctx.lineTo(px(x), py(y));
+        else { ctx.moveTo(px(x), py(y)); caneta = true; }
+      }
+      ctx.stroke();
+    }
   }
 
   function desenhaTracos() {
     const [i0, i1] = janela(), mm = mismatches();
     est.d.leituras.forEach((l, i) => {
-      const svg = document.getElementById("svg-" + i);
-      if (!svg) return;
-      svg.setAttribute("viewBox", `${i0} 0 ${i1 - i0} 112`);
+      const cv = document.getElementById("cv-" + i);
+      if (!cv) return;
+      desenhaUmTraco(cv, l, i0, i1, mm);
 
-      svg.querySelector(".linhas").innerHTML = "ACGT".split("").map(ch =>
-        recorte(l.canais[ch] || [], i0, i1)
-          .map(pt => `<polyline class="tr ${ch}" points="${pt}"/>`).join("")
-      ).join("");
-
-      let s = mm.filter(c => c >= i0 && c < i1)
-        .map(c => `<rect class="faixa-mm" x="${c - .5}" y="0" width="1" height="104"/>`)
-        .join("");
-      if (est.sel !== null && est.sel >= i0 && est.sel < i1) {
-        s += `<rect class="faixa-sel" x="${est.sel - .5}" y="0" width="1" height="104"`
-           + ` vector-effect="non-scaling-stroke"/>`;
-      }
-      svg.querySelector(".faixas").innerHTML = s;
-
-      // As letras ficam FORA do SVG: com `preserveAspectRatio="none"` o eixo x é
-      // esticado ~13× e cada letra virava um traço horizontal ilegível.
+      // As letras ficam FORA do desenho, em DOM: precisam ser clicáveis, e pixel
+      // no canvas não é. Mas os nós são REAPROVEITADOS pelo mesmo motivo do
+      // alinhamento — reescrever `innerHTML` aqui custava 1,6 ms por faixa.
       const faixa = document.getElementById("bases-" + i);
-      faixa.innerHTML = l.bases.filter(([c]) => c >= i0 && c < i1)
-        .map(([col, base]) => {
-          const morta = est.seq[i][Math.round(col)] === "-";
-          return `<span class="bl ${morta ? "morta " : ""}${cls(base)}"`
-               + ` style="left:${(col - i0 + .5) / (i1 - i0) * 100}%"`
-               + ` data-col="${Math.round(col)}">${morta ? "·" : esc(base)}</span>`;
-        }).join("");
-      faixa.querySelectorAll(".bl").forEach(e =>
-        e.onclick = () => selecionar(+e.dataset.col));
+      const visiveis = l.bases.filter(([c]) => c >= i0 && c < i1);
+      if (!faixa._cel) {
+        faixa._cel = [];
+        faixa.onclick = ev => {
+          const alvo = ev.target.closest(".bl[data-col]");
+          if (alvo) selecionar(+alvo.dataset.col);
+        };
+      }
+      while (faixa._cel.length < visiveis.length) {
+        const s = document.createElement("span");
+        s.className = "bl";
+        faixa.appendChild(s);
+        faixa._cel.push(s);
+      }
+      faixa._cel.forEach((s, k) => {
+        if (k >= visiveis.length) { s.style.display = "none"; return; }
+        const [col, base] = visiveis[k];
+        const morta = est.seq[i][Math.round(col)] === "-";
+        s.style.display = "";
+        s.style.left = ((col - i0 + .5) / (i1 - i0) * 100) + "%";
+        s.className = "bl " + (morta ? "morta " : "") + cls(base);
+        s.textContent = morta ? "·" : base;
+        s.dataset.col = Math.round(col);
+      });
 
       // Painel vazio lê como "não montou", e é falso: a leitura simplesmente
       // não alcança esta região do contig.
       const nada = !l.bases.some(([c]) => c >= i0 && c < i1);
-      let aviso = svg.parentElement.querySelector(".fora");
+      let aviso = cv.parentElement.querySelector(".fora");
       if (nada && !aviso) {
         aviso = document.createElement("div");
         aviso.className = "fora";
         aviso.textContent = "esta leitura não cobre esta região do contig";
-        svg.parentElement.appendChild(aviso);
+        cv.parentElement.appendChild(aviso);
       } else if (!nada && aviso) {
         aviso.remove();
       }
@@ -315,6 +441,7 @@
         est.seq[i][est.sel] = "-"; est.removidas++;
       }
     });
+    invalidar();                  // a sequência mudou: consenso/mismatch caem
     est.exportado = false;
     guardarRascunho();
     selecionar(est.sel);
@@ -322,6 +449,7 @@
   $("#b-undo").onclick = () => {
     const s = est.pilha.pop(); if (!s) return;
     est.seq = s.seq; est.removidas = s.rem; est.exportado = false;
+    invalidar();                  // desfazer também mexe em est.seq
     $("#b-undo").disabled = !est.pilha.length;
     guardarRascunho();
     selecionar(est.sel === null ? 0 : est.sel);
@@ -393,15 +521,56 @@
   // A ponta da leitura tem sinal fraco de verdade, e no zoom natural ela some.
   // Ampliar é o que o desktop chama de "Amp 1×": não muda o dado, muda a lente —
   // e o rótulo diz o fator, para ninguém ler pico ampliado como pico alto.
+  //
+  // Vai de 0,5× a 16× em passos de raiz de 2 — no SVG cada mudança obrigava a
+  // reescrever todos os pontos em texto, e por isso os passos eram poucos e só
+  // para cima. No canvas é uma multiplicação no desenho, então o passo pode ser
+  // fino e nos dois sentidos, que é como se usa na bancada.
+  const AMP_MIN = 0.5, AMP_MAX = 16, PASSO = Math.SQRT2;
   let amp = 1;
-  const btAmp = document.getElementById("b-amp");
-  if (btAmp) {
-    btAmp.onclick = () => {
-      amp = amp >= 8 ? 1 : amp * 2;
-      btAmp.textContent = "amp " + amp + "×";
-      render();
-    };
+  const vAmp = document.getElementById("b-amp-valor");
+
+  function mostraAmp() {
+    if (vAmp) vAmp.textContent = amp.toFixed(1).replace(".", ",") + "×";
+    const menos = document.getElementById("b-amp-menos");
+    const mais = document.getElementById("b-amp-mais");
+    // Botão que não tem mais para onde ir fica desabilitado em vez de não
+    // responder: clicar e nada acontecer lê-se como travado.
+    if (menos) menos.disabled = amp <= AMP_MIN + 1e-9;
+    if (mais) mais.disabled = amp >= AMP_MAX - 1e-9;
   }
+
+  function mudaAmp(fator) {
+    const novo = Math.min(AMP_MAX, Math.max(AMP_MIN, amp * fator));
+    if (Math.abs(novo - amp) < 1e-9) return;
+    amp = novo;
+    mostraAmp();
+    desenhaTracos();          // só o traço muda; alinhamento e números não
+  }
+
+  const btMenos = document.getElementById("b-amp-menos");
+  const btMais = document.getElementById("b-amp-mais");
+  if (btMenos) btMenos.onclick = () => mudaAmp(1 / PASSO);
+  if (btMais) btMais.onclick = () => mudaAmp(PASSO);
+  mostraAmp();
+
+  // A roda com Ctrl sobre o traço também ajusta — é o gesto que quem vem de
+  // outro programa de cromatograma tenta primeiro. `passive:false` porque
+  // precisamos impedir o zoom da página.
+  document.addEventListener("wheel", ev => {
+    if (!ev.ctrlKey) return;
+    const alvo = ev.target.closest && ev.target.closest(".tela-tr");
+    if (!alvo) return;
+    ev.preventDefault();
+    mudaAmp(ev.deltaY < 0 ? PASSO : 1 / PASSO);
+  }, { passive: false });
+
+  // O canvas depende do tamanho em pixels: mudou a janela, remede e redesenha.
+  let redim;
+  window.addEventListener("resize", () => {
+    clearTimeout(redim);
+    redim = setTimeout(() => { ajustarCanvas(); desenhaTracos(); }, 120);
+  });
 
   // Sair com edição pendente perde trabalho em silêncio — o mesmo gênero de
   // defeito das "33 de 40 amostras". O aviso do navegador é a única trava real.

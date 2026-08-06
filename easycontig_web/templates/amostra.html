@@ -28,7 +28,7 @@
   min-height:7.5rem; overflow:hidden }
 #cromatogramas .tela-tr{ flex:1 1 auto; display:flex; flex-direction:column;
   min-height:0 }
-#cromatogramas .tela-tr svg{ flex:1 1 auto; min-height:0 }
+#cromatogramas .tela-tr canvas.tr-cv{ flex:1 1 auto; min-height:0; height:auto }
 
 .bloco{ background:var(--painel); border:1px solid var(--linha); border-radius:10px }
 .bl-topo{ display:flex; align-items:center; gap:10px; padding:8px 13px;
@@ -63,23 +63,29 @@
   font-size:10px }
 .leg s{ text-decoration:none; display:flex; align-items:center; gap:4px }
 .leg i{ width:7px; height:7px; border-radius:50%; display:block }
+/* O traço é CANVAS, não SVG (2026-08-06). Em SVG cada mudança de janela
+   reescrevia quatro polilinhas por leitura e custava ~9 ms de trabalho síncrono
+   por clique no desktop — no Deck, o "parece 30 quadros por segundo" relatado.
+   As cores das quatro bases moram no JS (`COR`), porque canvas não lê CSS;
+   são as mesmas variáveis da paleta, copiadas com o nome ao lado. */
 .tela-tr{ background:#0d0e16; position:relative; overflow:hidden }
-.tela-tr svg{ display:block; width:100%; height:132px }
-.tr{ fill:none; stroke-width:1.25; vector-effect:non-scaling-stroke }
-.tr.A{ stroke:var(--verde) } .tr.C{ stroke:var(--azul) }
-.tr.G{ stroke:#C6CBE0 } .tr.T{ stroke:var(--vermelho) }
-.faixa-sel{ fill:rgba(145,132,217,.20); stroke:var(--violeta); stroke-width:1 }
-.faixa-mm{ fill:rgba(240,82,74,.13) }
-.tela-tr svg{ display:block; width:100%; height:112px }
-.tela-tr{ background:#0d0e16; position:relative; overflow:hidden }
-/* Faixa das letras: fora do SVG, porque lá dentro o eixo x é esticado e a
-   letra vira um traço. Em % o alinhamento com o pico continua exato. */
+.tela-tr canvas.tr-cv{ display:block; width:100%; height:112px; cursor:crosshair }
+/* Faixa das letras: fora do desenho, porque no traço o eixo x é esticado e a
+   letra viraria um risco. Em % o alinhamento com o pico continua exato. */
 .bases-lin{ position:relative; height:19px; border-top:1px solid var(--linha) }
 .bases-lin .bl{ position:absolute; top:2px; transform:translateX(-50%);
   font-family:var(--mono); font-size:11px; cursor:pointer; padding:0 1px;
   border-radius:2px }
 .bases-lin .bl:hover{ background:var(--linha-forte) }
 .bases-lin .bl.morta{ opacity:.4; text-decoration:line-through }
+/* Amplitude: dois botões e o fator entre eles, numa caixa só — o fator fica à
+   vista porque pico ampliado não pode ser lido como pico alto. */
+.amp{ display:inline-flex; align-items:stretch; border:1px solid var(--linha-forte);
+  border-radius:8px; overflow:hidden }
+.amp .ac{ border:0; border-radius:0; min-width:30px; font-size:14px; line-height:1 }
+.amp b{ display:grid; place-items:center; min-width:52px; padding:0 .35rem;
+  font-family:var(--mono); font-size:11.5px; color:var(--apoio);
+  border-left:1px solid var(--linha-forte); border-right:1px solid var(--linha-forte) }
 .vazio-tr{ padding:1.6rem 1rem; text-align:center; color:var(--fraco); font-size:12px }
 .fora{ position:absolute; inset:0; display:grid; place-items:center; color:var(--fraco);
   font-size:11.5px; pointer-events:none; background:rgba(13,14,22,.6) }
@@ -213,8 +219,16 @@ a.ac:hover{ text-decoration:none }
       {# Amplitude: a ponta da leitura tem sinal fraco de verdade e some no zoom
          natural. Ampliar não muda o dado, muda a lente — o rótulo diz o fator
          para ninguém ler pico ampliado como pico alto. #}
-      <button class="ac" id="b-amp" type="button" title="Ampliar o traço (não muda o dado)"
-        >amp 1×</button>
+      {# Dois sentidos. Era um botão só, ciclando 1→2→4→8 e voltando a 1: para
+         BAIXAR o pico era preciso dar a volta inteira, então na prática não
+         dava para diminuir — que é metade do que a bancada precisa. #}
+      <span class="amp" role="group" aria-label="Amplitude do traço">
+        <button class="ac" id="b-amp-menos" type="button"
+                title="Diminuir os picos — muda a lente, não o dado">−</button>
+        <b id="b-amp-valor" title="Fator de amplitude do desenho">1,0×</b>
+        <button class="ac" id="b-amp-mais" type="button"
+                title="Aumentar os picos — muda a lente, não o dado">+</button>
+      </span>
     </div>
   </div>
 

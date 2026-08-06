@@ -27,13 +27,33 @@
   border-color:rgba(145,132,217,.45); color:var(--violeta-claro) }
 
 /* Endereços de rede: só o ícone, como pedido. O nome vai no `title` e no
-   `aria-label` — ícone sozinho não diz nada a quem usa leitor de tela. */
-.redes{ display:flex; gap:.45rem; flex-wrap:wrap; margin-top:.85rem }
-.rede{ width:32px; height:32px; display:grid; place-items:center; border-radius:8px;
+   `aria-label` — ícone sozinho não diz nada a quem usa leitor de tela.
+   Fica na COLUNA DA DIREITA do cabeçalho: era ali que sobrava o vazio, e o
+   texto ao lado deixa de ser uma tira estreita com meia tela em branco. */
+.lado{ margin-left:auto; display:flex; flex-direction:column; align-items:flex-end;
+  gap:.9rem; flex:0 0 auto }
+
+/* O TEXTO EM DUAS COLUNAS QUANDO HÁ TELA. Encher 1 800 px com uma linha só
+   daria ~200 caracteres por linha, que ninguém lê — e deixar em 74ch deixava
+   metade da caixa vazia, que foi a queixa. Duas colunas resolvem os dois: a
+   medida de leitura continua a mesma e o espaço é ocupado. Abaixo de 1 400 px
+   volta a ser uma coluna sozinha, porque aí não sobra espaço para dividir. */
+.cabeca .bio{ margin:.7rem 0 0; max-width:74ch }
+@media(min-width:1400px){
+  .cabeca .bio{ max-width:none; columns:2; column-gap:2.6rem;
+    column-rule:1px solid var(--linha) } }
+/* `auto-fit` com mínimo fixo: cresce em colunas conforme entram endereços, e
+   quebra sozinho quando a caixa aperta — sem número de colunas escrito à mão. */
+.redes{ display:grid; grid-template-columns:repeat(auto-fit,minmax(44px,44px));
+  gap:.5rem; justify-content:end; max-width:15rem }
+.rede{ width:44px; height:44px; display:grid; place-items:center; border-radius:10px;
   border:1px solid var(--linha-forte); color:var(--apoio); background:var(--interno) }
 .rede:hover{ color:var(--violeta-claro); border-color:var(--violeta);
-  text-decoration:none }
-.rede svg{ width:17px; height:17px; display:block; fill:currentColor }
+  background:var(--selecao); text-decoration:none }
+.rede svg{ width:22px; height:22px; display:block; fill:currentColor }
+@media(max-width:760px){
+  .lado{ margin-left:0; align-items:flex-start; width:100% }
+  .redes{ justify-content:start } }
 
 .numeros{ display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-bottom:12px }
 @media(max-width:760px){ .numeros{ grid-template-columns:repeat(2,1fr) } }
@@ -44,10 +64,21 @@
 .num s{ display:block; text-decoration:none; font-family:var(--mono); font-size:8.5px;
   letter-spacing:.1em; text-transform:uppercase; color:var(--fraco); margin-top:3px }
 
-.colunas{ display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:12px }
-@media(max-width:900px){ .colunas{ grid-template-columns:1fr } }
+/* As duas colunas viram do MESMO tamanho e cada uma é uma pilha que se estica:
+   a de "Relatórios gerados" parava na altura do próprio conteúdo e deixava um
+   rasgo de vazio embaixo enquanto a coluna vizinha descia bem mais. */
+.colunas{ display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);
+  gap:12px; align-items:stretch }
+.colunas > *{ display:flex; flex-direction:column; min-width:0 }
+/* O último bloco de cada coluna cresce para encostar no pé da outra. */
+.colunas > * > .bloco:last-child{ flex:1 1 auto }
+@media(max-width:900px){ .colunas{ grid-template-columns:1fr }
+  .colunas > * > .bloco:last-child{ flex:0 0 auto } }
 .bloco{ background:var(--painel); border:1px solid var(--linha); border-radius:11px;
   margin-bottom:12px }
+/* Nada empurra a página para os lados: o que não couber rola DENTRO da caixa. */
+.bloco .bl-corpo{ overflow-x:auto }
+.bloco table{ min-width:26rem }
 .bl-topo{ display:flex; align-items:center; gap:9px; padding:9px 13px;
   border-bottom:1px solid var(--linha); flex-wrap:wrap }
 .bl-topo b{ font-size:12.5px }
@@ -81,11 +112,17 @@ input[type=file]{ font-size:.82rem }
     <p class="mail">{{ perfil.email }}</p>
     {# As espécies moram no bloco "Portfólio", não aqui: repetir a mesma lista
        em dois lugares da mesma tela é ruído, e o cabeçalho é identidade. #}
-    {# A medida de leitura sobe de 52ch para 74ch: a 52 o texto ficava numa
-       coluna estreita com vazio à direita, exatamente o "espremido e junto"
-       relatado. 74ch ainda é medida legível e usa a faixa disponível. #}
     {% if perfil.sobre %}
-    <p class="sub leitura" style="margin:.7rem 0 0">{{ perfil.sobre }}</p>
+    <p class="sub bio">{{ perfil.sobre }}</p>
+    {% endif %}
+  </div>
+
+  {# Coluna da direita do cabeçalho: é onde sobrava o vazio. O botão sobe e os
+     ícones descem, então o texto ao lado deixa de ser uma tira estreita com
+     meia caixa em branco. #}
+  <div class="lado">
+    {% if not editando %}
+    <a class="botao secundario" href="/perfil?editando=1">✎ Editar perfil</a>
     {% endif %}
     {% if perfil.links %}
     <div class="redes">
@@ -102,9 +139,6 @@ input[type=file]{ font-size:.82rem }
     </div>
     {% endif %}
   </div>
-  {% if not editando %}
-  <a class="botao secundario" href="/perfil?editando=1">✎ Editar perfil</a>
-  {% endif %}
 </div>
 
 <div class="numeros">
