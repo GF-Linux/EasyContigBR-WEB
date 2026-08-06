@@ -4,8 +4,9 @@
 #
 #   docker compose up -d --build
 #
-# Antes: coloque uma cópia (ou link) do repo do EasyContig em ./nucleo e os
-# bancos BLAST em ./bancos.
+# Antes: rode `./tools/preparar_nucleo.sh` (copia só o pacote do núcleo para
+# ./nucleo — link simbólico NÃO funciona, e o repo inteiro levaria os .ab1
+# para dentro da imagem) e ponha os bancos BLAST em ./bancos.
 
 services:
   web:
@@ -16,6 +17,12 @@ services:
     ports:
       - "127.0.0.1:8000:8000"   # atrás de um proxy reverso com TLS, nunca exposto direto
     environment: &ambiente
+      # ⚠️ A TRAVA DE ARRANQUE, LIGADA. Ela recusa subir em modo `dev`, sem
+      # SECRET_KEY, sem HTTPS_ONLY ou sem ninguém ter decidido quem entra — e
+      # até 2026-08-06 NÃO ESTAVA AQUI, ou seja, o único lugar onde ela importa
+      # era o único onde não valia. Descoberto subindo o compose pela primeira
+      # vez. As quatro condições já são satisfeitas pelas linhas abaixo.
+      EASYCONTIG_PRODUCAO: "1"
       EASYCONTIG_DATA_DIR: /dados
       EASYCONTIG_DB_18S: /bancos/referencias_18S
       EASYCONTIG_DB_16S: /bancos/referencias_16S

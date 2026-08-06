@@ -231,6 +231,30 @@ def apagar_lote(sqlite_path: Path, lotes_dir: Path, lote_id: str) -> bool:
     return bool(tinha_pasta or linhas)
 
 
+# Um dia normal vence uma fatia; um relógio errado vence tudo. O freio pega
+# quando os dois valem: MAIS DA METADE do acervo e mais que um punhado. O
+# segundo termo existe para não travar instalação pequena — com 3 lotes no
+# total, apagar 2 é rotina, não catástrofe.
+FREIO_FRACAO = 0.5
+FREIO_MINIMO = 6
+
+
+def _freio_pega(vencidos: int, total: int) -> bool:
+    return vencidos >= FREIO_MINIMO and total > 0 and vencidos > total * FREIO_FRACAO
+
+
+def _expurgo_em_massa_liberado() -> bool:
+    return os.environ.get("EASYCONTIG_EXPURGO_EM_MASSA") == "1"
+
+
+def _total_de_lotes(sqlite_path: Path) -> int:
+    try:
+        with conectar(sqlite_path) as con:
+            return int(con.execute("SELECT COUNT(*) FROM lotes").fetchone()[0])
+    except Exception:                            # noqa: BLE001
+        return 0
+
+
 def faxina(sqlite_path: Path, lotes_dir: Path, *, dias: int,
            agora: datetime | None = None) -> dict:
     """Passa o expurgo. {'apagados': int, 'ids': [...], 'bytes': int}.
@@ -239,12 +263,42 @@ def faxina(sqlite_path: Path, lotes_dir: Path, *, dias: int,
     laboratório porque uma variável de ambiente não foi definida é pior que um
     servidor que acumula. O acúmulo dá para ver no disco; o apagado, não.
     """
-    resultado = {"apagados": 0, "ids": [], "bytes": 0}
+    resultado = {"apagados": 0, "ids": [], "bytes": 0, "travado": ""}
     if dias <= 0:
         log.info("retenção desligada (dias=0): nenhum lote será apagado")
         return resultado
 
-    for lote in lotes_expirados(sqlite_path, dias=dias, agora=agora):
+    vencidos = list(lotes_expirados(sqlite_path, dias=dias, agora=agora))
+
+    # ── freio de expurgo em massa ────────────────────────────────────────────
+    # Medido em 2026-08-06: com 20 corridas do DIA e retenção de 30 dias, um
+    # relógio um ano à frente faz a faxina apagar AS VINTE numa passada — e
+    # apagar não tem desfazer. Salto de relógio não é hipótese exótica: é o NTP
+    # corrigindo uma máquina virtual, a BIOS zerando, o fuso mal configurado na
+    # primeira subida do servidor.
+    #
+    # O freio não decide a política — o prazo continua sendo do laboratório.
+    # Ele distingue "venceu o de ontem" de "venceu tudo": num dia normal a
+    # faxina apaga o que completou o prazo, nunca a coleção inteira. Quando o
+    # que vence é quase tudo, a explicação mais provável é o relógio ou a
+    # variável, não a passagem do tempo — e a hora de descobrir isso é ANTES do
+    # `rmtree`.
+    #
+    # A primeira faxina de uma instalação antiga pode vencer muita coisa com
+    # razão. Para essa existe a chave explícita, e é justamente o ponto: alguém
+    # decide, em vez de o relógio decidir.
+    total = _total_de_lotes(sqlite_path)
+    if _freio_pega(len(vencidos), total) and not _expurgo_em_massa_liberado():
+        motivo = (
+            f"{len(vencidos)} de {total} lotes venceriam de uma vez — isso não "
+            f"parece passagem do tempo. Confira o relógio do servidor e o "
+            f"EASYCONTIG_RETENCAO_DIAS (={dias}). NADA foi apagado. Se for "
+            f"mesmo para apagar, suba uma vez com EASYCONTIG_EXPURGO_EM_MASSA=1.")
+        log.error("faxina TRAVADA: %s", motivo)
+        resultado["travado"] = motivo
+        return resultado
+
+    for lote in vencidos:
         lote_id = lote["id"]
         try:
             bytes_lote = tamanho_em_bytes(Path(lotes_dir) / lote_id)

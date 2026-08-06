@@ -66,7 +66,10 @@ tracy/blastn/bancos não estão configurados.
 ## Produção
 
 ```bash
-ln -s ../EasyContig-BR-Demo-Deck nucleo    # o núcleo entra no contexto de build
+./tools/preparar_nucleo.sh                  # copia SÓ o pacote para ./nucleo
+# ⚠️ não use `ln -s`: link para fora do contexto de build não é seguido
+#    (nem docker nem podman), e copiar o repo inteiro levaria os .ab1
+#    reais e não publicados para dentro de uma camada da imagem.
 mkdir bancos && cp ../EasyContig-BR-Demo-Deck/db/referencias_18S.* bancos/
 cp ../EasyContig-BR-Demo-Deck/db_16s/referencias_16S.* bancos/
 echo "EASYCONTIG_SECRET_KEY=$(openssl rand -hex 32)" >> .env

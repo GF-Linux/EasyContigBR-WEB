@@ -99,7 +99,11 @@ def test_dias_zero_nao_apaga_nada(banco, lotes_dir):
     lote_id = semear(banco, lotes_dir, dias_atras=9999)
     r = retencao.faxina(banco, lotes_dir, dias=0, agora=AGORA)
 
-    assert r == {"apagados": 0, "ids": [], "bytes": 0}
+    # `travado` entrou no retorno em 2026-08-06, com o freio de expurgo em
+    # massa. Aqui ele tem de vir VAZIO: com `dias=0` não há nada a travar — a
+    # retenção está desligada, que é outra coisa e tem outra explicação.
+    assert r["apagados"] == 0 and r["ids"] == [] and r["bytes"] == 0
+    assert not r["travado"], "retenção desligada não é o mesmo que freio disparado"
     assert (lotes_dir / lote_id).exists()
     assert fila.pegar(banco, lote_id) is not None
     assert retencao.lotes_expirados(banco, dias=0, agora=AGORA) == []

@@ -29,6 +29,12 @@ from pathlib import Path
 RECEBENDO, NA_FILA, RODANDO, PRONTO, FALHOU = (
     "recebendo", "na_fila", "rodando", "pronto", "falhou")
 
+# Os estados que ocupam vaga na cota da conta: o lote existe e ainda vai dar
+# trabalho. Mora aqui, e não em `cotas.py`, porque quem precisa contá-los
+# dentro da transação do INSERT é este módulo — e `cotas` importa `fila`, não
+# o contrário.
+ATIVOS = (RECEBENDO, NA_FILA, RODANDO)
+
 _ESQUEMA = """
 CREATE TABLE IF NOT EXISTS lotes (
     id            TEXT PRIMARY KEY,
@@ -108,22 +114,54 @@ def criar_esquema(caminho: Path) -> None:
     migracoes.aplicar(caminho)
 
 
+class CotaEstourada(Exception):
+    """O teto de lotes ativos da conta já estava cheio quando o lote ia nascer."""
+
+    def __init__(self, ativos: int, teto: int):
+        self.ativos, self.teto = ativos, teto
+        super().__init__(f"{ativos} de {teto} lotes ativos")
+
+
 def novo_lote(caminho: Path, *, dono: str, nome: str, n_arquivos: int,
-              referencia: str = "") -> str:
+              referencia: str = "", teto_ativos: int = 0) -> str:
     """Abre o lote em RECEBENDO — invisível para o trabalhador até liberar.
 
     `referencia` é o banco escolhido para identificar. Fica GRAVADO no lote, e
     não lido da configuração na hora de rodar: assim o relatório continua
     interpretável mesmo que a instalação mude de banco depois — a pergunta "o
     que este resultado comparou contra o quê" tem resposta no próprio registro.
+
+    ⚠️ `teto_ativos` é conferido **aqui dentro**, na mesma transação do INSERT.
+    A conferência da cota morava só na rota, antes do lote existir — e entre
+    contar e criar havia uma janela. Medido em 2026-08-06: com teto de 1 e oito
+    envios simultâneos da mesma conta, **sete entraram**. Todos passaram pela
+    contagem antes de qualquer um aparecer nela.
+
+    `BEGIN IMMEDIATE` porque o SQLite só serializa escritores a partir do
+    momento em que a transação vira de escrita; começando em modo de leitura,
+    dois processos leem o mesmo número e os dois escrevem.
     """
     lote_id = secrets.token_urlsafe(9)
     with conectar(caminho) as con:
+        if teto_ativos:
+            con.execute("BEGIN IMMEDIATE")
+            marcas = ",".join("?" * len(ATIVOS))
+            ativos = con.execute(
+                f"SELECT COUNT(*) FROM lotes WHERE dono=? AND status IN ({marcas})",
+                (dono, *ATIVOS)).fetchone()[0]
+            if ativos >= teto_ativos:
+                con.execute("ROLLBACK")
+                raise CotaEstourada(ativos, teto_ativos)
         con.execute(
             "INSERT INTO lotes (id, dono, nome, status, n_arquivos, criado_em,"
             " referencia) VALUES (?,?,?,?,?,?,?)",
             (lote_id, dono, nome, RECEBENDO, n_arquivos, _agora(), referencia),
         )
+        # `isolation_level=None` deixa tudo em autocommit; a transação explícita
+        # acima é a única que precisa ser fechada à mão. Sem este COMMIT o lote
+        # nasceria e sumiria — e a contagem seguinte veria a vaga livre de novo.
+        if teto_ativos:
+            con.execute("COMMIT")
     return lote_id
 
 

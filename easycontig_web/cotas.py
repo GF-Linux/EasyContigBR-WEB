@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import fila
 
-_ATIVOS = (fila.RECEBENDO, fila.NA_FILA, fila.RODANDO)
+_ATIVOS = fila.ATIVOS          # definido em fila.py: a transação do INSERT usa o mesmo
 
 # 10, e não 3, por causa da ADR 0051: o uso real é PAR A PAR, e cada par enviado
 # é um lote próprio. Com 3, quem manda cinco pares seguidos — que é o fluxo

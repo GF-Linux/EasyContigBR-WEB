@@ -408,9 +408,15 @@ select{ font:inherit; font-size:.9rem; padding:.55rem .7rem; width:100%;
       var detalhe = '';
       try { detalhe = (JSON.parse(xhr.responseText) || {}).detail || ''; } catch (e) {}
       destravar();
-      mostrarFalha('O lote não foi aceito: '
+      // 5xx é problema DO SERVIDOR: mandar "corrija a seleção" ali é conselho
+      // errado — não há nada errado com a seleção, e reenviar não resolve.
+      // Visto em 06/08 simulando disco cheio (507).
+      var doServidor = xhr.status >= 500;
+      mostrarFalha((doServidor ? 'O servidor não conseguiu receber: '
+                               : 'O lote não foi aceito: ')
         + (detalhe || 'o servidor respondeu ' + xhr.status)
-        + ' — nada foi processado. Corrija a seleção e envie de novo.');
+        + (doServidor ? ' Nada foi processado.'
+                      : ' — nada foi processado. Corrija a seleção e envie de novo.'));
     };
 
     var interrompido = function () {

@@ -8,11 +8,19 @@ FROM python:3.12-slim
 # v0.8.9. NÃO trocar por bioconda: de lá vinha a v0.5.3, sem o subcomando
 # `consensus`, e o erro só aparece na hora de montar (ADR 0026).
 ARG TRACY_VERSION=v0.8.9
+# ⚠️ O nome do arquivo publicado é `tracy-<versão>-linux-amd64`, com hífens.
+# Aqui estava `tracy_linux_x86_64`, e **esta imagem nunca construiu**: o
+# `curl -fL` levava 404 e saía com 22. Descoberto em 2026-08-06, na primeira vez
+# que alguém rodou o build — ou seja, o `docker compose up --build` que a
+# ADR 0050 chama de "o que torna a entrega institucional possível" morria na
+# terceira camada, e ninguém sabia.
+# O `tracy --version` no fim é o que transforma download errado em erro de
+# BUILD, em vez de um contêiner que sobe e só falha na hora de montar um par.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ncbi-blast+ curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fL -o /usr/local/bin/tracy \
-        "https://github.com/gear-genomics/tracy/releases/download/${TRACY_VERSION}/tracy_linux_x86_64" \
+        "https://github.com/gear-genomics/tracy/releases/download/${TRACY_VERSION}/tracy-${TRACY_VERSION}-linux-amd64" \
     && chmod +x /usr/local/bin/tracy \
     && tracy --version
 

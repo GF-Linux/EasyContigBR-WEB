@@ -8,8 +8,10 @@ outro processo — é a diferença entre aguentar 100 pessoas e cair com 20
 """
 from __future__ import annotations
 
+import errno
 import os
 import sys
+import traceback
 import secrets
 import shutil
 from pathlib import Path
@@ -185,6 +187,33 @@ def _erro(request: Request, exc: HTTPException):
         **(_casca(u) if u else {"usuario": None}),
         "codigo": exc.status_code, "detalhe": exc.detail,
     }, status_code=exc.status_code)
+
+@app.exception_handler(Exception)
+def _erro_nao_previsto(request: Request, exc: Exception):
+    """A parede de qualquer exceção que ninguém previu.
+
+    Sem isto o Starlette devolve `Internal Server Error` em texto puro — sem
+    casca, sem caminho de volta e sem dizer se o trabalho foi perdido. Visto de
+    verdade em 2026-08-06, simulando disco cheio: a limpeza estava correta e a
+    tela não contava nada disso.
+
+    O texto NÃO leva a exceção: quem está do outro lado não pode ler caminho de
+    arquivo nem consulta. O detalhe vai para o log, onde quem opera lê.
+    """
+    print(f"  ⚠️  erro não previsto em {request.method} {request.url.path}: "
+          f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+    traceback.print_exc(file=sys.stderr)
+    if "text/html" not in request.headers.get("accept", ""):
+        return JSONResponse({"detail": "erro interno do servidor"}, status_code=500)
+    u = _u(request)
+    return TEMPLATES.TemplateResponse(request, "erro.html", {
+        **(_casca(u) if u else {"usuario": None}),
+        "codigo": 500,
+        "detalhe": ("Algo quebrou do lado do servidor, e não foi por causa do "
+                    "que você mandou. O registro do erro ficou no log do "
+                    "servidor — avise quem cuida dele."),
+    }, status_code=500)
+
 
 EXT_ACEITAS = {".ab1", ".abi", ".scf"}
 
@@ -416,9 +445,20 @@ async def criar_lote(request: Request,
     if not situacao.pode_enviar:
         raise HTTPException(status_code=413, detail=situacao.motivo)
 
-    lote_id = fila.novo_lote(cfg.sqlite_path, dono=u.email,
-                             nome=nome.strip() or "lote", n_arquivos=len(aceitos),
-                             referencia=referencia)
+    # O teto vai JUNTO para dentro da transação que cria o lote. A conferência
+    # acima sozinha tem uma janela: medido em 06/08, com teto de 1 e oito envios
+    # simultâneos da mesma conta, sete entraram — todos passaram pela contagem
+    # antes de qualquer um aparecer nela.
+    try:
+        lote_id = fila.novo_lote(cfg.sqlite_path, dono=u.email,
+                                 nome=nome.strip() or "lote", n_arquivos=len(aceitos),
+                                 referencia=referencia,
+                                 teto_ativos=cotas.teto_lotes_ativos())
+    except fila.CotaEstourada as e:
+        raise HTTPException(
+            status_code=413,
+            detail=f"você já tem {e.ativos} corrida(s) em processamento, e o "
+                   f"teto é {e.teto}. Espere uma terminar e envie de novo.")
     p = executor.pastas_do_lote(cfg, lote_id)
     p["entrada"].mkdir(parents=True, exist_ok=True)
 
@@ -439,6 +479,26 @@ async def criar_lote(request: Request,
                             detail=f"lote acima de {cfg.max_bytes // (1024*1024)} MB")
                     fh.write(pedaco)
             gravados += 1
+    except OSError as e:
+        # ⚠️ DISCO CHEIO, exercitado em 2026-08-06 contra um sistema de arquivos
+        # de 1 MB de verdade: a limpeza funcionava (lote marcado `falhou`, pasta
+        # removida, nada na fila), mas quem enviou recebia `500 Internal Server
+        # Error` cru — sem casca, sem motivo — e o aviso do navegador mandava
+        # "corrija a seleção e envie de novo", que é o conselho errado: não há
+        # nada errado com a seleção, e reenviar não vai funcionar.
+        shutil.rmtree(p["raiz"], ignore_errors=True)
+        fila.falhar(cfg.sqlite_path, lote_id, f"falha ao gravar no disco: {e.strerror}")
+        sem_espaco = e.errno == errno.ENOSPC
+        print(f"  ⚠️  falha de disco ao receber o lote {lote_id}: {e}",
+              file=sys.stderr, flush=True)
+        raise HTTPException(
+            status_code=507 if sem_espaco else 500,
+            detail=("o servidor está sem espaço em disco — nada foi gravado. "
+                    "Não é a sua seleção, e reenviar não resolve: avise quem "
+                    "cuida do servidor."
+                    if sem_espaco else
+                    f"o servidor não conseguiu gravar os arquivos ({e.strerror}). "
+                    "Nada foi processado."))
     except Exception:
         shutil.rmtree(p["raiz"], ignore_errors=True)
         fila.falhar(cfg.sqlite_path, lote_id, "falha ao receber os arquivos")
