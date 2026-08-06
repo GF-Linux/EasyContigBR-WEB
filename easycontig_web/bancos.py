@@ -25,6 +25,7 @@ critério, não o FASTA. Critério é revisável; blob de 80 MB não é.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -151,12 +152,29 @@ def _entrez(cgi: str, **kw) -> bytes:
         return r.read()
 
 
+# Teto de tempo dos programas externos. Nenhum tinha (verificado em 2026-08-06),
+# e sem teto um processo que não termina fica pendurado PARA SEMPRE segurando o
+# lugar dele — no caso do `blastn` de consulta, uma requisição web; no caso do
+# `makeblastdb`, o envio de FASTA de alguém. O número é folgado: montar um banco
+# de 43 mil sequências leva segundos, e o BLAST de um consenso, milissegundos.
+_LIMITE_MAKEBLASTDB = 600.0     # 10 min: os bancos grandes do catálogo cabem
+_LIMITE_BLASTN = 120.0          # 2 min: consulta de UM consenso
+
+
 def _makeblastdb(blast_bin: Path | None, fasta: Path, saida: Path) -> None:
     exe = str(blast_bin / "makeblastdb") if blast_bin else "makeblastdb"
     # `-parse_seqids` sempre: sem ele o accession não sai no resultado, e foi a
     # armadilha registrada na ADR 0048.
-    subprocess.run([exe, "-in", str(fasta), "-dbtype", "nucl", "-parse_seqids",
-                    "-out", str(saida)], check=True, capture_output=True)
+    try:
+        subprocess.run([exe, "-in", str(fasta), "-dbtype", "nucl", "-parse_seqids",
+                        "-out", str(saida)], check=True, capture_output=True,
+                       timeout=_LIMITE_MAKEBLASTDB)
+    except subprocess.TimeoutExpired as e:
+        # Mensagem própria: o texto do TimeoutExpired é críptico e esta é a
+        # frase que a pessoa vê na tela de bancos.
+        raise RuntimeError(
+            f"a montagem do banco passou de {int(_LIMITE_MAKEBLASTDB // 60)} "
+            "minutos e foi interrompida") from e
 
 
 def montar(data_dir: Path, banco_id: str, blast_bin: Path | None = None,
@@ -229,14 +247,39 @@ def remover(data_dir: Path, banco_id: str) -> bool:
 _NOME_OK = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
+def espaco_da_conta(email: str) -> str:
+    """O pedaço do nome da pasta que diz DE QUEM é o banco.
+
+    ⚠️ ISTO JÁ VAZOU DADO ENTRE CONTAS. Era
+    `re.sub(r"[^A-Za-z0-9]", "", email)[:24].lower()`, e colidia de duas formas
+    independentes, as duas reproduzidas em 2026-08-06:
+
+      * **o achatamento apaga o ponto** — `joao.silva@ufrrj.br` e
+        `joaosilva@ufrrj.br` são duas pessoas diferentes e davam a MESMA pasta.
+        Nem precisava de e-mail longo;
+      * **o corte em 24** junta endereços que só diferem depois do 24º caractere.
+
+    Colidir aqui não é detalhe de nomenclatura: `meus_bancos()` lista por
+    prefixo, então a segunda conta **vê, consulta e pode REMOVER** o banco
+    privado da primeira. E banco privado é exatamente onde ficam as sequências
+    do grupo **ainda não publicadas** — o ativo que este serviço existe para não
+    deixar vazar. Verificado ponta a ponta: a conta B enxergava o banco da conta
+    A em "Meus bancos".
+
+    Hash, e não e-mail legível: não colide na prática, não depende de o endereço
+    ser curto, e de quebra tira o e-mail de dentro do nome da pasta — ele deixa
+    de aparecer em listagem de diretório, backup e log.
+    """
+    normal = (email or "").strip().lower()
+    return hashlib.sha256(normal.encode("utf-8")).hexdigest()[:16]
+
+
 def id_do_usuario(email: str, apelido: str) -> str:
-    """Um banco por conta e apelido. O e-mail entra achatado para dois usuários
-    não colidirem no mesmo nome — e nada disso vira caminho sem passar pelo
+    """Um banco por conta e apelido. Nada disso vira caminho sem passar pelo
     filtro de `_NOME_OK`."""
     if not _NOME_OK.match(apelido or ""):
         raise ValueError("use letras, números, hífen ou sublinhado (até 40)")
-    conta = re.sub(r"[^A-Za-z0-9]", "", email)[:24].lower()
-    return f"meu_{conta}_{apelido}"
+    return f"meu_{espaco_da_conta(email)}_{apelido}"
 
 
 def montar_do_usuario(data_dir: Path, banco_id: str, fasta_texto: str,
@@ -274,7 +317,7 @@ def montar_do_usuario(data_dir: Path, banco_id: str, fasta_texto: str,
 
 
 def meus_bancos(data_dir: Path, email: str) -> list[dict]:
-    conta = re.sub(r"[^A-Za-z0-9]", "", email)[:24].lower()
+    conta = espaco_da_conta(email)
     saida = []
     raiz = pasta(data_dir)
     if not raiz.exists():
@@ -301,11 +344,15 @@ def consultar(consenso: str, prefixo_db: Path, blast_bin: Path | None = None,
     rotula como tal.
     """
     exe = str(blast_bin / "blastn") if blast_bin else "blastn"
-    r = subprocess.run(
-        [exe, "-db", str(prefixo_db), "-outfmt",
-         "6 sacc stitle pident qcovs evalue bitscore length",
-         "-max_target_seqs", str(n), "-num_threads", "1"],
-        input=f">consulta\n{consenso}\n", text=True, capture_output=True)
+    try:
+        r = subprocess.run(
+            [exe, "-db", str(prefixo_db), "-outfmt",
+             "6 sacc stitle pident qcovs evalue bitscore length",
+             "-max_target_seqs", str(n), "-num_threads", "1"],
+            input=f">consulta\n{consenso}\n", text=True, capture_output=True,
+            timeout=_LIMITE_BLASTN)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("a consulta ao banco passou do tempo limite") from e
     if r.returncode != 0:
         raise RuntimeError((r.stderr or "blastn falhou").strip()[:300])
     saida = []

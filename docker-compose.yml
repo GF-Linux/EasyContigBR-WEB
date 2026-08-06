@@ -27,6 +27,12 @@ services:
       EASYCONTIG_HTTPS_ONLY: "1"
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # De onde o proxy reverso chega. Vazio = `X-Forwarded-For` é ignorado, que
+      # é o padrão seguro: o cabeçalho é escrito pelo cliente e, aceito de
+      # qualquer um, torna todo teto por IP contornável (medido em 06/08).
+      EASYCONTIG_PROXIES_CONFIAVEIS: ${EASYCONTIG_PROXIES_CONFIAVEIS:-}
+      # Quem pode remover banco de referência compartilhado. Vazio = ninguém.
+      EASYCONTIG_ADMINS: ${EASYCONTIG_ADMINS:-}
     volumes: &volumes
       - dados:/dados
       - ./bancos:/bancos:ro
@@ -52,6 +58,13 @@ services:
     volumes: *volumes
     depends_on:
       - web
+    # O trabalhador trata SIGTERM terminando o lote em curso, e o padrão do
+    # Docker é matar 10 s depois. Um lote de 40 amostras leva ~26 s (medido):
+    # com o padrão, TODO `docker compose down` matava um lote no meio. Não se
+    # perdia dado — `reenfileirar_orfaos` devolve à fila no arranque — mas o
+    # trabalho era refeito e a corrida voltava ao começo na tela de quem estava
+    # esperando. 120 s cobre o maior lote que a cota permite com folga.
+    stop_grace_period: 120s
     deploy:
       replicas: ${TRABALHADORES:-2}
 

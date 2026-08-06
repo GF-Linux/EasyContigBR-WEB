@@ -61,17 +61,53 @@ def regras() -> dict[str, Regra]:
 _registro: dict[str, deque] = defaultdict(deque)
 
 
+def proxies_confiaveis() -> set[str]:
+    """Quem tem permissão para dizer, por cabeçalho, de que IP veio a requisição.
+
+    Vazio por padrão — e é o padrão SEGURO. Ver `chave()`.
+    """
+    bruto = os.environ.get("EASYCONTIG_PROXIES_CONFIAVEIS", "")
+    return {p.strip() for p in bruto.split(",") if p.strip()}
+
+
+def ip_de_origem(request: Request) -> str:
+    """De que IP veio, de verdade.
+
+    ⚠️ ISTO JÁ FOI UM BURACO. `X-Forwarded-For` é um cabeçalho que QUALQUER
+    cliente pode escrever, e o código lia direto o que chegasse. Medido em
+    2026-08-06: com teto de 5 tentativas de login por 600 s, **30 tentativas
+    seguidas passaram sem uma única recusa**, bastando trocar o cabeçalho a cada
+    uma. Todo teto por IP — login inclusive, e no modo `dev` cada tentativa que
+    acerta o formato ENTRA — era contornável trocando um texto.
+
+    O cabeçalho só vale quando quem o entregou é um proxy que nós declaramos
+    confiável. Fora disso vale o endereço da conexão, que o cliente não escolhe.
+
+    O padrão é NÃO CONFIAR EM NINGUÉM. Numa instalação atrás de proxy sem
+    configurar `EASYCONTIG_PROXIES_CONFIAVEIS`, todo mundo aparece com o IP do
+    proxy e divide o teto anônimo — chato, mas é o erro reversível. Confiar por
+    padrão seria o erro irreversível: o teto simplesmente não existiria e
+    ninguém perceberia, porque nada quebra.
+    """
+    conexao = request.client.host if request.client else "?"
+    if conexao in proxies_confiaveis():
+        declarado = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if declarado:
+            return declarado
+    return conexao
+
+
 def chave(request: Request, quem: str | None) -> str:
     """Conta quando há sessão; IP quando não há.
 
     Pelo IP é imperfeito — uma universidade inteira sai por um NAT — e por isso
     o teto de quem NÃO entrou é o de login, que é o único caminho anônimo que
-    escreve alguma coisa.
+    escreve alguma coisa. Quem entrou é contado pela CONTA, o que tirou o
+    laboratório inteiro de dentro do mesmo balde.
     """
     if quem:
         return "u:" + quem
-    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    return "ip:" + (ip or (request.client.host if request.client else "?"))
+    return "ip:" + ip_de_origem(request)
 
 
 def conferir(nome: str, request: Request, quem: str | None = None,

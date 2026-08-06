@@ -69,15 +69,25 @@ def conectar(caminho: Path):
 
 
 def criar_esquema(caminho: Path) -> None:
+    """Cria as tabelas se faltarem e leva o banco à versão de esquema atual.
+
+    As mudanças de esquema saíram daqui e foram para `migracoes.py` (2026-08-06):
+    o `if` que conferia `PRAGMA table_info` para descobrir se a coluna
+    `referencia` já existia funcionou para UMA coluna, mas não dizia em que
+    versão o banco estava, não tinha ordem declarada e não deixava por onde
+    voltar atrás. Agora o `PRAGMA user_version` responde as três coisas, e há
+    backup automático antes da primeira alteração.
+
+    Continua seguro chamar a cada arranque, de qualquer processo: `IF NOT
+    EXISTS` para as tabelas e, nas migrações, nada roda duas vezes.
+    """
     caminho.parent.mkdir(parents=True, exist_ok=True)
     with conectar(caminho) as con:
         con.executescript(_ESQUEMA)
-        # Coluna nova em banco que já existe: sem isto, atualizar o servidor
-        # derrubaria as corridas antigas em vez de apenas não saber a referência
-        # delas.
-        colunas = {r[1] for r in con.execute("PRAGMA table_info(lotes)")}
-        if "referencia" not in colunas:
-            con.execute("ALTER TABLE lotes ADD COLUMN referencia TEXT NOT NULL DEFAULT ''")
+    # Importado aqui, e não no topo, porque `migracoes` importa `conectar` deste
+    # módulo — no topo seria import circular.
+    from . import migracoes
+    migracoes.aplicar(caminho)
 
 
 def novo_lote(caminho: Path, *, dono: str, nome: str, n_arquivos: int,

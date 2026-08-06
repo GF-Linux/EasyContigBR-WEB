@@ -120,14 +120,17 @@ def salvar(sqlite_path: Path, email: str, *, nome: str = "", laboratorio: str = 
     return pegar(sqlite_path, email)
 
 
-def resumo_das_corridas(lotes: list[dict], relatorios: list[dict]) -> dict:
+def resumo_das_corridas(lotes: list[dict], n_amostras: list[int]) -> dict:
     """Contagens do que a conta tem no servidor. Só volume — nada de espécie.
 
     O que apareceu nas corridas fica FORA daqui de propósito: contar acertos do
     BLAST e exibir como perfil transformaria "o banco local achou isto" em "o
     laboratório trabalha com isto", que são afirmações diferentes.
+
+    Recebe as CONTAGENS, e não os relatórios (2026-08-06): era a única coisa que
+    esta função tirava deles, e exigir o relatório inteiro obrigava a página a
+    decodificar 64 KB de JSON por corrida para somar inteiros.
     """
     prontos = [l for l in lotes if l.get("status") == "pronto"]
-    amostras = sum(len(r.get("samples") or []) for r in relatorios)
     return {"corridas": len(lotes), "corridas_prontas": len(prontos),
-            "amostras": amostras}
+            "amostras": sum(n_amostras)}
