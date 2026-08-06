@@ -248,3 +248,43 @@ def test_producao_aceita_a_porta_declarada(monkeypatch, valor):
 def test_em_desenvolvimento_o_branco_continua_valendo():
     """Sem EASYCONTIG_PRODUCAO nada disso roda: o local não pede configuração."""
     assert dominio_ok("qualquer@gmail.com", "")
+
+
+# ── endereço nomeado: a instituição, mais as exceções com nome ───────────────
+# Pedido do autor em 2026-08-06: "libera para mim o juaredbr@gmail.com". A
+# alternativa era pôr `gmail.com` na lista — abrir o Gmail inteiro para tirar
+# UMA pessoa do frio.
+LISTA = "ufrrj.br, juaredbr@gmail.com"
+
+
+def test_a_pessoa_nomeada_entra():
+    assert dominio_ok("juaredbr@gmail.com", LISTA)
+
+
+def test_nomear_uma_pessoa_nao_abre_o_provedor_dela():
+    """O ponto inteiro da mudança: `juaredbr@gmail.com` na lista não pode fazer
+    o Gmail do mundo entrar junto."""
+    for outro in ("juaredpokemon@gmail.com", "estranho@gmail.com",
+                  "juaredbr@outro.com"):
+        assert not dominio_ok(outro, LISTA), outro
+
+
+def test_a_instituicao_continua_valendo_ao_lado_do_nome():
+    assert dominio_ok("jared@ufrrj.br", LISTA)
+    assert dominio_ok("aluno@ppgcv.ufrrj.br", LISTA)
+
+
+def test_maiuscula_e_espaco_no_endereco_nomeado():
+    assert dominio_ok("  JuaredBR@Gmail.com ", " ufrrj.br ,  JUAREDBR@GMAIL.COM ")
+
+
+def test_arroba_na_frente_continua_significando_dominio():
+    """`@ufrrj.br` é erro de digitação comum e sempre significou o domínio —
+    não pode virar "endereço nomeado sem nome" e parar de casar."""
+    assert dominio_ok("jared@ufrrj.br", "@ufrrj.br")
+    assert dominio_ok("aluno@lhv.ufrrj.br", "@ufrrj.br")
+
+
+def test_endereco_nomeado_nao_casa_por_subdominio():
+    """Pessoa é exata: `a@gmail.com` na lista não libera `a@mail.gmail.com`."""
+    assert not dominio_ok("juaredbr@mail.gmail.com", LISTA)

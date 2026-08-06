@@ -104,7 +104,15 @@ def dominio_ok(email: str, dominio_permitido: str) -> bool:
     O ponto exigido antes do sufixo é o que separa filho de sósia: `ufrrj.br`
     cobre `lhv.ufrrj.br`, e **não** cobre `falso-ufrrj.br`, que é um domínio de
     outro dono. Quem quiser o domínio exato e nada abaixo dele escreve `=`
-    na frente: `=ufrrj.br`."""
+    na frente: `=ufrrj.br`.
+
+    **ENDEREÇO NOMEADO** (2026-08-06): item com `@` no meio vale por uma pessoa
+    só, exata. Nasceu de um pedido concreto — liberar `juaredbr@gmail.com`, que
+    é a conta pessoal do autor — e a alternativa seria pôr `gmail.com` na lista,
+    abrindo o Gmail inteiro para tirar UMA pessoa do frio. É o que faz da lista
+    uma porta com nomes escritos e não uma heurística: a instituição, mais as
+    exceções, cada uma com nome e sobrenome no `.env`.
+    """
     if not dominio_permitido:
         return True
     if "@" not in email:
@@ -114,12 +122,18 @@ def dominio_ok(email: str, dominio_permitido: str) -> bool:
     # em branco passa a ser recusado (`conferir_producao`).
     if "*" in {d.strip() for d in dominio_permitido.split(",")}:
         return True
-    de = email.rsplit("@", 1)[-1].lower().strip().rstrip(".")
+    completo = email.strip().lower().rstrip(".")
+    de = completo.rsplit("@", 1)[-1]
     for bruto in dominio_permitido.split(","):
-        d = bruto.strip().lower().lstrip("@").rstrip(".")
+        d = bruto.strip().lower().rstrip(".")
+        if d.startswith("@"):            # "@ufrrj.br" digitado: ainda é domínio
+            d = d[1:]
         if not d:
             continue
-        if d.startswith("="):
+        if "@" in d:                     # pessoa nomeada, e só ela
+            if completo == d:
+                return True
+        elif d.startswith("="):
             if de == d[1:]:
                 return True
         elif de == d or de.endswith("." + d):

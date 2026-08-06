@@ -159,6 +159,9 @@ Sobre as duas últimas linhas, que são a decisão de verdade deste arquivo:
   **O subdomínio entra junto** (`ufrrj.br` cobre `ppgcv.ufrrj.br` e
   `lhv.ufrrj.br`); sósia não entra (`falso-ufrrj.br` fica de fora, porque o
   ponto é exigido). Para prender no domínio exato: `=ufrrj.br`.
+  **Endereço nomeado:** item com `@` no meio vale por uma pessoa só —
+  `ufrrj.br, fulano@gmail.com` libera a universidade inteira mais uma conta
+  pessoal, sem abrir o Gmail junto.
 * `EASYCONTIG_PRODUCAO=1` faz o servidor **recusar subir** em modo `dev`, sem
   `SECRET_KEY` ou sem `HTTPS_ONLY` — aviso em arquivo de exemplo não é trava.
 
