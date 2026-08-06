@@ -31,6 +31,8 @@ services:
       # é o padrão seguro: o cabeçalho é escrito pelo cliente e, aceito de
       # qualquer um, torna todo teto por IP contornável (medido em 06/08).
       EASYCONTIG_PROXIES_CONFIAVEIS: ${EASYCONTIG_PROXIES_CONFIAVEIS:-}
+      # Quem pode remover banco de referência compartilhado. Vazio = ninguém.
+      EASYCONTIG_ADMINS: ${EASYCONTIG_ADMINS:-}
     volumes: &volumes
       - dados:/dados
       - ./bancos:/bancos:ro

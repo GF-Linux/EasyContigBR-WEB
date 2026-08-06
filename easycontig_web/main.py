@@ -41,7 +41,14 @@ if os.environ.get("EASYCONTIG_PRODUCAO") == "1":
 fila.criar_esquema(cfg.sqlite_path)
 perfil.criar_esquema(cfg.sqlite_path)
 
-app = FastAPI(title="EasyContig BR — lotes", docs_url="/api/docs")
+# `docs_url=None` em produção: `/api/docs`, `/redoc` e `/openapi.json` respondiam
+# 200 SEM sessão (verificado em 2026-08-06) e publicam o mapa inteiro da API —
+# toda rota, todo parâmetro, todo formato. Não é vazamento de dado, é o mapa de
+# onde procurar, entregue a quem ainda não entrou. Em desenvolvimento continua
+# ligado, que é onde ele serve para alguma coisa.
+_DOCS = None if os.environ.get("EASYCONTIG_PRODUCAO") == "1" else "/api/docs"
+app = FastAPI(title="EasyContig BR — lotes", docs_url=_DOCS,
+              redoc_url=None, openapi_url=None if _DOCS is None else "/openapi.json")
 
 # A chave assina o cookie de sessão. Sem SECRET_KEY no ambiente, gera uma por
 # processo: seguro, mas derruba as sessões a cada reinício — aceitável em
@@ -256,9 +263,19 @@ def _destino(proximo: str) -> str:
     Exigir que comece com uma barra só (e não `//`, que o navegador lê como
     outro host) resolve.
     """
-    if proximo.startswith("/") and not proximo.startswith("//"):
-        return proximo
-    return "/"
+    # ⚠️ A barra invertida também escapa. Verificado em 2026-08-06:
+    # `/\evil.com` passava por esta checagem, e o navegador normaliza `\` para
+    # `/` antes de resolver o endereço — ou seja, vira `//evil.com`, que é outro
+    # host. A regra passa a ser positiva: começa com UMA barra e o segundo
+    # caractere não pode ser separador nenhum.
+    if not proximo.startswith("/") or proximo.startswith(("//", "/\\")):
+        return "/"
+    # Caractere de controle no meio (`\t`, `\n`, `\r`) é removido por alguns
+    # navegadores ANTES de resolver, então `/%09/evil.com` decodificado poderia
+    # virar outra coisa. Nenhum destino legítimo do site tem controle no caminho.
+    if any(c in proximo for c in "\t\n\r\\"):
+        return "/"
+    return proximo
 
 
 @app.get("/entrar", response_class=HTMLResponse)
@@ -445,6 +462,10 @@ async def salvar_perfil(request: Request,
                         especies: str = Form(""), marcadores: str = Form(""),
                         foto: UploadFile | None = File(None)):
     u = _exigir(request)
+    # Salvar o perfil é escrita: sem teto, um laço no formulário grava foto atrás
+    # de foto. Reaproveita o teto de envio, que é o balde de "esta conta está
+    # escrevendo no servidor".
+    limites.conferir("envio", request, u.email)
     nome_foto = None
     if foto is not None and foto.filename:
         ext = Path(foto.filename).suffix.lower()
@@ -456,10 +477,16 @@ async def salvar_perfil(request: Request,
             raise HTTPException(status_code=413, detail="a foto passa de 2 MB")
         pasta = cfg.data_dir / "fotos"
         pasta.mkdir(parents=True, exist_ok=True)
-        # Nome derivado do e-mail, não do arquivo enviado: nome de arquivo é
+        # Nome sorteado, não derivado do arquivo enviado: nome de arquivo é
         # entrada do usuário e não decide caminho em disco.
         nome_foto = secrets.token_urlsafe(8) + ext
         (pasta / nome_foto).write_bytes(dados)
+        # A ANTERIOR SAI. Sem isto cada troca de foto deixava até 2 MB órfãos no
+        # volume para sempre: nada apontava mais para o arquivo, nenhuma cota o
+        # contava (a cota mede as pastas de LOTE) e a retenção não o alcança.
+        antigo = (perfil.pegar(cfg.sqlite_path, u.email) or {}).get("foto")
+        if antigo and antigo != nome_foto:
+            (pasta / Path(antigo).name).unlink(missing_ok=True)
     perfil.salvar(cfg.sqlite_path, u.email, nome=nome, laboratorio=laboratorio,
                   instituicao=instituicao, sobre=sobre, especies=especies,
                   marcadores=marcadores, foto=nome_foto)
@@ -510,6 +537,13 @@ def montar_banco(request: Request, banco_id: str):
     return RedirectResponse(f"/bancos?feito={quote(banco_id)}", status_code=303)
 
 
+def _e_administrador(u: auth.Usuario) -> bool:
+    """Quem pode mexer no que é de todo mundo. Vazio = ninguém, de propósito."""
+    lista = {e.strip().lower()
+             for e in os.environ.get("EASYCONTIG_ADMINS", "").split(",") if e.strip()}
+    return u.email.lower() in lista
+
+
 @app.post("/bancos/{banco_id}/remover")
 def remover_banco(request: Request, banco_id: str):
     u = _exigir(request)
@@ -519,6 +553,23 @@ def remover_banco(request: Request, banco_id: str):
             raise HTTPException(status_code=404, detail="banco não encontrado")
     elif banco_id not in bancos.POR_ID:
         raise HTTPException(status_code=404, detail="banco desconhecido")
+    elif not _e_administrador(u):
+        # ⚠️ Verificado em 2026-08-06: QUALQUER conta autenticada removia um banco
+        # do catálogo COMPARTILHADO — um estagiário recém-cadastrado derrubava a
+        # referência que todo o laboratório usa, e a próxima corrida de qualquer
+        # pessoa passava a dizer "sem acerto" sem nada explicando por quê. É a
+        # pior forma do defeito que a ADR 0039 descreve: falha da instalação
+        # aparecendo como resultado da amostra.
+        #
+        # Remontar leva segundos, então o estrago é reversível — mas só depois de
+        # alguém descobrir o que houve, e nada na tela contaria.
+        #
+        # MONTAR segue liberado: é aditivo, já tem teto de taxa, e é o fluxo que
+        # a página inteira existe para oferecer. Quem apaga é que precisa de nome.
+        raise HTTPException(
+            status_code=403,
+            detail="remover um banco compartilhado é ação de quem administra o "
+                   "servidor; defina EASYCONTIG_ADMINS para liberar")
     bancos.remover(cfg.data_dir, banco_id)
     return RedirectResponse("/bancos", status_code=303)
 
