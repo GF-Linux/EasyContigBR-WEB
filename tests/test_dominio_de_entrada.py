@@ -127,3 +127,79 @@ def test_espaco_de_copiar_e_colar_e_pego():
 
 def test_id_de_outro_provedor_nao_passa_por_google():
     assert queixa_do_client_id("meu-app-id") != ""
+
+
+# ── a volta do Google: recusa é recusa, não "não respondeu" ──────────────────
+# 2026-08-06, depois de o CLIENT_ID já estar certo: a volta do login deu
+# `502 — o Google não respondeu; tente de novo`. O Google TINHA respondido:
+# `401 invalid_client — The provided client secret is invalid`. A tela afirmava
+# um fato falso E dava o pior conselho possível ("tente de novo") para um erro
+# de configuração que não se resolve sozinho.
+import io
+import urllib.error
+
+import pytest as _pytest
+from fastapi import HTTPException
+
+from easycontig_web import auth as _auth
+
+
+class _RequestFalso:
+    def __init__(self, estado):
+        self.session = {_auth.ESTADO_CHAVE: estado}
+
+
+def _volta(monkeypatch, erro):
+    """Roda `usuario_da_volta` com o `urlopen` trocado por `erro`."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "1-a.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "GOCSPX-x")
+
+    def urlopen(*a, **k):
+        raise erro
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    with _pytest.raises(HTTPException) as e:
+        _auth.usuario_da_volta(_RequestFalso("s"), "cod", "s",
+                               "http://localhost:8099/auth/google/volta")
+    return e.value
+
+
+def test_recusa_do_google_nao_e_anunciada_como_silencio(monkeypatch):
+    corpo = b'{"error":"invalid_client","error_description":"The provided client secret is invalid."}'
+    erro = urllib.error.HTTPError("u", 401, "Unauthorized", {}, io.BytesIO(corpo))
+    exc = _volta(monkeypatch, erro)
+
+    assert exc.status_code == 502
+    assert "não respondeu" not in exc.detail, (
+        "continua afirmando que o Google ficou calado quando ele respondeu")
+    assert "invalid_client" in exc.detail, "o motivo do Google não chegou à tela"
+    assert "não adianta tentar de novo" in exc.detail, (
+        "erro de configuração não se resolve repetindo")
+
+
+def test_o_codigo_do_google_chega_qualquer_que_seja(monkeypatch):
+    corpo = b'{"error":"redirect_uri_mismatch"}'
+    erro = urllib.error.HTTPError("u", 400, "Bad Request", {}, io.BytesIO(corpo))
+    assert "redirect_uri_mismatch" in _volta(monkeypatch, erro).detail
+
+
+def test_google_realmente_mudo_continua_dizendo_que_esta_mudo(monkeypatch):
+    """A frase antiga sobrevive onde ela é VERDADE: rede, DNS, tempo esgotado."""
+    exc = _volta(monkeypatch, TimeoutError("tempo esgotado"))
+    assert exc.status_code == 502
+    assert "não respondeu" in exc.detail
+    assert "tente de novo" in exc.detail
+
+
+def test_resposta_ilegivel_nao_quebra_a_volta(monkeypatch):
+    """Corpo que não é JSON não pode virar exceção dentro do tratador de erro."""
+    erro = urllib.error.HTTPError("u", 500, "erro", {}, io.BytesIO(b"<html>ops"))
+    exc = _volta(monkeypatch, erro)
+    assert exc.status_code == 502 and "recusou" in exc.detail
+
+
+def test_estado_invalido_continua_sendo_400_e_nao_502(monkeypatch):
+    """A trava de CSRF vem antes e não pode ser confundida com falha do Google."""
+    with _pytest.raises(HTTPException) as e:
+        _auth.usuario_da_volta(_RequestFalso("certo"), "cod", "forjado", "u")
+    assert e.value.status_code == 400

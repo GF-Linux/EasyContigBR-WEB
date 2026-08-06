@@ -150,6 +150,8 @@ def usuario_da_volta(request: Request, code: str, estado: str,
                      redirect_uri: str) -> Usuario:
     """Confere o `state`, troca o código por token e devolve quem entrou."""
     import json
+    import sys
+    import urllib.error
     import urllib.parse
     import urllib.request
 
@@ -166,6 +168,26 @@ def usuario_da_volta(request: Request, code: str, estado: str,
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
     }).encode()
+    # ⚠️ "o Google não respondeu" era MENTIRA na maioria das falhas.
+    #
+    # Em 2026-08-06 a volta do login deu `502 — o Google não respondeu; tente de
+    # novo`, e o Google TINHA respondido: `401 invalid_client — The provided
+    # client secret is invalid`. A frase ainda mandava tentar de novo, o pior
+    # conselho possível para um erro de configuração que não se resolve sozinho.
+    # Um `except Exception` transformava TODA falha em "não respondeu",
+    # inclusive as que chegavam com o motivo escrito dentro.
+    #
+    # Agora: recusa do Google é recusa, e o código dele (`invalid_client`,
+    # `invalid_grant`, `redirect_uri_mismatch`) vai para a tela — são códigos
+    # públicos do OAuth, não vazam segredo, e é deles que sai o que fazer. O
+    # corpo inteiro vai para o log, onde quem opera consegue ler.
+    def _erro_do_google(bruto: bytes) -> str:
+        try:
+            d = json.loads(bruto)
+            return str(d.get("error") or "")[:60]
+        except Exception:                        # noqa: BLE001
+            return ""
+
     try:
         with urllib.request.urlopen(
                 urllib.request.Request(TOKEN, data=corpo), timeout=20) as r:
@@ -175,7 +197,26 @@ def usuario_da_volta(request: Request, code: str, estado: str,
             perfil = json.loads(r.read())
     except HTTPException:
         raise
-    except Exception:                            # noqa: BLE001
+    except urllib.error.HTTPError as e:
+        corpo_erro = b""
+        try:
+            corpo_erro = e.read()
+        except Exception:                        # noqa: BLE001
+            pass
+        print(f"  ⚠️  Google recusou a entrada (HTTP {e.code}): "
+              f"{corpo_erro.decode('utf-8', 'replace')[:400]}",
+              file=sys.stderr, flush=True)
+        codigo = _erro_do_google(corpo_erro)
+        raise HTTPException(
+            status_code=502,
+            detail=("o Google recusou esta entrada"
+                    + (f" ({codigo})" if codigo else "")
+                    + " — é configuração do servidor, não adianta tentar de novo. "
+                      "O motivo completo está no log."))
+    except Exception as e:                       # noqa: BLE001
+        # Aqui sim: rede, DNS, tempo esgotado — o Google realmente não respondeu.
+        print(f"  ⚠️  Não foi possível falar com o Google: {type(e).__name__}: {e}",
+              file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="o Google não respondeu; tente de novo")
 
     email = (perfil.get("email") or "").strip().lower()
