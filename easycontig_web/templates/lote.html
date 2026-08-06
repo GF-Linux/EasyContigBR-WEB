@@ -73,8 +73,22 @@ td:first-child a{ font-family:var(--mono); font-size:.85em }
     amostras do que a corrida tem, sem nada indicando a falta.</p>
 
   {% elif lote.status == 'na_fila' %}
-    <p class="sub">Na fila. Esta página se atualiza sozinha — pode fechar e voltar
-    pelo link depois; o processamento não depende de manter a aba aberta.</p>
+    {# "Na fila" é uma PROMESSA: alguém vai pegar. Em 06/08 um par ficou aqui
+       para sempre porque nenhum trabalhador atendia esta fila, e a página
+       seguiu se atualizando e prometendo. Agora a promessa só é feita quando
+       há quem a cumpra. #}
+    {% if fila_atendida %}
+      <p class="sub">Na fila. Esta página se atualiza sozinha — pode fechar e voltar
+      pelo link depois; o processamento não depende de manter a aba aberta.</p>
+    {% else %}
+      <p class="erro"><b>Nada está atendendo a fila.</b></p>
+      <p class="sub">Seus arquivos chegaram inteiros e estão guardados — mas o
+      processo que monta os contigs não está de pé, e este lote vai ficar parado
+      aqui. Não é problema do envio, e reenviar não adianta.
+      <strong>Avise quem cuida do servidor:</strong> falta subir o trabalhador
+      (<code>python -m easycontig_web.trabalhador</code>). Quando ele subir,
+      este lote é pego sozinho — nada se perde.</p>
+    {% endif %}
 
   {% elif lote.status == 'rodando' %}
     {% set pct = (100 * lote.feito / lote.total) if lote.total else 0 %}

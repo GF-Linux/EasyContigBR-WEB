@@ -47,7 +47,25 @@ CREATE TABLE IF NOT EXISTS lotes (
 );
 CREATE INDEX IF NOT EXISTS ix_lotes_status ON lotes(status, criado_em);
 CREATE INDEX IF NOT EXISTS ix_lotes_dono   ON lotes(dono, criado_em);
+
+-- Sinal de vida do trabalhador. Nasceu em 2026-08-06, quando o autor mandou um
+-- par e o lote ficou em `na_fila` PARA SEMPRE: nenhum trabalhador estava
+-- atendendo esta fila. A tela dizia "Na fila. Esta página se atualiza sozinha",
+-- que é uma promessa — alguém vai pegar — e não havia ninguém. Mesmo gênero da
+-- mensagem de envio interrompido de 05/08: a tela afirmando um fato que não
+-- verificou.
+CREATE TABLE IF NOT EXISTS pulso (
+    trabalhador TEXT PRIMARY KEY,
+    visto_em    TEXT NOT NULL
+);
 """
+
+# O trabalhador bate o pulso a cada volta do laço, mas só grava a cada
+# `INTERVALO_PULSO` segundos. Some da conta depois de `PULSO_VELHO`: folga larga
+# de propósito, porque um lote grande segura o laço, e anunciar "ninguém está
+# atendendo" enquanto alguém trabalha seria trocar uma mentira por outra.
+INTERVALO_PULSO = 5.0
+PULSO_VELHO = 90.0
 
 
 def _agora() -> str:
@@ -184,6 +202,52 @@ def falhar(caminho: Path, lote_id: str, erro: str) -> None:
         con.execute(
             "UPDATE lotes SET status=?, terminado_em=?, erro=?, etapa='' WHERE id=?",
             (FALHOU, _agora(), erro[:2000], lote_id))
+
+
+def pulsar(caminho: Path, trabalhador: str) -> None:
+    """Registra que este trabalhador está vivo e olhando ESTA fila."""
+    with conectar(caminho) as con:
+        con.execute(
+            "INSERT INTO pulso (trabalhador, visto_em) VALUES (?,?) "
+            "ON CONFLICT(trabalhador) DO UPDATE SET visto_em=excluded.visto_em",
+            (trabalhador, _agora()))
+
+
+def fila_atendida(caminho: Path, agora: datetime | None = None) -> bool:
+    """Há algum trabalhador vivo atendendo esta fila?
+
+    Serve para a tela parar de prometer o que ninguém vai cumprir. É uma
+    pergunta sobre a FILA, não sobre um lote: quem responde é o pulso mais
+    recente de qualquer trabalhador.
+
+    Falha para o lado de "está atendida" em dois casos, e os dois são decisão,
+    não descuido:
+
+    * **registro ou relógio ilegíveis** — anunciar abandono por engano assusta à
+      toa, e o lote sendo processado desmente o aviso em segundos;
+    * **tabela ausente** — significa banco anterior a este recurso, o que só
+      acontece entre subir o código novo e reiniciar o servidor (o
+      `criar_esquema` do arranque cria a tabela). Durante uma atualização, todo
+      mundo veria "nada está atendendo" ao mesmo tempo, e seria mentira.
+
+    O caso que motivou tudo isto — pulso NENHUM, nunca — não depende de
+    interpretar data alguma e é respondido com um `False` seco.
+    """
+    agora = agora or datetime.now(timezone.utc)
+    try:
+        with conectar(caminho) as con:
+            linha = con.execute("SELECT MAX(visto_em) AS v FROM pulso").fetchone()
+    except sqlite3.Error:
+        return True
+    if not linha or not linha["v"]:
+        return False                     # nunca subiu trabalhador nenhum aqui
+    try:
+        visto = datetime.fromisoformat(linha["v"])
+    except ValueError:
+        return True
+    if visto.tzinfo is None:
+        visto = visto.replace(tzinfo=timezone.utc)
+    return (agora - visto).total_seconds() <= PULSO_VELHO
 
 
 def reenfileirar_orfaos(caminho: Path) -> int:

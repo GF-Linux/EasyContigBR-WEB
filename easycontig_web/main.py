@@ -673,6 +673,10 @@ def pagina_lote(request: Request, lote_id: str, tela_do_lote: int = 0):
         **_casca(u), "lote": lote,
         # a página só se recarrega sozinha enquanto há o que esperar
         "recarregar": lote["status"] in (fila.RECEBENDO, fila.NA_FILA, fila.RODANDO),
+        # Só se pergunta quando importa: um lote esperando na fila é o único
+        # caso em que a tela promete que alguém vai pegar.
+        "fila_atendida": (fila.fila_atendida(cfg.sqlite_path)
+                          if lote["status"] == fila.NA_FILA else True),
         "amostras": mod_amostras.listar(rep) if rep else None,
         "resumo": mod_amostras.resumo(rep) if rep else None,
         "expira_em": retencao.expira_em(lote, cfg.retencao_dias),

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import socket
 import time
 
 from . import config, executor, fila, retencao
@@ -99,8 +100,23 @@ def main() -> None:
     # o operador está olhando o log, então é a hora em que um expurgo inesperado
     # ainda dá para perceber e desligar.
     proxima_faxina = 0.0
+    # Quem sou eu nesta fila. Máquina + PID basta: a pergunta que a tela faz é
+    # "há ALGUÉM vivo atendendo", não "quem".
+    eu = f"{socket.gethostname()}:{os.getpid()}"
+    proximo_pulso = 0.0
     while not _parar:
         try:
+            # Antes de qualquer trabalho: é o pulso que sustenta a frase "na
+            # fila" na tela de quem enviou. Sem ele, em 2026-08-06 um lote
+            # esperou para sempre enquanto a página prometia que alguém ia pegar
+            # — não havia trabalhador nenhum olhando esta fila.
+            if time.monotonic() >= proximo_pulso:
+                proximo_pulso = time.monotonic() + fila.INTERVALO_PULSO
+                try:
+                    fila.pulsar(cfg.sqlite_path, eu)
+                except Exception:               # noqa: BLE001
+                    log.exception("não consegui registrar o pulso; segue processando")
+
             if time.monotonic() >= proxima_faxina:
                 proxima_faxina = time.monotonic() + INTERVALO_FAXINA
                 # Fora do `rodar_um` de propósito: falha de faxina não pode
