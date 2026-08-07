@@ -23,7 +23,10 @@ carga-vcpu.txt
 
 # Relatorio de dados de segurança realizados pelo plugin claude
 
-CLAUDE-SECURITY-20260806-121035/
-CLAUDE-SECURITY-20260806-125027/
-CLAUDE-SECURITY-20260806-213242/
-CLAUDE-SECURITY-20260807-180111/
+
+# Candidatos das varreduras de seguranca. O padrao e GLOB, nao os nomes
+# exatos: cada execucao cria uma pasta nova com carimbo novo, e listar as
+# que ja existem deixa a PROXIMA de fora. O que ha ali dentro e a lista de
+# vulnerabilidades ainda NAO corrigidas -- exatamente o que nao pode ser
+# publicado por descuido.
+CLAUDE-SECURITY-*/
