@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block titulo %}Readme — EasyContig BR{% endblock %}
+{% block conteudo %}
+
+<div class="cartao">
+  <h2>Como usar o EasyContig BR</h2>
+  <p class="sub">Três coisas que resolvem quase toda dúvida: como nomear os
+  arquivos, como o programa decide o que é <em>forward</em> e o que é
+  <em>reverse</em>, e o que cada tela faz.</p>
+</div>
+
+<div class="cartao">
+  <h3>1. Como nomear os arquivos <code>.ab1</code></h3>
+
+  <p><strong>Basta que as duas leituras da mesma amostra compartilhem um
+  identificador e se distingam por <code>_F</code> e <code>_R</code>:</strong></p>
+
+<pre>amostra12_BTF2_F.ab1
+amostra12_BTR2_R.ab1</pre>
+
+  <p>Outras formas que o programa também entende:</p>
+<pre>amostra12_F.ab1        amostra12_R.ab1
+amostra12-fwd.ab1      amostra12-rev.ab1
+amostra12.F.ab1        amostra12.R.ab1
+amostra11_F_Hep300     amostra11_R_Hep1615R    (marcador depois do sentido)</pre>
+
+  <p>⚠️ <strong>O que não funciona:</strong> nome que só varia no
+  <strong>poço da placa</strong>.</p>
+<pre>Sequenciamento_F13719_#80649-27072026_A09.ab1
+Sequenciamento_F13719_#80649-27072026_B09.ab1</pre>
+  <p>Aqui não há nada ligando um arquivo ao outro. Pode ser que
+  <code>A09</code> e <code>B09</code> sejam a mesma amostra, ou pode ser que
+  sejam animais diferentes — o nome não diz, e o programa não vai adivinhar.
+  Nesse caso cada leitura é montada sozinha, e a página do lote avisa quantas
+  ficaram assim.</p>
+
+  <p class="sub">Numa corrida real de 2026, 81 arquivos nomeados só pelo poço
+  produziram 81 leituras avulsas e nenhum par. Renomear resolveu.</p>
+</div>
+
+<div class="cartao">
+  <h3>2. Como o programa sabe quem é <em>forward</em> e quem é <em>reverse</em></h3>
+
+  <p><strong>Ele lê o DNA. Não usa o nome do arquivo, e não usa metadado
+  nenhum de dentro do <code>.ab1</code>.</strong></p>
+
+  <p>O método, em uma frase: o programa recorta as duas leituras em pedacinhos
+  de algumas bases (<em>k-mers</em>), calcula também os pedacinhos do
+  <strong>reverso-complemento</strong> de uma delas, e compara.</p>
+
+  <ul>
+    <li>Se as duas leituras batem quando uma é <strong>invertida e
+    complementada</strong>, elas são a mesma região lida em sentidos opostos:
+    uma é <em>forward</em>, a outra é <em>reverse</em>.</li>
+    <li>Se batem <strong>direto</strong>, sem inverter, são o mesmo sentido —
+    então não são um par F/R, e sim duas leituras parecidas.</li>
+  </ul>
+
+  <p>Medido em arquivos reais do laboratório, a diferença entre os dois casos é
+  larga e sem meio-termo — não é uma decisão apertada. Foi assim que uma pasta
+  com <strong>nomes embaralhados de propósito</strong> teve o sentido de cada
+  leitura descoberto corretamente: o nome estava errado e o resultado saiu
+  certo, porque quem responde é a sequência.</p>
+
+  <p><strong>Então para que serve o nome?</strong> Para dizer <em>quais duas
+  leituras são da mesma amostra</em>. Essa parte o DNA não resolve: duas
+  amostras da mesma espécie têm sequências quase idênticas, e um par cruzado
+  (leitura de um animal com a de outro) chega a parecer <em>melhor</em> que o
+  par verdadeiro. Por isso:</p>
+
+  <p class="sub"><strong>Sentido → sai do DNA, é confiável.<br>
+  Identidade da amostra → sai do nome, e só do nome.</strong></p>
+
+  <p>Quando o nome e o DNA discordam sobre o sentido, o programa marca a
+  amostra como <strong>incerta</strong> em vez de escolher um dos dois — ele
+  prefere avisar a blefar.</p>
+</div>
+
+<div class="cartao">
+  <h3>3. As telas</h3>
+
+  <p><strong>Workspace</strong> — onde se envia. Dois modos: <em>par</em> (as
+  duas leituras de uma amostra, o uso mais comum) e <em>corrida</em> (uma pasta
+  inteira). Escolha a <strong>referência</strong> antes de enviar: é o banco
+  contra o qual a sequência montada será comparada, e sem ele o resultado só
+  diria "não achei", que é uma frase sem significado.</p>
+
+  <p>⚠️ Ao escolher uma <strong>pasta</strong>, o navegador manda também o que
+  estiver nas <strong>subpastas</strong>. A tela avisa quando isso acontece.</p>
+
+  <p><strong>Página da amostra</strong> — o resultado de um par: a espécie
+  identificada, a identidade em porcentagem, a cobertura, e o
+  <strong>cromatograma</strong>. No cromatograma dá para arrastar, aproximar,
+  clicar numa base para marcá-la e remover bases ruins das pontas. As duas
+  leituras rolam juntas, mas a edição de cada uma é independente.</p>
+
+  <p class="sub">⚠️ Entre abrir e exportar, o que está na tela ainda não é o que
+  está gravado. O <code>.ab1</code> original nunca é alterado — a decisão só se
+  materializa quando você <strong>exporta</strong>.</p>
+
+  <p><strong>Página do lote</strong> — a tabela de todas as amostras da corrida,
+  o relatório em PDF, o CSV e o aviso de quantas leituras não formaram par.</p>
+
+  <p><strong>Bancos</strong> — as referências disponíveis. Há as que já vêm
+  montadas e há as que você pode montar a partir do NCBI. Banco pessoal é
+  privado da sua conta.</p>
+
+  <p><strong>WorkFolder</strong> — o que você já mandou. É de onde se reabre um
+  relatório e de onde se apaga.</p>
+</div>
+
+<div class="cartao">
+  <h3>4. Coisas que costumam assustar e não são erro</h3>
+
+  <p><strong>"Nenhum acerto no banco local"</strong> não quer dizer que a
+  amostra é ruim. Quer dizer que a sequência não se parece com nada
+  <em>daquele banco</em>. Uma bactéria não aparece num banco de 18S de
+  eucariotos, e um gene codificante não aparece num banco de RNA ribossomal —
+  nos dois casos o resultado está certo e o caminho é consultar o NCBI ou
+  escolher outra referência.</p>
+
+  <p><strong>Cobertura baixa</strong> é comum em Sanger: quando as leituras
+  <em>forward</em> e <em>reverse</em> se sobrepõem pouco, boa parte do contig
+  tem uma leitura só, e ali não há segunda opinião para corrigir. A tela mostra
+  isso em vez de esconder.</p>
+
+  <p><strong>Identidade alta não é sinônimo de acerto.</strong> Uma referência
+  mais próxima ou um corte de pontas mais agressivo aumentam o número e podem
+  piorar a ciência. O que vale conferir é se a identificação é coerente com o
+  marcador que você amplificou.</p>
+</div>
+
+<div class="cartao sub">
+  <p>Este programa é uma <strong>segunda leitura</strong>, não um substituto do
+  seu fluxo de trabalho. Ele não conclui nem diagnostica: mostra a montagem, o
+  acerto e os limites de cada um, e todo limiar usado vai impresso no relatório.</p>
+</div>
+
+{% endblock %}

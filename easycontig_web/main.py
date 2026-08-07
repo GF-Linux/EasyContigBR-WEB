@@ -594,6 +594,24 @@ async def criar_lote(request: Request,
     return RedirectResponse(f"/lotes/{lote_id}", status_code=303)
 
 
+@app.get("/leiame", response_class=HTMLResponse)
+def pagina_leiame(request: Request):
+    """Como nomear os arquivos e como o motor decide F/R.
+
+    Nasceu de um caso real (2026-08-07): uma corrida com 81 arquivos nomeados
+    só pelo poço da placa produziu 81 leituras avulsas, e quem enviou leu isso
+    como falha do programa. O conteúdo está aqui e não só na aba de envio
+    porque a pergunta reaparece depois — na hora de entender o resultado.
+
+    ⚠️ A página afirma que a orientação sai do DNA e NÃO de metadado do `.ab1`
+    nem do nome. Isso é o que `app/core/orientation.py` faz (k-mers da
+    sequência contra k-mers do reverso-complemento) e é a tese do produto: se
+    alguém mudar o motor, esta página passa a mentir para o laboratório.
+    """
+    return TEMPLATES.TemplateResponse(request, "leiame.html", {
+        **_casca(_exigir(request)), "pagina": "leiame"})
+
+
 @app.get("/perfil", response_class=HTMLResponse)
 def pagina_perfil(request: Request, editando: int = 0):
     u = _exigir(request)
