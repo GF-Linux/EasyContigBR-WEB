@@ -96,10 +96,25 @@ limpar() {
 }
 trap limpar EXIT
 
-"$PY" -m uvicorn easycontig_web.main:app --host 127.0.0.1 --port "$PORTA" \
-      --log-level warning > "$LOG_WEB" 2>&1 &
+# EASYCONTIG_CARGA_CPUS=0-1 simula uma VPS de 2 vCPU NESTA máquina, antes de
+# contratar uma. Só o servidor e o trabalhador são pinados: o arnês fica com os
+# outros núcleos, senão ele disputaria CPU com o que está medindo e o número
+# sairia pior por culpa da própria medição.
+FREIO=()
+if [ -n "${EASYCONTIG_CARGA_CPUS:-}" ]; then
+  if command -v taskset >/dev/null 2>&1; then
+    FREIO=(taskset -c "$EASYCONTIG_CARGA_CPUS")
+    echo "servidor e trabalhador pinados nos núcleos $EASYCONTIG_CARGA_CPUS"
+  else
+    echo "⚠️  taskset não existe aqui; EASYCONTIG_CARGA_CPUS foi IGNORADO."
+    echo "    O número sairá o da máquina inteira — não o da VPS simulada."
+  fi
+fi
+
+"${FREIO[@]}" "$PY" -m uvicorn easycontig_web.main:app --host 127.0.0.1 \
+      --port "$PORTA" --log-level warning > "$LOG_WEB" 2>&1 &
 PID_WEB=$!
-"$PY" -m easycontig_web.trabalhador > "$LOG_TRAB" 2>&1 &
+"${FREIO[@]}" "$PY" -m easycontig_web.trabalhador > "$LOG_TRAB" 2>&1 &
 PID_TRAB=$!
 
 echo -n "esperando o /saude responder"

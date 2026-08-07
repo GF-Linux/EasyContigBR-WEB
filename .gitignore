@@ -19,3 +19,4 @@ nucleo
 carga-*.json
 carga-*.log
 carga-execucao.txt
+carga-vcpu.txt

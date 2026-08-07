@@ -59,7 +59,17 @@ services:
       # Quem pode remover banco de referência compartilhado. Vazio = ninguém.
       EASYCONTIG_ADMINS: ${EASYCONTIG_ADMINS:-}
     volumes: &volumes
-      - dados:/dados
+      # Caminho no HOSPEDEIRO, nao volume nomeado, e por duas razoes concretas:
+      # (1) o `tools/backup.sh` documenta este caminho, e com volume nomeado o
+      #     backup teria de saber que os dados moram em
+      #     /var/lib/docker/volumes/easycontig_dados/_data -- que ninguem
+      #     adivinha, e que `docker compose down -v` apaga;
+      # (2) as ADRs 0050/0057 prometem que migrar para a UFRRJ e "copiar uma
+      #     pasta". Isto e a pasta.
+      # ⚠️ Ela precisa ser do UID 10001 (o `easycontig` do Dockerfile:40), senao
+      # o conteiner sobe e morre com PermissionError em /dados/lotes.
+      #   mkdir -p /var/lib/easycontig && chown 10001:10001 /var/lib/easycontig
+      - /var/lib/easycontig:/dados
       - ./bancos:/bancos:ro
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -92,9 +102,6 @@ services:
     stop_grace_period: 120s
     deploy:
       replicas: ${TRABALHADORES:-2}
-
-volumes:
-  dados:
 
 # ⚠️ A SUB-REDE E FIXA DE PROPOSITO. O `EASYCONTIG_PROXIES_CONFIAVEIS` guarda o
 # endereco de onde o proxy reverso chega ao conteiner, que e o GATEWAY desta
