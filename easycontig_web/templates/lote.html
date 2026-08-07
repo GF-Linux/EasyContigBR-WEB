@@ -20,7 +20,7 @@ td:first-child a{ font-family:var(--mono); font-size:.85em }
      tirando a fila (que custa 8% da espera e é o que impede a conexão
      pendurada da ADR 0050); conserta-se perguntando mais rápido. #}
   <noscript><meta http-equiv="refresh" content="3"></noscript>
-  <script>
+  <script nonce="{{ request.state.nonce }}">
   (function () {
     // Começa rápido porque a maioria dos envios é um par (ADR 0051), e vai
     // afrouxando: uma corrida de 40 leva ~14 s e não precisa de 300 ms de
@@ -137,8 +137,7 @@ td:first-child a{ font-family:var(--mono); font-size:.85em }
     <p class="sub">O expurgo automático está desligado nesta instalação: os
     <code>.ab1</code> enviados ficam aqui até alguém apagá-los.</p>
   {% endif %}
-  <form method="post" action="/lotes/{{ lote.id }}/apagar"
-        onsubmit="return confirm('Apagar este lote do servidor? Os .ab1 enviados e o relatório somem, e não há como desfazer.')">
+  <form method="post" action="/lotes/{{ lote.id }}/apagar" data-confirmar="Apagar este lote do servidor? Os .ab1 enviados e o relatório somem, e não há como desfazer.">
     <button type="submit" class="secundario">Apagar agora</button>
   </form>
   <p class="sub" style="margin-bottom:0">Apagar remove do servidor os

@@ -82,8 +82,7 @@ declarada, e fica nesta instalação.</p>
   <div>
     {% if it.estado.montado %}
       <span class="rotulo pronto">montado</span>
-      <form method="post" action="/bancos/{{ it.c.id }}/remover"
-            onsubmit="return confirm('Remover este banco desta instalação? Dá para montar de novo depois.')">
+      <form method="post" action="/bancos/{{ it.c.id }}/remover" data-confirmar="Remover este banco desta instalação? Dá para montar de novo depois.">
         <button class="botao secundario mini" type="submit">remover</button></form>
     {% else %}
       <form method="post" action="/bancos/{{ it.c.id }}/montar">
@@ -106,8 +105,7 @@ curou. Ficam só nesta conta.</p>
   <div class="tam">{{ b.sequencias }} seqs
     <s>{{ (b.bytes / 1048576) | round(2) | string | replace('.', ',') }} MB</s></div>
   <div>
-    <form method="post" action="/bancos/{{ b.id }}/remover"
-          onsubmit="return confirm('Remover este banco? O FASTA original no seu computador não é tocado.')">
+    <form method="post" action="/bancos/{{ b.id }}/remover" data-confirmar="Remover este banco? O FASTA original no seu computador não é tocado.">
       <button class="botao secundario mini" type="submit">remover</button></form>
   </div>
 </div>

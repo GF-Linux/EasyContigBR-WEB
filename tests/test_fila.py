@@ -102,8 +102,10 @@ def test_listar_separa_por_dono(banco):
 import multiprocessing as _mp
 
 
-def _sugar_a_fila(caminho, saida):
+def _sugar_a_fila(caminho, saida, largada=None):
     from easycontig_web import fila as f
+    if largada is not None:
+        largada.wait()          # todos começam a disputar no mesmo instante
     meus = []
     while True:
         l = f.reivindicar(caminho)
@@ -127,7 +129,13 @@ def test_lote_nao_e_reivindicado_por_dois_trabalhadores(tmp_path):
 
     ctx = _mp.get_context("spawn")            # não herda estado do pytest
     saida = ctx.Queue()
-    ps = [ctx.Process(target=_sugar_a_fila, args=(banco, saida)) for _ in range(3)]
+    # ⚠️ Sem a barreira este teste é INSTÁVEL, e era meu: um processo subia
+    # antes dos outros e levava os 60 lotes sozinho, então a asserção "a disputa
+    # aconteceu" caía sem que nada estivesse errado no código. Um teste que
+    # falha por corrida entre os próprios processos ensina a ignorá-lo.
+    largada = ctx.Barrier(3)
+    ps = [ctx.Process(target=_sugar_a_fila, args=(banco, saida, largada))
+          for _ in range(3)]
     for p in ps:
         p.start()
     colhido = [saida.get(timeout=60) for _ in ps]

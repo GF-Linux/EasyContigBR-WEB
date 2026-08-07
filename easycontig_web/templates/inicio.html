@@ -231,7 +231,7 @@ select{ font:inherit; font-size:.9rem; padding:.55rem .7rem; width:100%;
   </aside>
 </div>
 
-<script>
+<script nonce="{{ request.state.nonce }}">
 /* Envio com progresso e desfecho explícito.
  *
  * O <form> acima continua válido sozinho: se este script não rodar, o navegador

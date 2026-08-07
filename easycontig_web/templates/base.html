@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block titulo %}EasyContig BR{% endblock %}</title>
+<link rel="icon" href="/estatico/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/estatico/favicon.svg">
 <style>
 /* ───────────────────────────────────────────────────────────────────────────
    Paleta do design aprovado em 2026-08-05 (ADR 0052). Não foi escolhida aqui:
@@ -282,5 +284,17 @@ pre{ font-family:var(--mono); font-size:.8rem }
   </main>
 </div>
 
+<script nonce="{{ request.state.nonce }}">
+/* A confirmação de "apagar" morava em `onsubmit="return confirm(…)"`, e
+   manipulador inline é justamente o que a CSP com nonce recusa — mantê-lo
+   obrigaria a `script-src 'unsafe-inline'`, que é o mesmo que não ter CSP para
+   o único risco que importa aqui (já tivemos um XSS armazenado em 06/08).
+   Um ouvinte delegado atende todos os formulários com `data-confirmar`, e um
+   formulário novo só precisa do atributo. */
+document.addEventListener("submit", function (ev) {
+  var f = ev.target.closest && ev.target.closest("form[data-confirmar]");
+  if (f && !confirm(f.getAttribute("data-confirmar"))) { ev.preventDefault(); }
+}, true);
+</script>
 </body>
 </html>

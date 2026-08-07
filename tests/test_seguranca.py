@@ -231,7 +231,26 @@ def test_nome_da_corrida_nao_vira_html_nem_sql(app, mau):
     assert "<script>alert" not in corpo
     assert "<img src=x" not in corpo
     assert "<img src=\"x\"" not in corpo
-    assert "49" not in corpo.split("<style>")[0]       # o Jinja não reavalia
+    # ⚠️ ESTA ASSERÇÃO NÃO TESTAVA NADA. Era `corpo.split("<style>")[0]`, ou
+    # seja, só o pedaço ANTES da folha de estilo — e a folha abre na linha 7 do
+    # `base.html`, dentro do `<head>`. O nome da corrida é impresso no `<body>`,
+    # depois da linha 190: o teste olhava um trecho onde o payload jamais
+    # estaria, e passava sem conferir coisa alguma. Achado pelo painel de
+    # verificação em 2026-08-06 — um guarda que dormia desde que foi escrito.
+    #
+    # Agora olha o corpo. A primeira asserção é a FIANÇA: se o payload deixar de
+    # chegar ali (porque a página mudou de forma), o teste reclama em vez de
+    # voltar a passar por vacuidade.
+    # Procurar "49" na página INTEIRA também não serve: o SVG da marca tem
+    # centenas de coordenadas e `M497.90` contém "49". O lugar certo é o
+    # elemento onde o nome é impresso, e só ele.
+    import re as _re
+    nomes = _re.findall(r'<span class="nome">(.*?)</span>', corpo, _re.S)
+    if mau == "{{ 7*7 }}":
+        assert nomes, ("o nome da corrida não foi impresso — o teste está "
+                       "olhando o lugar errado outra vez")
+        assert "7*7" in "".join(nomes), "o payload não chegou ao elemento"
+        assert "49" not in "".join(nomes), "o Jinja reavaliou o nome da corrida"
     # e a tabela continua de pé depois do payload de SQL
     from easycontig_web import fila
     assert isinstance(fila.listar(app.cfg.sqlite_path), list)

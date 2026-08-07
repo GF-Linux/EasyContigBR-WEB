@@ -194,6 +194,52 @@ async def _sem_cache(request: Request, call_next):
     return resposta
 
 
+@app.middleware("http")
+async def _cabecalhos_de_seguranca(request: Request, call_next):
+    """O que o navegador precisa ouvir do servidor. Nenhum destes existia.
+
+    **`X-Robots-Tag: noindex`** é o mais específico deste projeto, e vai em TODA
+    resposta: com domínio próprio o app fica descobrível de fora, e o que está
+    atrás do login é sequenciamento **não publicado**. Não pode ser indexado nem
+    por engano — nem pelo buscador que segue um link colado no grupo errado.
+
+    **CSP com nonce, e sem `'unsafe-inline'` no script.** A página não carrega
+    nada de fora — nem fonte, nem folha, nem imagem — então dá para fechar quase
+    tudo. `script-src` sem `'unsafe-inline'` é o que transforma a CSP em defesa
+    real contra o gênero de XSS armazenado que já apareceu aqui (o `stitle` do
+    BLAST, em 06/08): mesmo que um texto vindo de fora volte a escapar do
+    escape, ele não executa sem o nonce, que muda a cada resposta.
+
+    `style-src` fica com `'unsafe-inline'` de propósito: são 68 atributos
+    `style=` nos templates, e bloqueá-los quebraria o layout para proteger
+    contra um risco muito menor. Trocar funcionamento por teatro não paga.
+
+    **HSTS só quando há TLS.** Mandá-lo em `http://localhost` ensinaria o
+    navegador a recusar o próprio desenvolvimento pelos meses do `max-age`.
+    """
+    nonce = secrets.token_urlsafe(16)
+    request.state.nonce = nonce
+    resposta = await call_next(request)
+    h = resposta.headers
+    h["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    h["X-Content-Type-Options"] = "nosniff"
+    h["X-Frame-Options"] = "DENY"
+    h["Referrer-Policy"] = "same-origin"
+    h["Content-Security-Policy"] = (
+        "default-src 'none'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "form-action 'self'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'none'")
+    if os.environ.get("EASYCONTIG_HTTPS_ONLY", "0") == "1":
+        h["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return resposta
+
+
 @app.exception_handler(HTTPException)
 def _erro(request: Request, exc: HTTPException):
     """Quem veio pelo navegador recebe página; quem veio por API recebe JSON.

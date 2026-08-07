@@ -145,7 +145,7 @@
 </div>
 
 {% if not google_ok %}
-<script>
+<script nonce="{{ request.state.nonce }}">
 /* O aviso já está visível (não depende deste script): o clique só leva o foco
    para o campo que de fato funciona, em vez de não fazer nada. */
 document.getElementById("g-desligado").addEventListener("click", function () {

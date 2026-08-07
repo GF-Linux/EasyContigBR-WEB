@@ -139,3 +139,72 @@ def test_login_dev_desligado_nao_consome_o_teto_compartilhado(tmp_path, monkeypa
     gastos = [k for k in limites._registro if k.startswith("login|")]
     assert not gastos, (
         f"20 batidas numa rota desligada gastaram o teto compartilhado: {gastos}")
+
+
+# ═════════════════════ cabeçalhos de segurança (checklist de produção)
+# Nenhum destes existia até 2026-08-06. O mais específico deste projeto é o
+# `noindex`: com domínio próprio o app fica descobrível de fora, e o que está
+# atrás do login é sequenciamento NÃO PUBLICADO.
+def test_toda_resposta_pede_para_nao_ser_indexada(app):
+    c = _cli(app)
+    for rota in ("/entrar", "/saude"):
+        h = c.get(rota).headers
+        assert "noindex" in h.get("x-robots-tag", ""), rota
+
+
+@pytest.mark.parametrize("cabecalho,valor", [
+    ("x-content-type-options", "nosniff"),
+    ("x-frame-options", "DENY"),
+    ("referrer-policy", "same-origin"),
+])
+def test_cabecalhos_basicos(app, cabecalho, valor):
+    assert _cli(app).get("/entrar").headers.get(cabecalho) == valor
+
+
+def test_a_csp_recusa_script_inline_sem_nonce(app):
+    """É o que separa CSP de enfeite. Provado no navegador em 06/08: um
+    `<script>` injetado sem nonce NÃO executou, e a página seguiu funcionando —
+    cromatograma desenhado, alinhamento montado, zero erro no console.
+
+    `style-src` fica com `'unsafe-inline'` de propósito (68 atributos `style=`
+    nos templates); `script-src` não pode, porque é onde XSS mora — e este
+    projeto já teve um XSS armazenado vindo do `stitle` do BLAST."""
+    csp = _cli(app).get("/entrar").headers["content-security-policy"]
+    script = [d for d in csp.split(";") if d.strip().startswith("script-src")][0]
+    assert "'unsafe-inline'" not in script, "a CSP virou enfeite"
+    assert "'nonce-" in script
+    assert "frame-ancestors 'none'" in csp and "base-uri 'none'" in csp
+
+
+def test_o_nonce_muda_a_cada_resposta(app):
+    """Nonce fixo é o mesmo que não ter nonce: bastaria lê-lo uma vez."""
+    c = _cli(app)
+    a, b = (c.get("/entrar").headers["content-security-policy"] for _ in range(2))
+    assert a != b
+
+
+def test_o_nonce_do_cabecalho_e_o_mesmo_da_pagina(app):
+    """Se divergirem, o próprio JS do app para de rodar."""
+    import re
+    r = _cli(app).get("/entrar")
+    do_cabecalho = re.search(r"'nonce-([^']+)'", r.headers["content-security-policy"])[1]
+    assert f'nonce="{do_cabecalho}"' in r.text
+
+
+def test_hsts_so_quando_ha_tls(app, monkeypatch):
+    """Mandar HSTS em http://localhost ensina o navegador a recusar o próprio
+    desenvolvimento pelos meses do `max-age`."""
+    assert "strict-transport-security" not in _cli(app).get("/entrar").headers
+
+    monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
+    importlib.reload(app)
+    r = TestClient(app.app).get("/entrar")
+    assert "max-age=" in r.headers.get("strict-transport-security", "")
+
+
+def test_o_favicon_existe(app):
+    """`GET /favicon.ico` respondia 404 em toda visita — aparecia no log do
+    autor e sujava o console do navegador."""
+    r = _cli(app).get("/estatico/favicon.svg")
+    assert r.status_code == 200 and r.content.startswith(b"<?xml")
+    assert 'rel="icon"' in _cli(app).get("/entrar").text
