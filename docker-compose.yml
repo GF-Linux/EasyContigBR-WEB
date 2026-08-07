@@ -95,3 +95,20 @@ services:
 
 volumes:
   dados:
+
+# ⚠️ A SUB-REDE E FIXA DE PROPOSITO. O `EASYCONTIG_PROXIES_CONFIAVEIS` guarda o
+# endereco de onde o proxy reverso chega ao conteiner, que e o GATEWAY desta
+# rede. Sem fixar, o Docker escolhe a sub-rede livre no momento da criacao: um
+# `docker compose down` seguido de `up` pode devolver outra faixa, o gateway
+# muda, e a variavel passa a apontar para um endereco que nao existe.
+#
+# O efeito disso NAO e um erro visivel -- e o `X-Forwarded-For` deixar de ser
+# confiavel e todo visitante anonimo voltar a dividir um balde so de limite,
+# que e o achado F2 de 2026-08-06: um estranho tranca o login do laboratorio
+# inteiro a ~2 req/min. Nada quebra, ninguem percebe. Por isso o numero e
+# escrito aqui e nao descoberto a cada subida.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
