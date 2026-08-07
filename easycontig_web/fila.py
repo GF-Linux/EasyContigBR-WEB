@@ -230,23 +230,46 @@ def reivindicar(caminho: Path, trabalhador: str = "") -> dict | None:
         return dict(r) if n == 1 else None
 
 
-def progresso(caminho: Path, lote_id: str, feito: int, total: int, etapa: str) -> None:
+# ── só o dono carimba ────────────────────────────────────────────────────────
+# ⚠️ Estas três gravavam pelo `id` do lote e mais nada. Importa porque nenhuma
+# trava de reenfileiramento é perfeita: se um trabalhador for desapossado do
+# lote — por um reenfileiramento indevido, um relógio torto, uma pausa longa —
+# ele **ainda assim** carimbava PRONTO por cima do irmão que estava montando de
+# verdade, e o relatório publicado seria o da montagem abandonada. Achado pelo
+# painel de verificação em 2026-08-06: sem isto, mesmo com o pulso perfeito o
+# desfecho continuava podendo ser escrito por quem não estava mais no comando.
+#
+# `trabalhador=""` grava sem conferir, de propósito: é o caminho do servidor
+# web, que marca `falhou` num lote que ninguém chegou a reivindicar.
+def _dono_confere(trabalhador: str) -> tuple[str, tuple]:
+    return (" AND trabalhador=?", (trabalhador,)) if trabalhador else ("", ())
+
+
+def progresso(caminho: Path, lote_id: str, feito: int, total: int, etapa: str,
+              trabalhador: str = "") -> bool:
+    cond, extra = _dono_confere(trabalhador)
     with conectar(caminho) as con:
-        con.execute("UPDATE lotes SET feito=?, total=?, etapa=? WHERE id=?",
-                    (feito, total, etapa[:120], lote_id))
+        return con.execute(
+            f"UPDATE lotes SET feito=?, total=?, etapa=? WHERE id=?{cond}",
+            (feito, total, etapa[:120], lote_id, *extra)).rowcount == 1
 
 
-def concluir(caminho: Path, lote_id: str) -> None:
+def concluir(caminho: Path, lote_id: str, trabalhador: str = "") -> bool:
+    """True se este trabalhador ainda era o dono. False = perdeu o lote."""
+    cond, extra = _dono_confere(trabalhador)
     with conectar(caminho) as con:
-        con.execute("UPDATE lotes SET status=?, terminado_em=?, etapa='' WHERE id=?",
-                    (PRONTO, _agora(), lote_id))
+        return con.execute(
+            f"UPDATE lotes SET status=?, terminado_em=?, etapa='' WHERE id=?{cond}",
+            (PRONTO, _agora(), lote_id, *extra)).rowcount == 1
 
 
-def falhar(caminho: Path, lote_id: str, erro: str) -> None:
+def falhar(caminho: Path, lote_id: str, erro: str, trabalhador: str = "") -> bool:
+    cond, extra = _dono_confere(trabalhador)
     with conectar(caminho) as con:
-        con.execute(
-            "UPDATE lotes SET status=?, terminado_em=?, erro=?, etapa='' WHERE id=?",
-            (FALHOU, _agora(), erro[:2000], lote_id))
+        return con.execute(
+            f"UPDATE lotes SET status=?, terminado_em=?, erro=?, etapa='' "
+            f"WHERE id=?{cond}",
+            (FALHOU, _agora(), erro[:2000], lote_id, *extra)).rowcount == 1
 
 
 def pulsar(caminho: Path, trabalhador: str) -> None:
@@ -349,17 +372,29 @@ def reenfileirar_orfaos(caminho: Path, eu: str = "",
         return not vivos                  # sem dono (banco velho): só se ninguém vive
 
     with conectar(caminho) as con:
-        rodando = con.execute(
-            "SELECT id, trabalhador FROM lotes WHERE status=?", (RODANDO,)).fetchall()
-        orfaos = [r["id"] for r in rodando if orfao(r["trabalhador"])]
-        n = 0
-        if orfaos:
-            marcas = ",".join("?" * len(orfaos))
-            n = con.execute(
-                f"UPDATE lotes SET status=?, etapa='', trabalhador='' "
-                f"WHERE id IN ({marcas})", (NA_FILA, *orfaos)).rowcount
-        con.execute(
-            "UPDATE lotes SET status=?, erro=? WHERE status=?",
-            (FALHOU, "o envio dos arquivos foi interrompido; envie a corrida de novo",
-             RECEBENDO))
+        # `BEGIN IMMEDIATE`: ler e escrever na MESMA transação de escrita. Em
+        # autocommit, dois trabalhadores subindo juntos — que é o caso normal do
+        # `docker compose up` com duas réplicas — leem a mesma lista de órfãos e
+        # os dois reenfileiram.
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            rodando = con.execute(
+                "SELECT id, trabalhador FROM lotes WHERE status=?",
+                (RODANDO,)).fetchall()
+            orfaos = [r["id"] for r in rodando if orfao(r["trabalhador"])]
+            n = 0
+            if orfaos:
+                marcas = ",".join("?" * len(orfaos))
+                n = con.execute(
+                    f"UPDATE lotes SET status=?, etapa='', trabalhador='' "
+                    f"WHERE id IN ({marcas}) AND status=?",
+                    (NA_FILA, *orfaos, RODANDO)).rowcount
+            con.execute(
+                "UPDATE lotes SET status=?, erro=? WHERE status=?",
+                (FALHOU, "o envio dos arquivos foi interrompido; envie a corrida de novo",
+                 RECEBENDO))
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
         return n

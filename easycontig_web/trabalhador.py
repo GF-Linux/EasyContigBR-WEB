@@ -16,6 +16,7 @@ import logging
 import os
 import signal
 import socket
+import threading
 import time
 
 from . import config, executor, fila, retencao
@@ -38,6 +39,27 @@ def _pedir_parada(*_):
     log.info("parada pedida — encerro depois do lote atual")
 
 
+def bater_pulso(cfg: config.Config, eu: str, parar: threading.Event) -> None:
+    """O pulso em thread PRÓPRIA, e é o ponto todo.
+
+    ⚠️ Ele batia no topo do laço, e `rodar_um` segura o laço o lote INTEIRO.
+    Um lote de 40 amostras leva ~26 s e cabia nos 90 s de `PULSO_VELHO` — mas o
+    app aceita 400 arquivos, e aí o trabalhador ocupado fica indistinguível de
+    um morto. O irmão subindo reenfileirava justamente o lote que estava sendo
+    montado: o defeito que o pulso existe para impedir, entrando pela porta dos
+    fundos. Achado pelo painel de verificação horas depois do conserto.
+
+    Numa thread, o pulso passa a dizer o que precisa dizer — "este PROCESSO está
+    vivo" — em vez de "este processo está entre lotes". `daemon` para não segurar
+    o encerramento, e cada `pulsar` abre a própria conexão.
+    """
+    while not parar.wait(fila.INTERVALO_PULSO):
+        try:
+            fila.pulsar(cfg.sqlite_path, eu)
+        except Exception:                       # noqa: BLE001
+            log.exception("não consegui registrar o pulso; segue processando")
+
+
 def rodar_um(cfg: config.Config, eu: str = "") -> bool:
     """Pega um lote da fila e processa. True se havia trabalho."""
     lote = fila.reivindicar(cfg.sqlite_path, eu)
@@ -49,21 +71,26 @@ def rodar_um(cfg: config.Config, eu: str = "") -> bool:
     t0 = time.perf_counter()
     try:
         def _prog(feito, total, etapa):
-            fila.progresso(cfg.sqlite_path, lote_id, feito, total, etapa or "")
+            fila.progresso(cfg.sqlite_path, lote_id, feito, total, etapa or "", eu)
 
         rep = executor.executar(cfg, lote_id, nome=lote["nome"],
                                 n_esperado=lote["n_arquivos"],
                                 referencia=lote.get("referencia") or "",
                                 progresso=_prog)
-        fila.concluir(cfg.sqlite_path, lote_id)
-        log.info("lote %s: pronto em %.1f s (%d amostras)",
-                 lote_id, time.perf_counter() - t0, len(rep.samples))
+        if fila.concluir(cfg.sqlite_path, lote_id, eu):
+            log.info("lote %s: pronto em %.1f s (%d amostras)",
+                     lote_id, time.perf_counter() - t0, len(rep.samples))
+        else:
+            # Perdi o lote no meio do caminho: outro trabalhador é o dono agora.
+            # Carimbar PRONTO aqui publicaria a MINHA montagem por cima da dele.
+            log.warning("lote %s: terminei mas não sou mais o dono — desfecho "
+                        "deixado para quem está com ele", lote_id)
     except Exception as e:                      # noqa: BLE001
         # Um lote ruim não pode derrubar o trabalhador: ele volta para a fila e
         # o próximo usuário continua sendo atendido. O erro vai para o banco,
         # que é o que a página do lote mostra.
         log.exception("lote %s: falhou", lote_id)
-        fila.falhar(cfg.sqlite_path, lote_id, f"{type(e).__name__}: {e}")
+        fila.falhar(cfg.sqlite_path, lote_id, f"{type(e).__name__}: {e}", eu)
     return True
 
 
@@ -107,20 +134,16 @@ def main() -> None:
     # o operador está olhando o log, então é a hora em que um expurgo inesperado
     # ainda dá para perceber e desligar.
     proxima_faxina = 0.0
-    proximo_pulso = 0.0
+
+    # O primeiro pulso ANTES da thread: entre o `reenfileirar_orfaos` acima e o
+    # primeiro tique haveria uma janela em que eu não existo para os outros.
+    fila.pulsar(cfg.sqlite_path, eu)
+    parar_pulso = threading.Event()
+    threading.Thread(target=bater_pulso, args=(cfg, eu, parar_pulso),
+                     daemon=True, name="pulso").start()
+
     while not _parar:
         try:
-            # Antes de qualquer trabalho: é o pulso que sustenta a frase "na
-            # fila" na tela de quem enviou. Sem ele, em 2026-08-06 um lote
-            # esperou para sempre enquanto a página prometia que alguém ia pegar
-            # — não havia trabalhador nenhum olhando esta fila.
-            if time.monotonic() >= proximo_pulso:
-                proximo_pulso = time.monotonic() + fila.INTERVALO_PULSO
-                try:
-                    fila.pulsar(cfg.sqlite_path, eu)
-                except Exception:               # noqa: BLE001
-                    log.exception("não consegui registrar o pulso; segue processando")
-
             if time.monotonic() >= proxima_faxina:
                 proxima_faxina = time.monotonic() + INTERVALO_FAXINA
                 # Fora do `rodar_um` de propósito: falha de faxina não pode
@@ -139,6 +162,7 @@ def main() -> None:
         except Exception:                       # noqa: BLE001
             log.exception("erro no laço do trabalhador")
             time.sleep(2)
+    parar_pulso.set()
     log.info("trabalhador encerrado")
 
 

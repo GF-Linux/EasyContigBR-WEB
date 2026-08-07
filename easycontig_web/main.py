@@ -660,6 +660,13 @@ def remover_banco(request: Request, banco_id: str):
 async def enviar_banco(request: Request, apelido: str = Form(...),
                        fasta: UploadFile = File(...)):
     u = _exigir(request)
+    # ⚠️ Esta rota era a ÚNICA que escreve em disco sem teto de taxa nenhum, e
+    # os bancos do usuário também não entram na cota da conta — então uma conta
+    # comum enchia o volume onde moram os `.ab1` de todo mundo, 20 MB por vez,
+    # sem nada que recolhesse depois. Achado pelo painel de verificação em
+    # 2026-08-06. O teto de "banco" é o mesmo que já protege o NCBI na rota de
+    # montar: 10 por hora, que para quem monta banco à mão é folgado.
+    limites.conferir("banco", request, u.email)
     try:
         banco_id = bancos.id_do_usuario(u.email, apelido.strip())
         dados = (await fasta.read(20 * 1024 * 1024 + 1)).decode("utf-8", "replace")

@@ -418,3 +418,25 @@ def test_cabecalho_de_fasta_hostil_nao_quebra_a_montagem_do_banco(app):
         ">REF001 <img src=x onerror=alert(1)>\n" + "ACGT" * 30 + "\n",
         blast_bin=app.cfg.blast_bin)
     assert e["montado"] and e["sequencias"] == 1
+
+
+# ══════════════════════ o banco do usuário também tem teto (achado em 06/08)
+def test_enviar_banco_proprio_respeita_o_teto_de_taxa(app):
+    """Era a única rota que escreve em disco sem teto de taxa nenhum, e os
+    bancos do usuário também não entram na cota da conta — uma conta comum
+    enchia o volume onde moram os `.ab1` de todo mundo, 20 MB por vez, sem nada
+    que recolhesse depois. Achado pelo painel de verificação em 2026-08-06.
+
+    O teto vale ANTES de qualquer trabalho, então o teste não depende do
+    `makeblastdb`: o que se afere é a recusa, não a montagem."""
+    c = _cli(app)
+    _entrar(c, "a@ufrrj.br")
+    fasta = b">REF001 teste\nACGTACGTACGTACGTACGT\n"
+    codigos = [
+        c.post("/bancos/meu", data={"apelido": f"b{i}"},
+               files={"fasta": (f"b{i}.fasta", fasta, "text/plain")},
+               follow_redirects=False).status_code
+        for i in range(14)
+    ]
+    assert 429 in codigos, (
+        f"14 envios seguidos e nenhuma recusa: {sorted(set(codigos))}")

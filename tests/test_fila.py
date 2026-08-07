@@ -236,3 +236,85 @@ def test_upload_interrompido_continua_falhando_e_nao_volta_a_fila(tmp_path):
     fila.reenfileirar_orfaos(banco, eu="deck:1")
     l = fila.pegar(banco, lid)
     assert l["status"] == fila.FALHOU and "interrompido" in l["erro"]
+
+
+# ── e o conserto acima também tinha buraco ───────────────────────────────────
+# O painel de verificação de 2026-08-06 apontou três, todos reais. O pior: o
+# pulso batia só no topo do laço, e `rodar_um` segura o laço o LOTE INTEIRO. Um
+# lote de 40 amostras leva ~26 s e cabia nos 90 s; mas o app aceita 400
+# arquivos, e aí o trabalhador ocupado fica indistinguível de um morto — o irmão
+# subindo reenfileira justamente o lote que está sendo montado. O defeito que o
+# pulso existe para impedir, entrando pela porta dos fundos.
+def test_so_o_dono_carimba_o_desfecho(tmp_path):
+    """Nenhuma trava de reenfileiramento é perfeita. Se um trabalhador for
+    desapossado, ele não pode publicar a montagem abandonada por cima da boa."""
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "deck:111")
+
+    # o lote passou para outro trabalhador
+    with fila.conectar(banco) as con:
+        con.execute("UPDATE lotes SET trabalhador=? WHERE id=?", ("deck:222", lid))
+
+    assert fila.concluir(banco, lid, "deck:111") is False, (
+        "o trabalhador desapossado carimbou PRONTO por cima do irmão")
+    assert fila.pegar(banco, lid)["status"] == fila.RODANDO
+    assert fila.concluir(banco, lid, "deck:222") is True
+
+
+def test_o_dono_certo_carimba(tmp_path):
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "deck:111")
+    assert fila.concluir(banco, lid, "deck:111") is True
+    assert fila.pegar(banco, lid)["status"] == fila.PRONTO
+
+
+def test_falhar_e_progresso_tambem_conferem_o_dono(tmp_path):
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "deck:111")
+    with fila.conectar(banco) as con:
+        con.execute("UPDATE lotes SET trabalhador=? WHERE id=?", ("deck:222", lid))
+    assert fila.falhar(banco, lid, "erro", "deck:111") is False
+    assert fila.progresso(banco, lid, 1, 2, "x", "deck:111") is False
+    assert fila.pegar(banco, lid)["feito"] == 0
+
+
+def test_o_servidor_web_continua_marcando_falha_sem_dono(tmp_path):
+    """`trabalhador=""` grava sem conferir de propósito: é o caminho do upload
+    interrompido, num lote que ninguém chegou a reivindicar."""
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = fila.novo_lote(banco, dono="a@ufrrj.br", nome="p", n_arquivos=2)
+    assert fila.falhar(banco, lid, "disco cheio") is True
+    assert fila.pegar(banco, lid)["status"] == fila.FALHOU
+
+
+def test_dois_trabalhadores_subindo_juntos_nao_reenfileiram_em_dobro(tmp_path):
+    """`reenfileirar_orfaos` lia e escrevia em autocommit: dois trabalhadores
+    subindo juntos — o caso normal do `docker compose up` com duas réplicas —
+    viam a mesma lista de órfãos e os dois agiam sobre ela."""
+    import multiprocessing as mp
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    for _ in range(20):
+        _um_lote_rodando(banco, "deck:morto")
+
+    ctx = mp.get_context("spawn")
+    saida = ctx.Queue()
+    ps = [ctx.Process(target=_subir_e_reenfileirar, args=(banco, f"deck:{i}", saida))
+          for i in range(4)]
+    for p in ps:
+        p.start()
+    somas = [saida.get(timeout=60) for _ in ps]
+    for p in ps:
+        p.join(timeout=60)
+
+    assert sum(somas) == 20, (
+        f"20 órfãos e {sum(somas)} reenfileiramentos: alguém agiu duas vezes")
+
+
+def _subir_e_reenfileirar(banco, eu, saida):
+    from easycontig_web import fila as f
+    saida.put(f.reenfileirar_orfaos(banco, eu=eu))
