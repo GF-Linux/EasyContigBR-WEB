@@ -160,6 +160,28 @@ select{ font:inherit; font-size:.9rem; padding:.55rem .7rem; width:100%;
             <input type="file" id="arquivos" name="arquivos" multiple
                    accept=".ab1,.abi,.scf" required style="margin-top:.4rem">
             <p id="resumo" class="sub" style="margin:.4rem 0 0"></p>
+            <p id="aviso-subpasta" class="sub" style="display:none; margin:.4rem 0 0"></p>
+
+            {# O nome e a UNICA fonte de identidade. O sentido F/R sai do
+               conteudo e e confiavel (ADR 0034); o que o app nao tem como saber
+               e QUAIS duas leituras sao da mesma amostra. Dizer isto ANTES do
+               envio custa um paragrafo e evita a corrida que volta com tudo
+               avulso -- aconteceu em 2026-08-07, 81 de 81. #}
+            <details class="sub" style="margin-top:.5rem">
+              <summary>Como nomear os arquivos</summary>
+              <p>O EasyContig descobre sozinho, pelo DNA, se uma leitura é
+              <em>forward</em> ou <em>reverse</em> — o nome não precisa estar
+              certo quanto a isso. O que ele <strong>não</strong> tem como
+              adivinhar é quais duas leituras são da <strong>mesma amostra</strong>.</p>
+              <p>Então basta que as duas leituras de uma amostra compartilhem um
+              identificador e se distingam por <code>_F</code> e <code>_R</code>:</p>
+              <pre style="margin:.3rem 0">amostra12_BTF2_F.ab1
+amostra12_BTR2_R.ab1</pre>
+              <p>⚠️ Nome que só varia no <strong>poço da placa</strong>
+              (<code>corrida_A09.ab1</code>, <code>corrida_B09.ab1</code>) não
+              serve: não há nada ali ligando um ao outro, e as leituras vão ser
+              montadas sozinhas.</p>
+            </details>
           </div>
 
           <button type="submit" id="botao-enviar"
@@ -304,11 +326,25 @@ select{ font:inherit; font-size:.9rem; padding:.55rem .7rem; width:100%;
 
   function selecao() {
     var lista = entrada.files || [];
-    var n = 0, bytes = 0, ignorados = 0;
+    var n = 0, bytes = 0, ignorados = 0, subpastas = {}, nSub = 0;
     for (var i = 0; i < lista.length; i++) {
-      if (aceito(lista[i])) { n++; bytes += lista[i].size; } else { ignorados++; }
+      if (!aceito(lista[i])) { ignorados++; continue; }
+      n++; bytes += lista[i].size;
+      // Escolher uma pasta VARRE as subpastas, em silencio. Em 2026-08-07 isso
+      // fez um teste de 81 arquivos virar 161: a subpasta `organizado/` foi
+      // junto, e o resultado pareceu "montou algumas" quando na verdade as 81
+      // do teste nao montaram NENHUMA -- as que montaram eram as de carona.
+      // O caminho relativo e a unica pista disso, e so existe aqui no navegador.
+      var rel = lista[i].webkitRelativePath || '';
+      var partes = rel.split('/');
+      if (partes.length > 2) {
+        var sub = partes.slice(1, -1).join('/');
+        if (!subpastas[sub]) { subpastas[sub] = 0; nSub++; }
+        subpastas[sub]++;
+      }
     }
-    return { n: n, bytes: bytes, ignorados: ignorados };
+    return { n: n, bytes: bytes, ignorados: ignorados,
+             subpastas: subpastas, nSub: nSub };
   }
 
   function mostrarFalha(msg) {
@@ -339,6 +375,23 @@ select{ font:inherit; font-size:.9rem; padding:.55rem .7rem; width:100%;
     }
     resumo.textContent = s.n + ' arquivo(s) · ' + mb(s.bytes)
       + (s.ignorados ? ' · ' + s.ignorados + ' de outro tipo serão ignorados' : '');
+
+    var av = document.getElementById('aviso-subpasta');
+    if (av) {
+      if (s.nSub) {
+        var nomes = Object.keys(s.subpastas).slice(0, 3);
+        var quantos = 0;
+        for (var k in s.subpastas) { quantos += s.subpastas[k]; }
+        av.textContent = '⚠️ A seleção inclui ' + quantos + ' arquivo(s) de '
+          + s.nSub + ' subpasta(s) (' + nomes.join(', ')
+          + (s.nSub > nomes.length ? ', …' : '')
+          + '). Eles vão junto. Se você queria só a pasta de cima, escolha-a '
+          + 'sem as subpastas ou selecione os arquivos direto.';
+        av.style.display = '';
+      } else {
+        av.style.display = 'none';
+      }
+    }
   });
 
   form.addEventListener('submit', function (ev) {

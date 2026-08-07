@@ -164,6 +164,19 @@ def resumo(rep: dict) -> dict:
         "total": len(amostras),
         "por_situacao": por_situacao,
         "situacoes": situacoes,
+        # Leitura que nao formou par. NAO e detalhe: numa corrida cujos nomes
+        # so trazem o poco (`..._A09.ab1`, com SMPL1 identico nos 80), TODAS as
+        # leituras caem aqui -- medido em 2026-08-07, 81 de 81. E o app estava
+        # CERTO: o sentido sai do conteudo e e confiavel, mas a identidade do
+        # individuo so o nome resolve (ADR 0034), e ali nao ha nome que diga
+        # qual leitura e de qual amostra.
+        #
+        # O defeito era a tela CALAR. Quem enviou via 81 linhas de uma leitura
+        # so, sem nada explicando -- e a leitura natural e "o programa falhou",
+        # quando o certo e "os nomes nao permitem parear". Mesmo padrao da ADR
+        # 0039: recusa informada e resultado, silencio parece defeito.
+        "avulsas": sum(1 for s in amostras if len(s.get("reads") or []) < 2),
+        "pareadas": sum(1 for s in amostras if len(s.get("reads") or []) >= 2),
         "com_ressalva": sum(1 for s in amostras if s.get("caveats")),
         "com_erro": sum(1 for s in amostras if s.get("error")),
         "com_contig_invertido": sum(1 for s in amostras if s.get("contig_flipped")),

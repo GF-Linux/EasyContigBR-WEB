@@ -117,6 +117,30 @@ td:first-child a{ font-family:var(--mono); font-size:.85em }
    tem 40 amostras. Quando o relatório existe mas não pôde ser lido, dizemos
    isso — uma tabela vazia passaria por "corrida sem amostras". #}
 {% if lote.status == 'pronto' %}
+  {# Leituras que nao formaram par. A tela CALAVA sobre isto: numa corrida cujos
+     nomes so trazem o poco, as 81 leituras viraram 81 linhas de uma leitura so,
+     sem nada explicando -- e quem envia le "o programa falhou", quando o certo e
+     "os nomes nao dizem qual leitura e de qual amostra". O sentido F/R o app
+     descobre pelo DNA; a identidade do individuo, nao (ADR 0034). #}
+  {% if resumo and resumo.avulsas %}
+    <div class="cartao aviso">
+      <h3>{{ resumo.avulsas }} leitura{{ 's' if resumo.avulsas > 1 }}
+          não formou par</h3>
+      <p>Elas foram montadas sozinhas, sem a leitura complementar. Isso
+      <strong>não é falha do arquivo</strong>: o EasyContig descobre pelo próprio
+      DNA se uma leitura é <em>forward</em> ou <em>reverse</em>, mas
+      <strong>quem diz que duas leituras são da mesma amostra é o nome</strong> —
+      e nestes o nome não diz.</p>
+      <p>Costuma acontecer quando o nome do sequenciador só varia no poço da
+      placa (<code>..._A09.ab1</code>, <code>..._B09.ab1</code>): não há ali nada
+      ligando um ao outro. Renomeando de modo que as duas leituras da mesma
+      amostra compartilhem um identificador e se distingam por
+      <code>_F</code>/<code>_R</code>, elas passam a parear.</p>
+      {% if resumo.pareadas %}<p class="sub">Neste lote,
+      {{ resumo.pareadas }} amostra{{ 's' if resumo.pareadas > 1 }}
+      parearam normalmente.</p>{% endif %}
+    </div>
+  {% endif %}
   {% if amostras %}
     {% include "_amostras_tabela.html" %}
   {% else %}

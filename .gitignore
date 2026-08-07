@@ -20,3 +20,10 @@ carga-*.json
 carga-*.log
 carga-execucao.txt
 carga-vcpu.txt
+
+# Relatorio de dados de segurança realizados pelo plugin claude
+
+CLAUDE-SECURITY-20260806-121035/
+CLAUDE-SECURITY-20260806-125027/
+CLAUDE-SECURITY-20260806-213242/
+CLAUDE-SECURITY-20260807-180111/
