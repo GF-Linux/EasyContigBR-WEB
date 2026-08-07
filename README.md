@@ -1,8 +1,14 @@
 # EasyContig BR — web (lotes)
 
-Fachada web do EasyContig BR. Sobe uma pasta de `.ab1`, devolve o relatório da
-corrida e o CSV. **Não** reproduz a janela do aplicativo: nada de cromatograma
-interativo nem edição de base — isso continua sendo do desktop.
+Fachada web do EasyContig BR. Sobe um par F+R — ou a pasta inteira de uma
+corrida — e devolve o alinhamento, os dois cromatogramas acoplados, a
+identificação, o relatório e o CSV.
+
+⚠️ Este parágrafo dizia até 2026-08-06 que a web **não** tinha cromatograma
+interativo nem edição de base. Deixou de ser verdade em 05/08, quando a Fase 2
+saiu do papel: o workspace da amostra desenha o traço em canvas, arrasta para os
+lados, ajusta amplitude e edita base — e o consenso só vira definitivo na
+exportação. O desktop continua existindo e não foi substituído.
 
 Por que assim, e não o app inteiro no navegador: [ADR 0050][adr50] no segundo
 cérebro. Resumo: o lote é 100 % backend, já estava implementado, e é o que o
@@ -97,7 +103,11 @@ Sirva atrás de um proxy reverso com TLS — o compose publica só em `127.0.0.1
 - **`.ab1` e relatório vencem juntos.** A faxina apaga a pasta inteira. Dá para
   argumentar que o traço bruto (pesado, existe no laboratório) e o relatório
   (leve, é o produto) merecem prazos diferentes — não implementado, é política.
-- **Fase 2** — cromatograma e grade editável no navegador. Adiado de propósito.
+- ~~**Fase 2** — cromatograma e grade editável no navegador. Adiado de
+  propósito.~~ **Feita em 2026-08-05/06** (ADR 0052): traço em canvas, arrasto,
+  amplitude de 0,5× a 16×, edição de base com rascunho no navegador. O que
+  continua adiado é a **exportação do consenso editado como registro**: hoje
+  ela sai como arquivo, e o `.ab1` em disco segue sendo a verdade.
 
 ## Números medidos (Steam Deck, hardware fraco de propósito)
 
