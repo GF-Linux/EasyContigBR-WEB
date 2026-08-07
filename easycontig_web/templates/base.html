@@ -247,7 +247,15 @@ pre{ font-family:var(--mono); font-size:.8rem }
            pela lateral, que é justamente por onde a pessoa volta. #}
         <span class="cr-linha">
           <a class="cr{% if lote is defined and lote and lote.id == l.id %} viva{% endif %}"
-             href="/lotes/{{ l.id }}" title="{{ l.status }}">
+             {# O `title` mostrava só o status — e quatro corridas com o mesmo
+                nome comprido ("F13719 #80649 27/07") ficavam IDÊNTICAS na
+                lateral, cortadas no mesmo ponto, sem nada que as separasse nem
+                ao passar o mouse. Medido em 06/08: 4 de 5 cortadas, 151 px de
+                texto numa caixa de 105. Agora o nome inteiro vem junto, e a
+                data desempata o que o nome não desempata. #}
+             href="/lotes/{{ l.id }}"
+             title="{{ l.nome or l.id }} — {{ l.status.replace('_', ' ') }}{%
+               if l.criado_em %} · {{ l.criado_em[:10] }}{% endif %}">
             <i class="pt {{ l.status }}"></i>
             <span class="nome">{{ l.nome or l.id }}</span>
           </a>

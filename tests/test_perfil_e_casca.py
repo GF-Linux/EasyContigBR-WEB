@@ -208,3 +208,24 @@ def test_o_retrato_alinha_com_o_selo_da_marca(cliente):
     ident = recuo_esquerdo(_regra(html, ".perfil .ident"))     # + 6px
     assert caixa + ident == marca, (
         f"retrato em {caixa + ident}px, selo da marca em {marca}px")
+
+
+# ───────────────────────────────── a lateral distingue corridas de mesmo nome
+def test_o_titulo_da_corrida_na_lateral_traz_nome_e_data(cliente):
+    """Medido em 06/08 na revisão do workspace: quatro corridas chamadas
+    "F13719 #80649 27/07" apareciam idênticas na lateral — 151 px de texto numa
+    caixa de 105, cortadas no mesmo ponto — e o `title` mostrava o STATUS, então
+    nem passando o mouse dava para separá-las."""
+    from easycontig_web import fila
+    from easycontig_web import main as m
+    for _ in range(2):
+        lid = fila.novo_lote(m.cfg.sqlite_path, dono="gustavo@ufrrj.br",
+                             nome="F13719 #80649 27/07 corrida bem comprida",
+                             n_arquivos=2)
+        fila.liberar_para_fila(m.cfg.sqlite_path, lid, 2)
+
+    html = cliente.get("/").text
+    assert 'title="F13719 #80649 27/07 corrida bem comprida — na fila' in html, (
+        "o title da corrida não traz o nome inteiro")
+    assert html.count("F13719 #80649 27/07 corrida bem comprida — na fila") >= 2
+    assert 'title="na_fila"' not in html, "o title voltou a ser só o status"
