@@ -13,3 +13,9 @@ __pycache__/
 dados/
 bancos/
 nucleo
+
+# Relatórios e logs do arnês de carga (tools/carga.sh) — o número interessa,
+# o arquivo não: cada execução gera um novo, com selo de máquina e horário.
+carga-*.json
+carga-*.log
+carga-execucao.txt
