@@ -71,6 +71,12 @@ app = FastAPI(title="EasyContig BR — lotes", docs_url=_DOCS,
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
+# Os únicos POST que uma pessoa sem sessão pode fazer. Allowlist e não
+# blocklist: rota nova nasce fechada, que é o mesmo princípio do teto de leitura
+# logo abaixo.
+POST_SEM_SESSAO = {"/entrar"}
+
+
 # ⚠️ A POSIÇÃO DESTE BLOCO É O QUE O FAZ FUNCIONAR — não mova para junto dos
 # outros middlewares lá embaixo. `add_middleware` empilha de dentro para fora:
 # quem é registrado DEPOIS fica por FORA. Registrando o limitador aqui, entre o
@@ -93,8 +99,32 @@ async def _limite_de_leitura(request: Request, call_next):
     comportamento que `limites.chave()` já implementava e este middleware não
     conseguia usar. O caminho anônimo continua contado por IP, e é o que se quer:
     ali o IP é a única identidade que existe.
+
+    ⚠️ **E o 401 dos POST tem que sair DAQUI, não da rota.** Medido nos pacotes
+    instalados em 2026-08-06: o FastAPI executa `await request.form()` dentro do
+    manipulador da requisição, **antes** de chamar a função do endpoint — e a
+    autenticação deste app é a primeira instrução DE DENTRO dela. Ou seja, um
+    chamador sem cookie nenhum decidia quantos bytes o servidor recebia e por
+    quanto tempo, e só depois levava 401: mil partes de ~1 MB seguravam ~1 GB
+    residente no processo do uvicorn. Middleware roda antes do parser, então
+    recusar aqui é recusar antes de o corpo existir.
     """
-    if request.method == "GET" and not request.url.path.startswith("/estatico/"):
+    caminho = request.url.path
+    if caminho.startswith("/estatico/"):
+        return await call_next(request)
+
+    if request.method == "POST" and caminho not in POST_SEM_SESSAO:
+        try:
+            tem_sessao = auth.usuario_da_sessao(request) is not None
+        except Exception:                       # noqa: BLE001
+            tem_sessao = False
+        if not tem_sessao:
+            if "text/html" in request.headers.get("accept", ""):
+                return RedirectResponse(f"/entrar?proximo={quote(caminho)}",
+                                        status_code=303)
+            return JSONResponse({"detail": "entre para continuar"}, status_code=401)
+
+    if request.method == "GET":
         quem = None
         try:
             u = auth.usuario_da_sessao(request)
@@ -341,11 +371,16 @@ def pagina_entrar(request: Request, erro: str = "", proximo: str = ""):
 
 @app.post("/entrar")
 def entrar_dev(request: Request, email: str = Form(...), proximo: str = Form("")):
+    # ⚠️ A ORDEM IMPORTA. O teto vinha ANTES da checagem de modo, então em
+    # produção — onde esta rota sempre devolve 403 — cada batida ainda queimava
+    # o orçamento de login, que atrás de um proxy é COMPARTILHADO por todo
+    # visitante anônimo. Ou seja: uma rota desligada servia para trancar o
+    # login de quem usa. Achado pelo painel de verificação em 2026-08-06.
+    if auth.modo() != "dev":
+        raise HTTPException(status_code=403, detail="login de desenvolvimento desligado")
     # Teto no login: sem ele, tentar e-mail atrás de e-mail é adivinhação de
     # graça — e no modo `dev` cada tentativa que acerta o formato ENTRA.
     limites.conferir("login", request)
-    if auth.modo() != "dev":
-        raise HTTPException(status_code=403, detail="login de desenvolvimento desligado")
     email = email.strip().lower()
     destino = _destino(proximo)
     volta = f"&proximo={quote(destino)}" if destino != "/" else ""
@@ -369,9 +404,11 @@ def _redirect_uri(request: Request) -> str:
 
 @app.get("/auth/google")
 def entrar_google(request: Request):
-    limites.conferir("login", request)
+    # Mesma ordem do `entrar_dev`: rota desligada não pode consumir o orçamento
+    # compartilhado de quem está tentando entrar de verdade.
     if auth.modo() != "google" or not auth.google_configurado():
         raise HTTPException(status_code=404, detail="login pelo Google não configurado")
+    limites.conferir("login", request)
     return RedirectResponse(auth.url_de_ida(request, _redirect_uri(request)),
                             status_code=303)
 
@@ -856,11 +893,27 @@ def relatorio_json(request: Request, lote_id: str):
 
 # ----------------------------------------------------------------------- saúde
 @app.get("/saude")
-def saude():
+def saude(request: Request):
+    """De pé ou não. Detalhe só para quem entrou.
+
+    ⚠️ Isto respondia a QUALQUER UM com os caminhos absolutos do contêiner
+    (`/usr/local/bin/tracy`, `/bancos/referencias_18S`), quais ferramentas
+    científicas estão instaladas e onde, e a profundidade da fila **sem filtro
+    de dono** — repetindo a chamada, um estranho acompanha quando o laboratório
+    trabalha e quanto. Não vaza `.ab1` nem credencial, mas é reconhecimento e um
+    oráculo de atividade, de graça.
+
+    A rota continua aberta porque o `healthcheck` do compose a usa sem cookie —
+    e para ele `{"ok": true}` com 200 basta. Quem precisa do detalhe é quem
+    opera, e quem opera tem sessão.
+    """
     itens = config.diagnostico(cfg)
+    ok = all(x for _, x, _ in itens)
+    if not _u(request):
+        return {"ok": ok}
     return {
-        "ok": all(ok for _, ok, _ in itens),
-        "dependencias": [{"item": i, "ok": ok, "detalhe": d} for i, ok, d in itens],
+        "ok": ok,
+        "dependencias": [{"item": i, "ok": x, "detalhe": d} for i, x, d in itens],
         "na_fila": sum(1 for x in fila.listar(cfg.sqlite_path, limite=500)
                        if x["status"] == fila.NA_FILA),
     }

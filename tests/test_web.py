@@ -162,6 +162,13 @@ def test_resultado_so_sai_com_o_lote_pronto(cliente):
 
 
 def test_saude_lista_as_dependencias(cliente):
+    """⚠️ Passou a exigir sessão em 2026-08-06. Sem ela, `/saude` entregava a
+    qualquer um os caminhos absolutos do contêiner, quais ferramentas estão
+    instaladas e onde, e a profundidade da fila **sem filtro de dono** — quem
+    repetisse a chamada acompanhava quando o laboratório trabalha. O
+    `healthcheck` do compose segue atendido: ele chama sem cookie e só olha o
+    código (ver `tests/test_achados_verificados.py`)."""
+    _entrar(cliente)
     d = cliente.get("/saude").json()
     assert {x["item"] for x in d["dependencias"]} == {
         "tracy", "blastn", "banco 18S", "banco 16S"}
