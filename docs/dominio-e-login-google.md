@@ -93,9 +93,7 @@ Let's Encrypt bate no nome, então ele precisa já resolver.
 
 > ⚠️ **A lista de "usuários de teste" NÃO é uma porta — medido em 2026-08-06.**
 > Com a tela em *Testando* e **um** e-mail na lista, o autor entrou com **três**
-> contas diferentes, duas delas fora da lista (`juaredpokemon@gmail.com` e
-> `jared@ufrrj.br`). Eu tinha escrito aqui o contrário, e estava errado.
->
+> contas diferentes, duas delas fora da lista (`jared@ufrrj.br`). Eu tinha escrito aqui o contrário, e estava errado.
 > O motivo é o mesmo que torna a publicação fácil: a trava de usuário de teste e
 > a verificação do Google existem para escopos **sensíveis**, e os nossos três
 > não são. Sem verificação exigida, não há gate. Ou seja: **quem decide quem
