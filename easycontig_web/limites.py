@@ -88,12 +88,26 @@ def ip_de_origem(request: Request) -> str:
     proxy e divide o teto anônimo — chato, mas é o erro reversível. Confiar por
     padrão seria o erro irreversível: o teto simplesmente não existiria e
     ninguém perceberia, porque nada quebra.
-    """
+
+    ⚠️ E O CONSERTO ACIMA NÃO BASTAVA — achado em 2026-08-06 à noite. Confiar no
+    proxy certo estava certo; ler a PRIMEIRA entrada da lista, não. Proxy
+    **acrescenta** ao fim: um cliente que manda `X-Forwarded-For: 1.2.3.4` faz o
+    proxy entregar `1.2.3.4, <ip real>`, e pegar `[0]` devolve exatamente o texto
+    que o cliente escolheu. O teto voltava a ser contornável assim que alguém
+    configurasse um proxy — ou seja, em produção e só em produção.
+
+    Agora se caminha da DIREITA para a esquerda, pulando os proxies que nós
+    declaramos, e para-se no primeiro endereço que não é nosso: é o último salto
+    que uma máquina de confiança viu, e o primeiro que o cliente não pôde
+    inventar."""
     conexao = request.client.host if request.client else "?"
-    if conexao in proxies_confiaveis():
-        declarado = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-        if declarado:
-            return declarado
+    confiaveis = proxies_confiaveis()
+    if conexao in confiaveis:
+        cadeia = [p.strip() for p in
+                  request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+        for endereco in reversed(cadeia):
+            if endereco not in confiaveis:
+                return endereco
     return conexao
 
 

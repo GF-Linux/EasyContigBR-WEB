@@ -28,6 +28,24 @@ services:
       EASYCONTIG_DB_16S: /bancos/referencias_16S
       EASYCONTIG_TRACY_BIN: /usr/local/bin/tracy
       EASYCONTIG_TRIM: "4"
+      # ⚠️ Estas quatro FALTAVAM, e o efeito não é cosmético — descoberto pela
+      # varredura de 06/08. Sem elas o container cai nos padrões do código:
+      #   RETENCAO_DIAS ausente = 0 = GUARDAR PARA SEMPRE. A política de 30 dias
+      #     que o laboratório decidiu simplesmente não valeria em produção, e o
+      #     volume cresceria em silêncio — que é a pendência que a ADR 0050
+      #     levantou e que todo mundo achava resolvida.
+      #   URL_BASE ausente = o endereço de volta do Google passa a sair do
+      #     cabeçalho `Host`, que quem faz a requisição escolhe.
+      # As de cota e taxa caem em padrões sãos, mas o `.env` do servidor era
+      # ignorado sem nada dizer.
+      EASYCONTIG_RETENCAO_DIAS: ${EASYCONTIG_RETENCAO_DIAS:-30}
+      EASYCONTIG_URL_BASE: ${EASYCONTIG_URL_BASE:-}
+      EASYCONTIG_MAX_LOTES_ATIVOS: ${EASYCONTIG_MAX_LOTES_ATIVOS:-10}
+      EASYCONTIG_MAX_BYTES_CONTA: ${EASYCONTIG_MAX_BYTES_CONTA:-2147483648}
+      EASYCONTIG_LIM_ENVIO: ${EASYCONTIG_LIM_ENVIO:-20}
+      EASYCONTIG_LIM_LEITURA: ${EASYCONTIG_LIM_LEITURA:-300}
+      EASYCONTIG_LIM_BANCO: ${EASYCONTIG_LIM_BANCO:-10}
+      EASYCONTIG_LIM_LOGIN: ${EASYCONTIG_LIM_LOGIN:-20}
       EASYCONTIG_AUTH: google
       EASYCONTIG_DOMINIO: ${EASYCONTIG_DOMINIO:-ufrrj.br}
       EASYCONTIG_SECRET_KEY: ${EASYCONTIG_SECRET_KEY:?defina no .env — sem ela as sessões caem a cada reinício}

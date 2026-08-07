@@ -29,6 +29,9 @@ GUARDAR_DIAS="${GUARDAR_DIAS:-30}"
 carimbo="$(date -u +%Y%m%dT%H%M%SZ)"
 alvo="$DESTINO/$carimbo"
 mkdir -p "$alvo"
+# Dado de sequenciamento nao publicado: a copia nao pode nascer legivel para
+# todo mundo da maquina. Achado pela varredura de 06/08.
+chmod 700 "$DESTINO" "$alvo"
 
 echo "[$(date -Is)] backup de $DADOS → $alvo"
 
