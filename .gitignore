@@ -30,3 +30,12 @@ carga-vcpu.txt
 # vulnerabilidades ainda NAO corrigidas -- exatamente o que nao pode ser
 # publicado por descuido.
 CLAUDE-SECURITY-*/
+
+# Documentos de auditoria e de checklist operacional. Saem do versionamento a
+# pedido do autor antes de o repositorio ficar publico: eles registram defeitos
+# achados, o estado da instancia e o que ainda falta -- util para quem opera,
+# e mapa para quem nao deveria.
+# ⚠️ ISTO NAO APAGA O QUE JA FOI PUBLICADO. Eles seguem legiveis no historico
+# (`git log -p`) ate alguem reescrever a arvore. Copia em ../easycontig-docs-privados/
+docs/auditoria-do-nucleo.md
+docs/checklist-de-producao.md
