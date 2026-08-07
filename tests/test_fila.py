@@ -139,3 +139,100 @@ def test_lote_nao_e_reivindicado_por_dois_trabalhadores(tmp_path):
     assert len(set(todos)) == n, "lote ficou na fila sem ninguém pegar"
     assert sum(1 for l in colhido if l) >= 2, (
         "um trabalhador só levou tudo; o teste não exercitou a disputa")
+
+
+# ── o arranque de um trabalhador não pode reenfileirar o trabalho do outro ───
+# Confirmado em 2026-08-06: `reenfileirar_orfaos` varria TODOS os lotes em
+# `rodando`, sem olhar de quem eram. E o compose sobe `replicas: 2` — então
+# subir o segundo trabalhador, reiniciar um deles, ou o `restart:
+# unless-stopped` agindo depois de um OOM devolvia à fila o lote que o outro
+# estava montando NAQUELE INSTANTE. Os dois passavam a escrever na mesma pasta.
+import datetime as _dt
+
+
+def _um_lote_rodando(banco, dono_trabalhador):
+    lid = fila.novo_lote(banco, dono="a@ufrrj.br", nome="par", n_arquivos=2)
+    fila.liberar_para_fila(banco, lid, 2)
+    fila.reivindicar(banco, dono_trabalhador)
+    return lid
+
+
+def test_nao_reenfileira_lote_de_trabalhador_vivo(tmp_path):
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "deck:111")
+    fila.pulsar(banco, "deck:111")               # o dono está vivo
+
+    n = fila.reenfileirar_orfaos(banco, eu="deck:222")   # o segundo sobe
+
+    assert n == 0, "reenfileirou o lote que o outro trabalhador está montando"
+    assert fila.pegar(banco, lid)["status"] == fila.RODANDO
+
+
+def test_reenfileira_quando_o_dono_parou_de_pulsar(tmp_path):
+    """O caso legítimo, que não pode ser perdido no conserto: queda de energia."""
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "deck:111")
+    fila.pulsar(banco, "deck:111")
+
+    tarde = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(
+        seconds=fila.PULSO_VELHO + 30)
+    n = fila.reenfileirar_orfaos(banco, eu="deck:222", agora=tarde)
+
+    assert n == 1
+    assert fila.pegar(banco, lid)["status"] == fila.NA_FILA
+
+
+def test_o_proprio_trabalhador_nao_se_considera_vivo_no_arranque(tmp_path):
+    """`reenfileirar_orfaos` roda ANTES do primeiro pulso. Um trabalhador que
+    reinicia com o mesmo identificador tem de recuperar o próprio lote — senão
+    ele fica preso em `rodando` para sempre, que é o defeito que esta função
+    existe para evitar."""
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "deck:111")
+    fila.pulsar(banco, "deck:111")
+
+    n = fila.reenfileirar_orfaos(banco, eu="deck:111")   # sou eu, reiniciando
+
+    assert n == 1, "o trabalhador não recuperou o próprio lote ao reiniciar"
+    assert fila.pegar(banco, lid)["status"] == fila.NA_FILA
+
+
+def test_lote_sem_dono_registrado_espera_se_alguem_esta_vivo(tmp_path):
+    """Banco anterior à migração 3. Na dúvida não se toca no trabalho alheio: o
+    preço de esperar é uma página girando; o de errar é um relatório com duas
+    montagens misturadas."""
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "")            # sem dono, como no esquema velho
+    fila.pulsar(banco, "deck:111")               # alguém está vivo
+
+    assert fila.reenfileirar_orfaos(banco, eu="deck:222") == 0
+    assert fila.pegar(banco, lid)["status"] == fila.RODANDO
+
+
+def test_lote_sem_dono_volta_quando_ninguem_esta_vivo(tmp_path):
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "")
+    assert fila.reenfileirar_orfaos(banco, eu="deck:222") == 1
+    assert fila.pegar(banco, lid)["status"] == fila.NA_FILA
+
+
+def test_reivindicar_grava_quem_pegou(tmp_path):
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = _um_lote_rodando(banco, "deck:777")
+    assert fila.pegar(banco, lid)["trabalhador"] == "deck:777"
+
+
+def test_upload_interrompido_continua_falhando_e_nao_volta_a_fila(tmp_path):
+    """O que já estava certo e não pode regredir no conserto."""
+    banco = tmp_path / "f.sqlite3"
+    fila.criar_esquema(banco)
+    lid = fila.novo_lote(banco, dono="a@ufrrj.br", nome="par", n_arquivos=2)
+    fila.reenfileirar_orfaos(banco, eu="deck:1")
+    l = fila.pegar(banco, lid)
+    assert l["status"] == fila.FALHOU and "interrompido" in l["erro"]

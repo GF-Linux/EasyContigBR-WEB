@@ -72,9 +72,27 @@ def _v2_links_do_perfil(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE perfis ADD COLUMN links TEXT NOT NULL DEFAULT '[]'")
 
 
+def _v3_quem_reivindicou_o_lote(con: sqlite3.Connection) -> None:
+    """Qual trabalhador está com este lote na mão.
+
+    Nasceu de um defeito confirmado em 2026-08-06: `reenfileirar_orfaos` roda no
+    arranque do trabalhador e devolvia à fila **todo** lote em `rodando`, sem
+    olhar se alguém ainda estava com ele. O `docker-compose.yml` sobe
+    `replicas: ${TRABALHADORES:-2}` — então subir o segundo trabalhador, ou
+    reiniciar um deles, reenfileirava o lote que o outro estava montando naquele
+    instante. Dois processos na mesma pasta, gravando um por cima do outro.
+
+    Sem esta coluna não dá para distinguir "o dono morreu" de "o dono está
+    trabalhando": as duas situações são idênticas na tabela.
+    """
+    if "trabalhador" not in _colunas(con, "lotes"):
+        con.execute("ALTER TABLE lotes ADD COLUMN trabalhador TEXT NOT NULL DEFAULT ''")
+
+
 MIGRACOES: list[tuple[int, str, object]] = [
     (1, "referencia gravada no lote", _v1_referencia_no_lote),
     (2, "endereços de rede no perfil", _v2_links_do_perfil),
+    (3, "qual trabalhador reivindicou o lote", _v3_quem_reivindicou_o_lote),
 ]
 
 VERSAO_ALVO = max(n for n, _d, _f in MIGRACOES) if MIGRACOES else 0

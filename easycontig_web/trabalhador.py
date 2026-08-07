@@ -38,9 +38,9 @@ def _pedir_parada(*_):
     log.info("parada pedida — encerro depois do lote atual")
 
 
-def rodar_um(cfg: config.Config) -> bool:
+def rodar_um(cfg: config.Config, eu: str = "") -> bool:
     """Pega um lote da fila e processa. True se havia trabalho."""
-    lote = fila.reivindicar(cfg.sqlite_path)
+    lote = fila.reivindicar(cfg.sqlite_path, eu)
     if not lote:
         return False
 
@@ -75,9 +75,16 @@ def main() -> None:
     cfg = config.carregar()
     fila.criar_esquema(cfg.sqlite_path)
 
-    orfaos = fila.reenfileirar_orfaos(cfg.sqlite_path)
+    # Quem sou eu nesta fila. Máquina + PID basta: a pergunta que a tela faz é
+    # "há ALGUÉM vivo atendendo", não "quem" — mas o LOTE precisa saber o dono,
+    # para o arranque de um trabalhador não reenfileirar o trabalho do outro.
+    eu = f"{socket.gethostname()}:{os.getpid()}"
+
+    # ⚠️ Passa `eu` porque isto roda ANTES do primeiro pulso: sem dizer quem
+    # sou, eu apareceria para mim mesmo como um trabalhador morto.
+    orfaos = fila.reenfileirar_orfaos(cfg.sqlite_path, eu)
     if orfaos:
-        log.warning("%d lote(s) presos em 'rodando' voltaram para a fila", orfaos)
+        log.warning("%d lote(s) sem dono vivo voltaram para a fila", orfaos)
 
     for item, ok, det in config.diagnostico(cfg):
         log.info("%-10s %s  %s", item, "OK " if ok else "FALTA", det)
@@ -100,9 +107,6 @@ def main() -> None:
     # o operador está olhando o log, então é a hora em que um expurgo inesperado
     # ainda dá para perceber e desligar.
     proxima_faxina = 0.0
-    # Quem sou eu nesta fila. Máquina + PID basta: a pergunta que a tela faz é
-    # "há ALGUÉM vivo atendendo", não "quem".
-    eu = f"{socket.gethostname()}:{os.getpid()}"
     proximo_pulso = 0.0
     while not _parar:
         try:
@@ -130,7 +134,7 @@ def main() -> None:
                 except Exception:               # noqa: BLE001
                     log.exception("faxina falhou; segue processando a fila")
 
-            if not rodar_um(cfg):
+            if not rodar_um(cfg, eu):
                 time.sleep(ocioso)
         except Exception:                       # noqa: BLE001
             log.exception("erro no laço do trabalhador")

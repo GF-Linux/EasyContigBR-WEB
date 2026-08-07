@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS lotes (
     etapa         TEXT NOT NULL DEFAULT '',
     erro          TEXT NOT NULL DEFAULT '',
     referencia    TEXT NOT NULL DEFAULT '',   -- banco escolhido para identificar
+    trabalhador   TEXT NOT NULL DEFAULT '',   -- quem o reivindicou (migração 3)
     criado_em     TEXT NOT NULL,
     iniciado_em   TEXT,
     terminado_em  TEXT
@@ -195,12 +196,17 @@ def listar(caminho: Path, *, dono: str | None = None, limite: int = 50) -> list[
         return [dict(r) for r in con.execute(sql, args)]
 
 
-def reivindicar(caminho: Path) -> dict | None:
+def reivindicar(caminho: Path, trabalhador: str = "") -> dict | None:
     """Marca o lote mais antigo da fila como RODANDO e devolve — ou None.
 
     O UPDATE condicional é o que permite mais de um trabalhador na mesma fila:
     quem perder a corrida atualiza 0 linhas e tenta o próximo. Sem isso, dois
     workers montariam o mesmo lote e gravariam por cima um do outro.
+
+    `trabalhador` fica GRAVADO na linha porque sem ele `reenfileirar_orfaos`
+    não consegue distinguir "o dono deste lote morreu" de "o dono está
+    trabalhando nele agora" — as duas situações são idênticas na tabela, e a
+    segunda foi tratada como a primeira até 2026-08-06.
     """
     with conectar(caminho) as con:
         con.execute("BEGIN IMMEDIATE")
@@ -213,8 +219,9 @@ def reivindicar(caminho: Path) -> dict | None:
                 con.execute("COMMIT")
                 return None
             n = con.execute(
-                "UPDATE lotes SET status=?, iniciado_em=? WHERE id=? AND status=?",
-                (RODANDO, _agora(), r["id"], NA_FILA),
+                "UPDATE lotes SET status=?, iniciado_em=?, trabalhador=? "
+                "WHERE id=? AND status=?",
+                (RODANDO, _agora(), trabalhador, r["id"], NA_FILA),
             ).rowcount
             con.execute("COMMIT")
         except Exception:
@@ -288,7 +295,29 @@ def fila_atendida(caminho: Path, agora: datetime | None = None) -> bool:
     return (agora - visto).total_seconds() <= PULSO_VELHO
 
 
-def reenfileirar_orfaos(caminho: Path) -> int:
+def trabalhadores_vivos(caminho: Path, agora: datetime | None = None) -> set[str]:
+    """Quem bateu pulso há menos de `PULSO_VELHO`."""
+    agora = agora or datetime.now(timezone.utc)
+    vivos: set[str] = set()
+    try:
+        with conectar(caminho) as con:
+            linhas = con.execute("SELECT trabalhador, visto_em FROM pulso").fetchall()
+    except sqlite3.Error:
+        return vivos
+    for r in linhas:
+        try:
+            visto = datetime.fromisoformat(r["visto_em"])
+        except (ValueError, TypeError):
+            continue
+        if visto.tzinfo is None:
+            visto = visto.replace(tzinfo=timezone.utc)
+        if (agora - visto).total_seconds() <= PULSO_VELHO:
+            vivos.add(r["trabalhador"])
+    return vivos
+
+
+def reenfileirar_orfaos(caminho: Path, eu: str = "",
+                        agora: datetime | None = None) -> int:
     """Devolve à fila os lotes deixados em RODANDO por um worker que morreu.
 
     Chamado quando o worker sobe. Sem isso, uma queda de energia (o cenário que
@@ -298,11 +327,37 @@ def reenfileirar_orfaos(caminho: Path) -> int:
     RECEBENDO NÃO é reenfileirado: um upload interrompido deixou a pasta pela
     metade, e mandá-la para a fila reproduziria exatamente o defeito das 33 de
     40 amostras. Lote sem upload completo é lote perdido, e tem que dizer isso.
+
+    ⚠️ **ANTES, ISTO REENFILEIRAVA O TRABALHO DOS OUTROS.** O UPDATE varria
+    *todos* os lotes em RODANDO, sem olhar de quem eram. E o
+    `docker-compose.yml` sobe `replicas: ${TRABALHADORES:-2}`: subir o segundo
+    trabalhador — ou reiniciar um deles, ou o `restart: unless-stopped` agindo
+    depois de um OOM — devolvia à fila o lote que o outro estava montando
+    **naquele instante**. Os dois passavam a escrever na mesma pasta.
+
+    Agora só volta para a fila o lote cujo dono **não está pulsando**. Um lote
+    sem dono registrado (banco anterior à migração 3) é reenfileirado apenas se
+    NENHUM outro trabalhador estiver vivo — na dúvida, não se toca no trabalho
+    alheio, porque o preço de esperar é uma página girando e o de errar é o
+    relatório de duas montagens misturadas.
     """
+    vivos = trabalhadores_vivos(caminho, agora) - {eu}
+
+    def orfao(dono: str) -> bool:
+        if dono:
+            return dono not in vivos      # o dono existe: só é órfão se morreu
+        return not vivos                  # sem dono (banco velho): só se ninguém vive
+
     with conectar(caminho) as con:
-        n = con.execute(
-            "UPDATE lotes SET status=?, etapa='' WHERE status=?", (NA_FILA, RODANDO)
-        ).rowcount
+        rodando = con.execute(
+            "SELECT id, trabalhador FROM lotes WHERE status=?", (RODANDO,)).fetchall()
+        orfaos = [r["id"] for r in rodando if orfao(r["trabalhador"])]
+        n = 0
+        if orfaos:
+            marcas = ",".join("?" * len(orfaos))
+            n = con.execute(
+                f"UPDATE lotes SET status=?, etapa='', trabalhador='' "
+                f"WHERE id IN ({marcas})", (NA_FILA, *orfaos)).rowcount
         con.execute(
             "UPDATE lotes SET status=?, erro=? WHERE status=?",
             (FALHOU, "o envio dos arquivos foi interrompido; envie a corrida de novo",
