@@ -123,11 +123,20 @@ ADRs 0046/0048: 40/40 amostras sem erro, 21 identificadas pelo 16S e **19 sem
 acerto local — que é o resultado certo**, porque groEL/dsb/sodB não são rRNA;
 identidade de 96,5 % a 100 %; cobertura de 1,0× a 1,8×.
 
-## Licença
+## Licença e termos de uso
 
-PolyForm Noncommercial 1.0.0, como o EasyContig BR. ⚠️ A licença cobre software
-distribuído; **serviço em rede é superfície que ela cobre pior** — conferir com o
-NIT antes de abrir para fora da UFRRJ.
+São **dois documentos, com leitores diferentes** — e é por isso que a cláusula de
+uso não cabe dentro da licença:
+
+- [`LICENSE`](LICENSE) — PolyForm Noncommercial 1.0.0. Governa **quem copia,
+  modifica ou redistribui o código**.
+- [`TERMOS.md`](TERMOS.md) — governa **quem envia dado ao serviço**: o que fica
+  guardado, por quanto tempo, onde mora, o que sai do servidor e o que aparece
+  para as outras pessoas.
+
+⚠️ Os dois são **minuta** até a revisão do NIT/UFRRJ. A licença cobre software
+distribuído; **serviço em rede é superfície que ela cobre pior** — daí o segundo
+documento, e daí a conversa com o NIT antes de abrir para fora da UFRRJ.
 
 Motor de montagem: [Tracy](https://github.com/gear-genomics/tracy) (Rausch et
 al., BMC Genomics 2020), BSD-3, usado como subprocesso.
