@@ -50,6 +50,13 @@ services:
       EASYCONTIG_LIM_LEITURA: ${EASYCONTIG_LIM_LEITURA:-300}
       EASYCONTIG_LIM_BANCO: ${EASYCONTIG_LIM_BANCO:-10}
       EASYCONTIG_LIM_LOGIN: ${EASYCONTIG_LIM_LOGIN:-20}
+      # Quantas remontagens (tracy/blastn) o WEB aceita ao mesmo tempo — achado
+      # M4 de 2026-08-08. 3 e não o padrão 4 do código porque esta caixa tem
+      # 2 vCPU e o trabalhador disputa as mesmas: 3 no web + o trabalhador já é
+      # o dobro de processos que de núcleos, e passar disso troca "uma rota
+      # lenta" por "o site inteiro parado". Quem exceder leva 503 na hora, sem
+      # segurar thread do threadpool — que é o recurso que o resto do site usa.
+      EASYCONTIG_MAX_PESADAS: ${EASYCONTIG_MAX_PESADAS:-3}
       EASYCONTIG_AUTH: google
       EASYCONTIG_DOMINIO: ${EASYCONTIG_DOMINIO:-ufrrj.br}
       EASYCONTIG_SECRET_KEY: ${EASYCONTIG_SECRET_KEY:?defina no .env — sem ela as sessões caem a cada reinício}

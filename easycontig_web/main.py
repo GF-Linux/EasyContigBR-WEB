@@ -14,6 +14,8 @@ import sys
 import traceback
 import secrets
 import shutil
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -356,6 +358,41 @@ def _erro_nao_previsto(request: Request, exc: Exception):
 
 
 EXT_ACEITAS = {".ab1", ".abi", ".scf"}
+
+
+# ───────────────────────────────────────────── teto de trabalho pesado (M4)
+# Duas rotas GET rodam ferramenta externa por requisição: `api_traco` chama
+# `tracy` (~0,3 s) e `api_consultar` chama `tracy` **mais** `blastn` (timeout de
+# 120 s). As duas são `def` síncronas, então rodam no threadpool do Starlette —
+# que tem 40 vagas e é COMPARTILHADO por todas as rotas `def` do app.
+#
+# O buraco (achado M4 de 2026-08-08): o único freio era o balde `leitura`, de
+# 300 por 60 s POR CONTA. O dono de um lote pronto dispara 300 GETs num minuto,
+# o threadpool enche de `blastn`, e aí param junto a página inicial, a lista de
+# corridas e os downloads — de todo mundo, não só dele. Não precisa de má
+# intenção: um laço de script do laboratório faz igual.
+#
+# O teto é sobre CONCORRÊNCIA, e não sobre taxa, porque o recurso que colapsa é
+# CPU (a VPS tem 2 vCPU, e o trabalhador disputa a mesma). E a tomada é
+# **não bloqueante** de propósito: esperar por vaga seguraria a thread, que é
+# exatamente o que se quer liberar. Sem vaga, 503 na hora — a rota pesada
+# degrada e o resto do site continua de pé, que é a troca certa.
+MAX_PESADAS = max(1, int(os.environ.get("EASYCONTIG_MAX_PESADAS", "4")))
+_VAGAS_PESADAS = threading.BoundedSemaphore(MAX_PESADAS)
+
+
+@contextmanager
+def _vaga_pesada():
+    """Uma das `MAX_PESADAS` vagas de trabalho externo, ou 503 na hora."""
+    if not _VAGAS_PESADAS.acquire(blocking=False):
+        raise HTTPException(
+            status_code=503,
+            detail="o servidor está ocupado montando outras amostras; tente de novo",
+            headers={"Retry-After": "5"})
+    try:
+        yield
+    finally:
+        _VAGAS_PESADAS.release()
 
 
 # --------------------------------------------------------------------- sessão
@@ -932,15 +969,20 @@ def api_consultar(request: Request, lote_id: str, chave: str, banco: str):
                                        bancos.meus_bancos(cfg.data_dir, u.email)}
     if banco not in permitidos or not bancos.existe(cfg.data_dir, banco):
         raise HTTPException(status_code=404, detail="banco não montado")
-    asm = traco.montar(cfg, executor.pastas_do_lote(cfg, lote_id)["raiz"], am)
-    if asm is None:
-        raise HTTPException(status_code=409, detail="não foi possível remontar a amostra")
-    try:
-        hits = bancos.consultar(asm.consensus_nogap,
-                                bancos.prefixo(cfg.data_dir, banco),
-                                blast_bin=cfg.blast_bin)
-    except Exception as e:                      # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(e)[:200])
+    # UMA vaga para os dois passos: soltar entre o tracy e o blastn deixaria a
+    # janela em que 40 requisições passam pelo primeiro teto e se acumulam no
+    # segundo, que é o caro (timeout de 120 s).
+    with _vaga_pesada():
+        asm = traco.montar(cfg, executor.pastas_do_lote(cfg, lote_id)["raiz"], am)
+        if asm is None:
+            raise HTTPException(status_code=409,
+                                detail="não foi possível remontar a amostra")
+        try:
+            hits = bancos.consultar(asm.consensus_nogap,
+                                    bancos.prefixo(cfg.data_dir, banco),
+                                    blast_bin=cfg.blast_bin)
+        except Exception as e:                  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(e)[:200])
     return JSONResponse({"banco": banco, "hits": hits, "consulta": True})
 
 
@@ -1003,7 +1045,8 @@ def api_traco(request: Request, lote_id: str, chave: str):
     if not am:
         raise HTTPException(status_code=404, detail="amostra não encontrada no lote")
     lote_dir = executor.pastas_do_lote(cfg, lote_id)["raiz"]
-    dados = traco.para_navegador(traco.montar(cfg, lote_dir, am), am)
+    with _vaga_pesada():
+        dados = traco.para_navegador(traco.montar(cfg, lote_dir, am), am)
     if not dados:
         # Sem traço a página não quebra: ela mostra os números e diz por quê.
         return JSONResponse({"disponivel": False,
