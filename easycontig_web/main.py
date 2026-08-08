@@ -523,7 +523,7 @@ def inicio(request: Request):
         "trim": cfg.trim,
         "max_arquivos": cfg.max_arquivos,
         "max_mb": cfg.max_bytes // (1024 * 1024),
-        "cota": cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email),
+        "cota": cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email, cfg.data_dir),
         "retencao_dias": cfg.retencao_dias,
         "referencias": _referencias(u),
     })
@@ -694,7 +694,7 @@ async def criar_lote(request: Request,
     # ⚠️ Alcance honesto: quando este handler roda, o Starlette já recebeu o
     # corpo inteiro. A cota impede que os bytes sejam GUARDADOS, não que
     # trafeguem; barrar o tráfego exigiria um middleware olhando Content-Length.
-    situacao = cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email)
+    situacao = cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email, cfg.data_dir)
     if not situacao.pode_enviar:
         raise HTTPException(status_code=413, detail=situacao.motivo)
 
@@ -702,16 +702,39 @@ async def criar_lote(request: Request,
     # acima sozinha tem uma janela: medido em 06/08, com teto de 1 e oito envios
     # simultâneos da mesma conta, sete entraram — todos passaram pela contagem
     # antes de qualquer um aparecer nela.
+    # ⚠️ E o teto de BYTES vai junto (achado L3 de 2026-08-08). A conferência do
+    # `situacao` acima é medida do DISCO, e disco só conta byte que já chegou:
+    # dez envios simultâneos liam o mesmo `usados` antes de qualquer um gravar,
+    # e os dez passavam — ~3 GB contra uma cota de 2 GiB. A reserva
+    # (`bytes_previstos`) aparece no INSERT e é lida dentro da MESMA transação,
+    # então o segundo a entrar já enxerga o primeiro.
+    #
+    # O tamanho declarado vem do `Content-Length`, o mesmo cabeçalho do teto de
+    # corpo. Superestima (traz a moldura do multipart), e é o lado certo de
+    # errar: reserva a mais barra envio legítimo no limite, reserva a menos
+    # deixa a cota furar.
+    try:
+        declarado = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declarado = 0
     try:
         lote_id = fila.novo_lote(cfg.sqlite_path, dono=u.email,
                                  nome=nome.strip() or "lote", n_arquivos=len(aceitos),
                                  referencia=referencia,
-                                 teto_ativos=cotas.teto_lotes_ativos())
+                                 teto_ativos=cotas.teto_lotes_ativos(),
+                                 bytes_previstos=declarado,
+                                 teto_bytes=situacao.max_bytes_conta,
+                                 usados_em_disco=situacao.bytes_usados)
     except fila.CotaEstourada as e:
         raise HTTPException(
             status_code=413,
             detail=f"você já tem {e.ativos} corrida(s) em processamento, e o "
                    f"teto é {e.teto}. Espere uma terminar e envie de novo.")
+    except fila.CotaDeBytesEstourada:
+        raise HTTPException(
+            status_code=413,
+            detail="este envio não cabe no espaço que sobra para a sua conta. "
+                   "Apague uma corrida antiga ou um banco próprio e tente de novo.")
     p = executor.pastas_do_lote(cfg, lote_id)
     p["entrada"].mkdir(parents=True, exist_ok=True)
 
@@ -802,7 +825,7 @@ def pagina_perfil(request: Request, editando: int = 0):
         "perfil": perfil.pegar(cfg.sqlite_path, u.email),
         "relatorios": reps,
         "resumo": perfil.resumo_das_corridas(lotes, [x["n"] for x in reps]),
-        "cota": cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email),
+        "cota": cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email, cfg.data_dir),
         "editando": bool(editando),
     })
 
@@ -988,6 +1011,21 @@ async def enviar_banco(request: Request, apelido: str = Form(...),
     # 2026-08-06. O teto de "banco" é o mesmo que já protege o NCBI na rota de
     # montar: 10 por hora, que para quem monta banco à mão é folgado.
     limites.conferir("banco", request, u.email)
+
+    # ⚠️ Achado M2 de 2026-08-08: faltavam DUAS travas aqui, e o balde de taxa
+    # não substitui nenhuma delas. Um banco de usuário não expira (a faxina só
+    # apaga lote) e não entrava na cota — então 10 FASTAs de 20 MB por hora,
+    # cada um com apelido diferente, eram ~200 MB/h PERMANENTES e invisíveis.
+    # `_NOME_OK` aceita 40 caracteres, ou seja o espaço de apelidos é infinito
+    # para efeito prático: o teto tinha de ser de QUANTIDADE e de BYTES.
+    quanto = cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email, cfg.data_dir)
+    if quanto.max_bancos and quanto.bancos >= quanto.max_bancos:
+        return RedirectResponse(
+            f"/bancos?erro={quote(f'você já mantém {quanto.bancos} bancos próprios (o limite é {quanto.max_bancos}); remova um antes de montar outro')}",
+            status_code=303)
+    if not quanto.pode_enviar and quanto.bytes_usados >= quanto.max_bytes_conta > 0:
+        return RedirectResponse(f"/bancos?erro={quote(quanto.motivo)}", status_code=303)
+
     try:
         banco_id = bancos.id_do_usuario(u.email, apelido.strip())
         dados = (await fasta.read(20 * 1024 * 1024 + 1)).decode("utf-8", "replace")

@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS lotes (
     erro          TEXT NOT NULL DEFAULT '',
     referencia    TEXT NOT NULL DEFAULT '',   -- banco escolhido para identificar
     trabalhador   TEXT NOT NULL DEFAULT '',   -- quem o reivindicou (migração 3)
+    bytes_previstos INTEGER NOT NULL DEFAULT 0, -- reserva de cota (migração 4)
     criado_em     TEXT NOT NULL,
     iniciado_em   TEXT,
     terminado_em  TEXT
@@ -128,8 +129,22 @@ class CotaEstourada(Exception):
         super().__init__(f"{ativos} de {teto} lotes ativos")
 
 
+class CotaDeBytesEstourada(Exception):
+    """O que a conta já ocupa MAIS o que este envio reservou passa do teto.
+
+    Separada da `CotaEstourada` porque a resposta ao usuário é outra: aqui não
+    adianta esperar uma corrida terminar, é preciso liberar espaço.
+    """
+
+    def __init__(self, usados: int, reservado: int, teto: int):
+        self.usados, self.reservado, self.teto = usados, reservado, teto
+        super().__init__(f"{usados} + {reservado} passa de {teto}")
+
+
 def novo_lote(caminho: Path, *, dono: str, nome: str, n_arquivos: int,
-              referencia: str = "", teto_ativos: int = 0) -> str:
+              referencia: str = "", teto_ativos: int = 0,
+              bytes_previstos: int = 0, teto_bytes: int = 0,
+              usados_em_disco: int = 0) -> str:
     """Abre o lote em RECEBENDO — invisível para o trabalhador até liberar.
 
     `referencia` é o banco escolhido para identificar. Fica GRAVADO no lote, e
@@ -148,25 +163,45 @@ def novo_lote(caminho: Path, *, dono: str, nome: str, n_arquivos: int,
     dois processos leem o mesmo número e os dois escrevem.
     """
     lote_id = secrets.token_urlsafe(9)
+    transacional = bool(teto_ativos or teto_bytes)
     with conectar(caminho) as con:
-        if teto_ativos:
+        if transacional:
             con.execute("BEGIN IMMEDIATE")
             marcas = ",".join("?" * len(ATIVOS))
-            ativos = con.execute(
-                f"SELECT COUNT(*) FROM lotes WHERE dono=? AND status IN ({marcas})",
-                (dono, *ATIVOS)).fetchone()[0]
-            if ativos >= teto_ativos:
-                con.execute("ROLLBACK")
-                raise CotaEstourada(ativos, teto_ativos)
+            if teto_ativos:
+                ativos = con.execute(
+                    f"SELECT COUNT(*) FROM lotes WHERE dono=? AND status IN ({marcas})",
+                    (dono, *ATIVOS)).fetchone()[0]
+                if ativos >= teto_ativos:
+                    con.execute("ROLLBACK")
+                    raise CotaEstourada(ativos, teto_ativos)
+            # ⚠️ A RESERVA (achado L3 de 2026-08-08). `usados_em_disco` é medido
+            # FORA daqui porque percorrer pastas dentro de uma transação de
+            # escrita seguraria o banco por dezenas de ms — e ele não precisa
+            # ser fresco: lote terminado não muda de tamanho. O que PRECISA ser
+            # lido aqui dentro são as reservas dos lotes ainda em RECEBENDO,
+            # porque é exatamente essa a corrida: dez envios simultâneos liam o
+            # mesmo `usados` antes de qualquer byte chegar ao disco, e os dez
+            # passavam. A reserva aparece no INSERT, então o próximo a entrar
+            # nesta transação já a enxerga.
+            if teto_bytes:
+                reservado = con.execute(
+                    "SELECT COALESCE(SUM(bytes_previstos),0) FROM lotes "
+                    "WHERE dono=? AND status=?", (dono, RECEBENDO)).fetchone()[0]
+                if usados_em_disco + reservado + bytes_previstos > teto_bytes:
+                    con.execute("ROLLBACK")
+                    raise CotaDeBytesEstourada(usados_em_disco + reservado,
+                                               bytes_previstos, teto_bytes)
         con.execute(
             "INSERT INTO lotes (id, dono, nome, status, n_arquivos, criado_em,"
-            " referencia) VALUES (?,?,?,?,?,?,?)",
-            (lote_id, dono, nome, RECEBENDO, n_arquivos, _agora(), referencia),
+            " referencia, bytes_previstos) VALUES (?,?,?,?,?,?,?,?)",
+            (lote_id, dono, nome, RECEBENDO, n_arquivos, _agora(), referencia,
+             max(0, int(bytes_previstos))),
         )
         # `isolation_level=None` deixa tudo em autocommit; a transação explícita
         # acima é a única que precisa ser fechada à mão. Sem este COMMIT o lote
         # nasceria e sumiria — e a contagem seguinte veria a vaga livre de novo.
-        if teto_ativos:
+        if transacional:
             con.execute("COMMIT")
     return lote_id
 
@@ -179,7 +214,11 @@ def liberar_para_fila(caminho: Path, lote_id: str, n_arquivos: int) -> None:
     contra os arquivos que acha em disco.
     """
     with conectar(caminho) as con:
-        con.execute("UPDATE lotes SET status=?, n_arquivos=? WHERE id=? AND status=?",
+        # `bytes_previstos=0` junto: a reserva existe só enquanto o upload está
+        # em curso. Depois daqui os bytes estão no disco e são medidos de lá —
+        # manter a previsão faria a conta pagar duas vezes pelo mesmo lote.
+        con.execute("UPDATE lotes SET status=?, n_arquivos=?, bytes_previstos=0 "
+                    "WHERE id=? AND status=?",
                     (NA_FILA, n_arquivos, lote_id, RECEBENDO))
 
 

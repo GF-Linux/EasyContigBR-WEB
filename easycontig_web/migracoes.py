@@ -89,10 +89,34 @@ def _v3_quem_reivindicou_o_lote(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE lotes ADD COLUMN trabalhador TEXT NOT NULL DEFAULT ''")
 
 
+
+def _v4_bytes_previstos_do_lote(con: sqlite3.Connection) -> None:
+    """Quantos bytes o lote DECLAROU que traria, para a cota poder reservar.
+
+    Nasceu do achado L3 de 2026-08-08. `cotas.situacao` mede o disco, e disco só
+    conta byte que já chegou — então dez `POST /lotes` simultâneos da mesma
+    conta liam o mesmo `usados` **antes** de qualquer um gravar, e os dez
+    passavam. Contra uma cota de 2 GiB, ~3 GB entravam. O teto transacional de
+    lotes ativos limitava o estrago a ~1,5×, mas por acidente, não por desenho.
+
+    A reserva mora no BANCO e não no disco porque é isso que a torna
+    transacional: ela aparece para a transação seguinte no instante do INSERT,
+    que é justamente a janela onde as dez requisições se cruzavam.
+
+    O valor vem do `Content-Length` da requisição — o mesmo cabeçalho que o teto
+    de corpo do H1 já usa. Não é exato (traz a moldura do multipart junto), e
+    não precisa ser: reserva superestimada erra para o lado seguro.
+    """
+    if "bytes_previstos" not in _colunas(con, "lotes"):
+        con.execute("ALTER TABLE lotes ADD COLUMN "
+                    "bytes_previstos INTEGER NOT NULL DEFAULT 0")
+
+
 MIGRACOES: list[tuple[int, str, object]] = [
     (1, "referencia gravada no lote", _v1_referencia_no_lote),
     (2, "endereços de rede no perfil", _v2_links_do_perfil),
     (3, "qual trabalhador reivindicou o lote", _v3_quem_reivindicou_o_lote),
+    (4, "bytes previstos do lote, para a cota reservar", _v4_bytes_previstos_do_lote),
 ]
 
 VERSAO_ALVO = max(n for n, _d, _f in MIGRACOES) if MIGRACOES else 0
