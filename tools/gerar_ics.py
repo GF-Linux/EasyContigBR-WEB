@@ -37,9 +37,9 @@ EVENTOS = [
      "O UptimeRobot também pega isto — mas só quando JÁ quebrou.",
      None, ["-P7D", "PT0S"]),
 
-    ("dominio-aviso-2027", "20270706", "0900",
+    ("dominio-aviso-2027", "20270705", "0900",
      "EasyContig · Renovar o domínio easycontigbr.com.br (1 mês)",
-     "Expira em 06/08/2027 (conferido no RDAP do Registro.br). Renovação é "
+     "Expira em 05/08/2027 (painel do Registro.br). Renovação é "
      "anual e paga.\n\n"
      "  https://registro.br  →  titular Gustavo Freitas\n\n"
      "⚠️ Domínio vencido não é só o site fora: é o registro A que aponta para "
@@ -49,22 +49,31 @@ EVENTOS = [
      "  curl -s https://rdap.registro.br/domain/easycontigbr.com.br",
      None, ["-P7D", "PT0S"]),
 
-    ("dominio-prazo-2027", "20270803", "0900",
-     "EasyContig · ⚠️ PRAZO: domínio expira em 06/08/2027",
+    ("dominio-prazo-2027", "20270802", "0900",
+     "EasyContig · ⚠️ PRAZO: domínio expira em 05/08/2027",
      "Faltam 3 dias. Depois do vencimento há período de graça, mas o site sai "
      "do ar antes disso.",
      None, ["PT0S"]),
 
-    ("vps-cobranca", "20260901", "0900",
-     "EasyContig · Conferir a cobrança da VPS Locaweb",
-     "R$ 53,90/mês, que RENOVA A R$ 72,90 — o aumento vem, e é bom não ser "
-     "surpresa (§1 do checklist).\n\n"
-     "⚠️ DATA A CONFIRMAR: eu não consegui determinar o dia da cobrança pela "
-     "máquina (o 'Filesystem created' de fevereiro é do template, não do "
-     "provisionamento). Ajuste este evento para o dia real da fatura, e me "
-     "diga quando o preço promocional termina que eu acrescento o evento.\n\n"
+    ("vps-salto-preco", "20260903", "0900",
+     "EasyContig · \u26a0 A fatura de 06/09 sobe para R$ 90/mês",
+     "A VPS Locaweb sai de R$ 53,90 para R$ 90,00 por mês a partir desta "
+     "fatura — +67%, e daí em diante mês a mês.\n\n"
+     "R$ 90/mês são R$ 1.080/ano. Vale saber ANTES da fatura chegar, porque "
+     "é a hora de decidir se continua assim ou se procura outra coisa — e não "
+     "depois, com o serviço já no ar e o laboratório usando.\n\n"
      "Painel CloudStack, conta LOCAWEB-jaredbr, VM EasyContigVM.",
-     "FREQ=MONTHLY;BYMONTHDAY=1", ["PT0S"]),
+     None, ["PT0S"]),
+
+    ("vps-cobranca", "20260906", "0900",
+     "EasyContig · Fatura da VPS Locaweb (R$ 90/mês)",
+     "Vence todo dia 6. R$ 90,00/mês desde a fatura de 06/09/2026 (antes era "
+     "R$ 53,90 — ver o evento de 03/09).\n\n"
+     "Painel CloudStack, conta LOCAWEB-jaredbr, VM EasyContigVM.\n\n"
+     "\u26a0 VPS suspensa por falta de pagamento não é só o site fora: é o "
+     "/var/lib/easycontig inacessível, e o backup do PC passa a ser a única "
+     "cópia que existe.",
+     "FREQ=MONTHLY;BYMONTHDAY=6", ["-P2D", "PT0S"]),
 
     ("backup-chegou", "20260901", "0930",
      "EasyContig · O backup está chegando no PC?",
