@@ -22,6 +22,21 @@ from .config import Config
 
 
 def pastas_do_lote(cfg: Config, lote_id: str) -> dict[str, Path]:
+    """Os caminhos de um lote. **Todo** acesso a disco de lote passa por aqui.
+
+    O `lote_id` é conferido em vez de confiado (endurecimento de 2026-08-08).
+    Ele é um `secrets.token_urlsafe`, sem `/` nem `.`, e hoje toda rota passa
+    antes por `_lote_do_usuario` → `fila.pegar`, que só devolve id que existe no
+    banco — ou seja, a segurança está em NENHUM chamador esquecer essa ordem.
+    Como esta função é a que decide onde se lê e se escreve, ela não deveria
+    depender disso. Mesma regra do `retencao._nome_simples`, e de propósito:
+    quem apaga e quem escreve concordam sobre o que é um id.
+    """
+    if not isinstance(lote_id, str) or not lote_id.strip():
+        raise ValueError("lote_id vazio")
+    if lote_id in (".", "..") or "/" in lote_id or "\\" in lote_id \
+            or "\0" in lote_id or lote_id != Path(lote_id).name:
+        raise ValueError(f"lote_id inválido: {lote_id!r}")
     raiz = cfg.lotes_dir / lote_id
     return {
         "raiz": raiz,

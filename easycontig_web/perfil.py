@@ -243,15 +243,26 @@ def salvar(sqlite_path: Path, email: str, *, nome: str = "", laboratorio: str = 
            marcadores: str = "", foto: str | None = None, links: str = "") -> dict:
     """Grava o perfil. `foto=None` mantém a que já está lá."""
     from datetime import datetime, timezone
-    atual = pegar(sqlite_path, email)
+    # ⚠️ Lê a linha CRUA, e não o `pegar` (achado L1 de 2026-08-08). O `pegar`
+    # sintetiza `nome = email.split("@")[0]` quando não há registro, e o `or`
+    # abaixo herdava esse padrão — ou seja, quem salvasse o perfil sem digitar
+    # nome ficava GRAVADO com o local-part do próprio e-mail. Como o `/labs`
+    # mostra o nome de todos e a tela de entrada anuncia o domínio, qualquer
+    # conta reconstruía o e-mail institucional dos outros. Aqui só se herda nome
+    # que a pessoa realmente digitou algum dia; em branco continua em branco.
+    with conectar(sqlite_path) as con:
+        r = con.execute("SELECT nome, foto FROM perfis WHERE email=?",
+                        (email,)).fetchone()
+    nome_guardado = (r["nome"] if r else "") or ""
+    foto_guardada = (r["foto"] if r else "") or ""
     dados = {
-        "nome": " ".join((nome or "").split())[:MAX_TEXTO] or atual["nome"],
+        "nome": " ".join((nome or "").split())[:MAX_TEXTO] or nome_guardado,
         "laboratorio": " ".join((laboratorio or "").split())[:MAX_TEXTO],
         "instituicao": " ".join((instituicao or "").split())[:MAX_TEXTO],
         "sobre": (sobre or "").strip()[:600],
         "especies": json.dumps(_limpar_itens(especies), ensure_ascii=False),
         "marcadores": json.dumps(_limpar_itens(marcadores), ensure_ascii=False),
-        "foto": atual["foto"] if foto is None else foto,
+        "foto": foto_guardada if foto is None else foto,
         "atualizado": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         # Só o `url` vai para o disco: nome e ícone são derivados na leitura, e
         # gravá-los criaria uma cópia que envelhece quando `REDES` mudar.
@@ -271,6 +282,47 @@ def salvar(sqlite_path: Path, email: str, *, nome: str = "", laboratorio: str = 
              dados["sobre"], dados["especies"], dados["marcadores"],
              dados["foto"], dados["atualizado"], dados["links"]))
     return pegar(sqlite_path, email)
+
+
+def listar_perfis(sqlite_path: Path, eu: str = "") -> list[dict]:
+    """O diretório dos laboratórios cadastrados — quem tem perfil no site.
+
+    ⚠️ **O e-mail de terceiro NÃO sai daqui** (achado L1 de 2026-08-08). Quem
+    chama passa o próprio endereço em `eu` e recebe de volta um booleano `eu`
+    por perfil — o suficiente para a tela marcar "você" sem que a página
+    precise carregar a lista de endereços de todo mundo. O `email` da própria
+    pessoa continua vindo, porque ela já o conhece.
+
+    ⚠️ **Cadastrado aqui = tem registro em `perfis`**, ou seja, editou o perfil
+    ao menos uma vez. Quem só entrou pelo Google e nunca salvou nada não tem
+    linha nesta tabela e, por isso, não aparece — é o mesmo motivo de `pegar`
+    devolver padrões em vez de criar registro no primeiro acesso.
+
+    Devolve só o que é DECLARAÇÃO do dono (nome, laboratório, instituição,
+    portfólio, foto). Nunca o que veio das corridas: quem trabalha com o quê é
+    afirmação da pessoa, não contagem do BLAST (ver o aviso no topo do módulo).
+    É esse portfólio declarado que torna possível o compartilhamento por pedido
+    da ADR 0052 — um laboratório achar outro e pedir uma sequência.
+
+    Ordenado por nome (e-mail como desempate) para a lista não depender da ordem
+    de cadastro nem do acaso do `PRIMARY KEY`.
+    """
+    with conectar(sqlite_path) as con:
+        linhas = con.execute(
+            "SELECT email, nome, laboratorio, instituicao, sobre, especies, "
+            "marcadores, foto, atualizado FROM perfis "
+            "ORDER BY nome COLLATE NOCASE, email COLLATE NOCASE"
+        ).fetchall()
+    saida = []
+    for r in linhas:
+        d = dict(r)
+        d["especies"] = _lista(d["especies"])
+        d["marcadores"] = _lista(d["marcadores"])
+        d["eu"] = (d["email"] == eu)
+        if not d["eu"]:
+            d.pop("email")
+        saida.append(d)
+    return saida
 
 
 def resumo_das_corridas(lotes: list[dict], n_amostras: list[int]) -> dict:

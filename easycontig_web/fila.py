@@ -17,7 +17,7 @@ import json
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # RECEBENDO existe por causa de uma corrida real: o lote era inserido como
@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS pulso (
 # atendendo" enquanto alguém trabalha seria trocar uma mentira por outra.
 INTERVALO_PULSO = 5.0
 PULSO_VELHO = 90.0
+
+# Idade a partir da qual um lote parado em RECEBENDO conta como envio
+# abandonado. Quem envia não pulsa, então a idade é a única evidência que
+# existe — ver o comentário longo em `reenfileirar_orfaos`.
+ENVIO_ABANDONADO = 1800.0
 
 
 def _agora() -> str:
@@ -389,10 +394,29 @@ def reenfileirar_orfaos(caminho: Path, eu: str = "",
                     f"UPDATE lotes SET status=?, etapa='', trabalhador='' "
                     f"WHERE id IN ({marcas}) AND status=?",
                     (NA_FILA, *orfaos, RODANDO)).rowcount
+            # ⚠️ SÓ OS ENVIOS VELHOS (achado L4 de 2026-08-08). O UPDATE varria
+            # *todo* lote em RECEBENDO, sem olhar dono nem idade — e RECEBENDO é
+            # o estado de quem está com o upload EM CURSO neste segundo. Então
+            # qualquer reinício de trabalhador (um OOM, um `up -d --build` de
+            # deploy, o `restart: unless-stopped`) matava o envio que outra
+            # pessoa estava fazendo naquele instante, e ela recebia "o envio foi
+            # interrompido" sem nada ter acontecido do lado dela. Não cruza
+            # contas, mas é trabalho alheio perdido — e num deploy é justamente
+            # quando há dois trabalhadores subindo.
+            #
+            # O corte é por IDADE, e não por dono: quem envia não pulsa, logo
+            # não há como perguntar se está vivo. O prazo é folgado de propósito
+            # — o nginx da produção deixa o corpo subir por 300 s
+            # (`proxy_read_timeout`) e um lote de 400 `.ab1` usa isso — então um
+            # envio de verdade nunca chega perto de meia hora. O que passa desse
+            # prazo é pasta pela metade, que é o que esta linha existe para
+            # varrer.
+            corte = (agora or datetime.now(timezone.utc)) - timedelta(
+                seconds=ENVIO_ABANDONADO)
             con.execute(
-                "UPDATE lotes SET status=?, erro=? WHERE status=?",
+                "UPDATE lotes SET status=?, erro=? WHERE status=? AND criado_em<?",
                 (FALHOU, "o envio dos arquivos foi interrompido; envie a corrida de novo",
-                 RECEBENDO))
+                 RECEBENDO, corte.isoformat(timespec="seconds")))
             con.execute("COMMIT")
         except Exception:
             con.execute("ROLLBACK")

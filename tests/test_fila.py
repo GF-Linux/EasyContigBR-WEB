@@ -4,6 +4,8 @@ no trabalhador antes de o upload terminar.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from easycontig_web import fila
@@ -68,12 +70,40 @@ def test_orfaos_de_rodando_voltam_para_a_fila(banco):
 
 
 def test_upload_interrompido_falha_em_vez_de_ser_processado_pela_metade(banco):
-    """RECEBENDO órfão vira FALHOU — reenfileirar reproduziria o defeito."""
+    """RECEBENDO VELHO vira FALHOU — reenfileirar reproduziria o defeito.
+
+    O `agora` adiantado é o que faz o lote contar como abandonado: desde o
+    achado L4 o corte é por idade, e não "todo RECEBENDO" (ver o teste logo
+    abaixo, que é o outro lado da mesma moeda).
+    """
     lote_id = fila.novo_lote(banco, dono="a@x", nome="c", n_arquivos=80)
-    fila.reenfileirar_orfaos(banco)
+    depois = datetime.now(timezone.utc) + timedelta(seconds=fila.ENVIO_ABANDONADO + 60)
+    fila.reenfileirar_orfaos(banco, agora=depois)
     lote = fila.pegar(banco, lote_id)
     assert lote["status"] == fila.FALHOU
     assert "interrompido" in lote["erro"]
+
+
+def test_reinicio_nao_mata_o_envio_que_esta_acontecendo_agora(banco):
+    """Achado L4: o restart de um trabalhador matava upload EM CURSO — de todos.
+
+    O `UPDATE ... WHERE status='recebendo'` não tinha filtro de dono nem de
+    idade, e RECEBENDO é exatamente o estado de quem está mandando arquivo
+    NESTE segundo. Bastava um `docker compose up -d --build` (o deploy normal),
+    um OOM ou o `restart: unless-stopped` para duas pessoas verem "o envio foi
+    interrompido" sem nada ter acontecido do lado delas. É perda de trabalho
+    alheio, e num deploy é justamente quando há trabalhador subindo.
+    """
+    meu = fila.novo_lote(banco, dono="a@ufrrj.br", nome="enviando", n_arquivos=40)
+    outro = fila.novo_lote(banco, dono="b@ufrrj.br", nome="tambem", n_arquivos=40)
+
+    fila.reenfileirar_orfaos(banco, eu="deck:1")   # o trabalhador reiniciou agora
+
+    for lid, quem in ((meu, "a@ufrrj.br"), (outro, "b@ufrrj.br")):
+        l = fila.pegar(banco, lid)
+        assert l["status"] == fila.RECEBENDO, (
+            f"o envio em curso de {quem} foi marcado como {l['status']} por um "
+            "reinício de trabalhador")
 
 
 def test_progresso_e_conclusao(banco):
@@ -241,7 +271,8 @@ def test_upload_interrompido_continua_falhando_e_nao_volta_a_fila(tmp_path):
     banco = tmp_path / "f.sqlite3"
     fila.criar_esquema(banco)
     lid = fila.novo_lote(banco, dono="a@ufrrj.br", nome="par", n_arquivos=2)
-    fila.reenfileirar_orfaos(banco, eu="deck:1")
+    depois = datetime.now(timezone.utc) + timedelta(seconds=fila.ENVIO_ABANDONADO + 60)
+    fila.reenfileirar_orfaos(banco, eu="deck:1", agora=depois)
     l = fila.pegar(banco, lid)
     assert l["status"] == fila.FALHOU and "interrompido" in l["erro"]
 

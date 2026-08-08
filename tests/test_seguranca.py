@@ -289,9 +289,22 @@ def test_sair_derruba_a_sessao_de_verdade(app):
     c = _cli(app)
     _entrar(c, "a@ufrrj.br")
     lote = _lote_de(c)
-    c.get("/sair")
+    c.post("/sair")
     assert c.get(f"/lotes/{lote}", headers={"accept": "application/json"}
                  ).status_code == 401
+
+
+def test_sair_nao_atende_em_get(app):
+    """Achado L2: como GET, um `<img src=".../sair">` em página alheia derrubava
+    a sessão de quem a abrisse — o cookie `Lax` acompanha GET de topo, e foi
+    reproduzido (303 + `session=null` com `Referer` externo). Ação de estado não
+    mora num verbo que o navegador trata como seguro e pré-carrega sozinho."""
+    c = _cli(app)
+    _entrar(c, "a@ufrrj.br")
+    lote = _lote_de(c)
+    assert c.get("/sair", follow_redirects=False).status_code == 405
+    assert c.get(f"/lotes/{lote}", headers={"accept": "application/json"}
+                 ).status_code == 200, "a sessão caiu por um GET"
 
 
 def test_login_de_dev_recusa_quando_o_modo_e_google(app, monkeypatch):
@@ -375,18 +388,24 @@ def test_producao_recusa_subir_com_a_porta_aberta(monkeypatch):
     Passaram a ser QUATRO em 2026-08-06: o autor mediu que a lista de usuários
     de teste do Google não restringe nada com escopos não sensíveis — três
     contas entraram com uma só na lista. Então `EASYCONTIG_DOMINIO` em branco
-    significa "ninguém decidiu quem entra", e isso não sobe."""
+    significa "ninguém decidiu quem entra", e isso não sobe.
+
+    E CINCO em 2026-08-08 (achado L5): sem `EASYCONTIG_URL_BASE`, tanto o
+    endereço de volta do OAuth quanto a checagem de origem dos POST passam a
+    sair do cabeçalho `Host`, que é escolhido pelo cliente."""
     from easycontig_web import config
     monkeypatch.setenv("EASYCONTIG_AUTH", "dev")
     monkeypatch.delenv("EASYCONTIG_SECRET_KEY", raising=False)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "0")
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
+    monkeypatch.delenv("EASYCONTIG_URL_BASE", raising=False)
     p = config.conferir_producao()
-    assert len(p) == 4
+    assert len(p) == 5
     assert any("dev" in x for x in p)
     assert any("SECRET_KEY" in x for x in p)
     assert any("HTTPS" in x for x in p)
     assert any("EASYCONTIG_DOMINIO" in x for x in p)
+    assert any("EASYCONTIG_URL_BASE" in x for x in p)
 
 
 def test_producao_bem_configurada_nao_reclama(monkeypatch):
@@ -395,6 +414,7 @@ def test_producao_bem_configurada_nao_reclama(monkeypatch):
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "x" * 32)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "ufrrj.br")
+    monkeypatch.setenv("EASYCONTIG_URL_BASE", "https://easycontigbr.com.br")
     assert config.conferir_producao() == []
 
 
@@ -459,3 +479,93 @@ def test_enviar_banco_proprio_respeita_o_teto_de_taxa(app):
     ]
     assert 429 in codigos, (
         f"14 envios seguidos e nenhuma recusa: {sorted(set(codigos))}")
+
+
+# ─────────────────────────── CSRF: a origem do POST (achado M3 de 2026-08-08)
+# O cookie de sessão é `SameSite=Lax`, e Lax é same-**site**, não same-**origin**.
+# No endereço final (`easycontig.ufrrj.br`) isso significa que QUALQUER host sob
+# `ufrrj.br` — o site departamental com um XSS, o subdomínio de um evento
+# abandonado — é same-site: um `<form method=post>` escondido lá sai com o cookie
+# junto. Alvos de estado, alguns irreversíveis: `/perfil` (sobrescreve),
+# `/lotes/{id}/apagar`, `/bancos/meu`, `/bancos/{id}/remover`.
+#
+# A checagem mora no middleware que já vê TODO POST, e não em token por
+# formulário, pelo mesmo motivo do teto de leitura: rota nova nasce coberta em
+# vez de depender de alguém lembrar da sétima.
+def test_post_de_outra_origem_e_recusado(app):
+    c = _cli(app)
+    _entrar(c, "a@ufrrj.br")
+    r = c.post("/perfil", data={"nome": "Invasor"},
+               headers={"origin": "https://evento.ufrrj.br"},
+               follow_redirects=False)
+    assert r.status_code == 403, (
+        "um POST forjado de um subdomínio same-site passou")
+
+    from easycontig_web import perfil
+    assert perfil.pegar(app.cfg.sqlite_path, "a@ufrrj.br")["nome"] != "Invasor"
+
+
+def test_post_da_propria_origem_passa(app):
+    """A trava não pode custar o uso normal: o formulário do próprio site manda
+    `Origin` (todo navegador manda desde 2020, inclusive same-origin)."""
+    c = _cli(app)
+    _entrar(c, "a@ufrrj.br")
+    r = c.post("/perfil", data={"nome": "Gustavo"},
+               headers={"origin": "http://testserver"},
+               follow_redirects=False)
+    assert r.status_code in (200, 303), f"o próprio formulário levou {r.status_code}"
+
+    from easycontig_web import perfil
+    assert perfil.pegar(app.cfg.sqlite_path, "a@ufrrj.br")["nome"] == "Gustavo"
+
+
+def test_post_sem_origin_passa(app):
+    """Ausência de `Origin` passa DE PROPÓSITO. Quem não manda o cabeçalho é
+    cliente de linha de comando — `curl`, esta suíte, um script do laboratório —
+    e nenhum deles carrega cookie de terceiro, que é o mecanismo do ataque.
+    Recusar aqui quebraria os três sem fechar nada."""
+    c = _cli(app)
+    _entrar(c, "a@ufrrj.br")
+    r = c.post("/perfil", data={"nome": "Script"}, follow_redirects=False)
+    assert r.status_code in (200, 303)
+
+
+def test_a_origem_e_conferida_antes_de_o_corpo_ser_lido(app):
+    """A recusa vem do middleware, não da rota: um POST forjado não merece nem
+    que o corpo seja consumido — é o mesmo princípio do 401 antecipado."""
+    c = _cli(app)
+    r = c.post("/entrar", data={"email": "a@ufrrj.br"},
+               headers={"origin": "https://sitealheio.example"},
+               follow_redirects=False)
+    assert r.status_code == 403, "nem a rota de login está coberta"
+
+
+# ─────────────────── a página de 500 e seus cabeçalhos (achado M1 de 2026-08-08)
+def test_a_pagina_de_500_sai_com_os_cabecalhos_de_seguranca(app, monkeypatch):
+    """`@app.exception_handler(Exception)` é servido pelo `ServerErrorMiddleware`,
+    que o Starlette põe no ponto mais de FORA da pilha — fora, portanto, dos
+    `@app.middleware("http")` que carimbam CSP e `no-store`. A única página que
+    sai numa hora ruim saía sem CSP, sem `nosniff`, sem `noindex` e cacheável — e
+    ela herda o `base.html`, ou seja, leva a lateral com nome, e-mail de quem
+    entrou e nomes das corridas.
+    """
+    def explodir(*a, **k):
+        raise RuntimeError("disco pegou fogo")
+
+    # A falha entra por uma DEPENDÊNCIA da rota, não pelo `_casca`: o próprio
+    # `_erro_nao_previsto` monta a casca para desenhar a página de erro, então
+    # quebrar o `_casca` faria o manipulador explodir também — e aí o que volta
+    # é o 500 sintético do TestClient, sem cabeçalho nenhum, que não é o que
+    # este teste quer medir.
+    monkeypatch.setattr(app.perfil, "listar_perfis", explodir)
+    c = TestClient(app.app, raise_server_exceptions=False)
+    _entrar(c, "a@ufrrj.br")
+    r = c.get("/labs", headers={"accept": "text/html"})
+
+    assert r.status_code == 500
+    h = r.headers
+    assert "noindex" in h.get("x-robots-tag", "")
+    assert h.get("x-content-type-options") == "nosniff"
+    assert h.get("x-frame-options") == "DENY"
+    assert "default-src 'none'" in h.get("content-security-policy", "")
+    assert "no-store" in h.get("cache-control", "")

@@ -122,6 +122,7 @@ def test_em_producao_o_openapi_nao_e_montado(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "x" * 32)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "ufrrj.br")
+    monkeypatch.setenv("EASYCONTIG_URL_BASE", "https://easycontigbr.com.br")
     monkeypatch.setenv("EASYCONTIG_PRODUCAO", "1")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "id")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "segredo")

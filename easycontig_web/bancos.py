@@ -233,8 +233,20 @@ def montar(data_dir: Path, banco_id: str, blast_bin: Path | None = None,
 
 
 def remover(data_dir: Path, banco_id: str) -> bool:
+    """Apaga a pasta de um banco. `banco_id` do catálogo ou `meu_...` da conta.
+
+    ⚠️ A guarda confere o id INTEIRO, não só o prefixo `meu_` (endurecimento de
+    2026-08-08). Antes, qualquer coisa começada em `meu_` passava — inclusive
+    `meu_../..`, que faria o `rmtree` subir de pasta. Hoje isso é inalcançável
+    por HTTP (a rota exige que o id esteja na lista real de `meus_bancos()` e o
+    conversor de caminho do FastAPI já barra a `/`), ou seja: a função é segura
+    **por causa de quem a chama**, e não por si. Como ela apaga árvore de disco
+    recursivamente, é o último lugar onde se quer depender disso. `_NOME_OK` é o
+    mesma forma que `id_do_usuario` usa para MONTAR o id.
+    """
+
     import shutil
-    if banco_id not in POR_ID and not banco_id.startswith("meu_"):
+    if banco_id not in POR_ID and not _ID_MEU_OK.match(banco_id or ""):
         raise ValueError("banco desconhecido")
     raiz = prefixo(data_dir, banco_id).parent
     if not raiz.exists():
@@ -244,7 +256,19 @@ def remover(data_dir: Path, banco_id: str) -> bool:
 
 
 # ────────────────────────────────────────────────── o banco do próprio usuário
-_NOME_OK = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+# `\Z` e não `$`: em Python o `$` casa TAMBÉM logo antes de um `\n` final, então
+# `^...$` aceitava `meu-banco\n` como nome válido. Hoje é inofensivo (o único
+# chamador faz `.strip()` antes), mas o dia em que alguém chamar sem strip a
+# quebra de linha entra no nome da pasta. `\Z` casa só o fim mesmo da cadeia.
+_NOME_OK = re.compile(r"^[A-Za-z0-9_-]{1,40}\Z")
+
+# A forma INTEIRA de um id de banco de conta, exatamente como `id_do_usuario` o
+# monta: `meu_` + espaço da conta + `_` + apelido. É o que `remover()` exige
+# antes de chamar `rmtree` — conferir só o prefixo `meu_` deixava passar
+# `meu_../..`. O espaço da conta é hoje 16 hex (sha256 truncado), e o
+# `{1,24}` alfanumérico cobre também o formato anterior a 2026-08-06, para uma
+# instalação antiga não ficar com banco impossível de apagar.
+_ID_MEU_OK = re.compile(r"^meu_[0-9a-z]{1,24}_[A-Za-z0-9_-]{1,40}\Z")
 
 
 def espaco_da_conta(email: str) -> str:

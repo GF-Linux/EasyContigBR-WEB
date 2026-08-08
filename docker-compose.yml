@@ -18,10 +18,12 @@ services:
       - "127.0.0.1:8000:8000"   # atrás de um proxy reverso com TLS, nunca exposto direto
     environment: &ambiente
       # ⚠️ A TRAVA DE ARRANQUE, LIGADA. Ela recusa subir em modo `dev`, sem
-      # SECRET_KEY, sem HTTPS_ONLY ou sem ninguém ter decidido quem entra — e
-      # até 2026-08-06 NÃO ESTAVA AQUI, ou seja, o único lugar onde ela importa
-      # era o único onde não valia. Descoberto subindo o compose pela primeira
-      # vez. As quatro condições já são satisfeitas pelas linhas abaixo.
+      # SECRET_KEY, sem HTTPS_ONLY, sem URL_BASE ou sem ninguém ter decidido
+      # quem entra — e até 2026-08-06 NÃO ESTAVA AQUI, ou seja, o único lugar
+      # onde ela importa era o único onde não valia. Descoberto subindo o
+      # compose pela primeira vez. As CINCO condições (a do URL_BASE entrou em
+      # 2026-08-08, achado L5) já são satisfeitas pelas linhas abaixo — mas o
+      # URL_BASE vem do `.env`, então é lá que ele precisa estar de verdade.
       EASYCONTIG_PRODUCAO: "1"
       EASYCONTIG_DATA_DIR: /dados
       EASYCONTIG_DB_18S: /bancos/referencias_18S
@@ -35,7 +37,9 @@ services:
       #     volume cresceria em silêncio — que é a pendência que a ADR 0050
       #     levantou e que todo mundo achava resolvida.
       #   URL_BASE ausente = o endereço de volta do Google passa a sair do
-      #     cabeçalho `Host`, que quem faz a requisição escolhe.
+      #     cabeçalho `Host`, que quem faz a requisição escolhe. Desde
+      #     2026-08-08 é também o espelho da checagem de origem dos POST (a
+      #     defesa de CSRF do achado M3), e por isso virou trava de arranque.
       # As de cota e taxa caem em padrões sãos, mas o `.env` do servidor era
       # ignorado sem nada dizer.
       EASYCONTIG_RETENCAO_DIAS: ${EASYCONTIG_RETENCAO_DIAS:-30}

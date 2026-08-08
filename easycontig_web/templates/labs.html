@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block titulo %}Labs — EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* Sem teto próprio: herda o da casca, que acompanha a tela (ADR 0055). */
+
+/* Grade de cartões: cresce em colunas conforme a tela dá, e quebra sozinha
+   quando aperta — sem número de colunas escrito à mão, como as redes do perfil. */
+.labs{ display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,20rem),1fr));
+  gap:12px; margin-top:14px }
+.lab-cartao{ background:var(--painel); border:1px solid var(--linha); border-radius:11px;
+  padding:1rem 1.15rem; display:flex; flex-direction:column; gap:.6rem }
+.lab-cartao.eu{ border-color:var(--violeta); background:var(--selecao) }
+
+.lab-cabeca{ display:flex; align-items:center; gap:.7rem; min-width:0 }
+.lab-av{ width:44px; height:44px; border-radius:50%; flex:none; display:grid;
+  place-items:center; font-size:15px; font-weight:800; color:#14121f;
+  background:linear-gradient(135deg,var(--violeta),#6f63b8) }
+.lab-quem{ min-width:0; flex:1 }
+.lab-quem .nm{ font-size:.98rem; font-weight:700; line-height:1.25;
+  overflow-wrap:anywhere }
+.lab-quem .lab{ color:var(--apoio); font-size:.8rem; margin-top:.12rem;
+  overflow-wrap:anywhere }
+.lab-eu-selo{ font-family:var(--mono); font-size:.6rem; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--violeta-claro); border:1px solid var(--violeta);
+  border-radius:20px; padding:.15rem .5rem; flex:none }
+
+.lab-sobre{ color:var(--apoio); font-size:.84rem; line-height:1.5; margin:0;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3;
+  overflow:hidden }
+
+.lab-selos{ display:flex; gap:.35rem; flex-wrap:wrap; margin-top:.1rem }
+.lab-selos .selo{ font-family:var(--mono); font-size:.64rem; color:var(--apoio);
+  border:1px solid var(--linha-forte); border-radius:20px; padding:.2rem .55rem }
+.lab-selos .selo.esp{ font-style:italic; font-family:var(--sans); font-size:.72rem;
+  border-color:rgba(145,132,217,.45); color:var(--violeta-claro) }
+.lab-selos .mais{ font-size:.64rem; color:var(--fraco); align-self:center }
+
+.lab-vazio{ background:var(--painel); border:1px dashed var(--linha-forte);
+  border-radius:11px; padding:1.4rem 1.5rem; color:var(--apoio); line-height:1.6;
+  margin-top:14px }
+{% endblock %}
+
+{% block conteudo %}
+
+<h1>Labs</h1>
+<p class="sub leitura">Os laboratórios cadastrados no EasyContig BR. Cada cartão é o
+  que a pessoa <strong style="color:var(--apoio)">declarou</strong> no próprio
+  perfil — não é contagem do que o BLAST achou nas corridas, e nada de sequência
+  aparece aqui. Só quem entrou vê esta lista.</p>
+
+{% if perfis %}
+<div class="labs">
+  {% for p in perfis %}
+  <div class="lab-cartao{% if p.eu %} eu{% endif %}">
+    <div class="lab-cabeca">
+      {# A inicial, não a foto: servir a foto por e-mail abriria uma rota
+         adivinhável por endereço. A foto continua sendo de quem entrou.
+
+         ⚠️ E a inicial NÃO cai no e-mail (achado L1): caindo, o cartão de quem
+         nunca digitou nome trazia as duas primeiras letras do endereço
+         institucional — e com o domínio anunciado na tela de entrada isso
+         reconstrói o e-mail alheio. Sem nome, mostra o traço. #}
+      <div class="lab-av">{{ (p.nome or '—')[:2]|upper }}</div>
+      <div class="lab-quem">
+        <div class="nm">{{ p.nome or 'perfil sem nome' }}</div>
+        {% if p.laboratorio or p.instituicao %}
+        <div class="lab">{{ p.laboratorio }}{% if p.laboratorio and p.instituicao %}
+          · {% endif %}{{ p.instituicao }}</div>
+        {% endif %}
+      </div>
+      {% if p.eu %}<span class="lab-eu-selo">você</span>{% endif %}
+    </div>
+
+    {% if p.sobre %}<p class="lab-sobre">{{ p.sobre }}</p>{% endif %}
+
+    {% if p.especies %}
+    <div class="lab-selos">
+      {% for e in p.especies[:5] %}<span class="selo esp">{{ e }}</span>{% endfor %}
+      {% if p.especies|length > 5 %}<span class="mais">+{{ p.especies|length - 5 }}</span>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if p.marcadores %}
+    <div class="lab-selos">
+      {% for m in p.marcadores[:6] %}<span class="selo">{{ m }}</span>{% endfor %}
+      {% if p.marcadores|length > 6 %}<span class="mais">+{{ p.marcadores|length - 6 }}</span>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="lab-vazio">
+  Ainda não há perfis cadastrados. Um perfil passa a aparecer aqui quando a
+  pessoa <a href="/perfil?editando=1">preenche o próprio perfil</a> ao menos uma
+  vez — só entrar no site não basta.
+</div>
+{% endif %}
+
+{% endblock %}

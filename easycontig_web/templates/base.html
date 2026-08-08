@@ -105,6 +105,13 @@ a:hover{ text-decoration:underline }
 .perfil .ac.viva{ background:var(--selecao); border-color:var(--violeta);
   color:var(--tinta); font-weight:600 }
 .perfil .ac.sair:hover{ color:var(--vermelho); border-color:rgba(240,82,74,.45) }
+/* O Sair virou <button> dentro de um <form method=post> (achado L2). Botão não
+   herda fonte do pai como <a> herda, e nasce com a fonte do sistema — sem isto
+   ele saía com outra letra que os três vizinhos. O `display:contents` do form é
+   o que mantém o botão como célula da grade `.acoes`, e não filho de uma caixa
+   nova que quebraria o par Sair|Labs. */
+.perfil .ac:is(button){ font-family:inherit; font-size:12px; cursor:pointer;
+  width:100%; -webkit-appearance:none; appearance:none }
 
 .sec{ font-family:var(--mono); font-size:9px; letter-spacing:.14em;
   text-transform:uppercase; color:var(--fraco); padding:14px 14px 7px }
@@ -228,7 +235,18 @@ pre{ font-family:var(--mono); font-size:.8rem }
            href="/perfil">Perfil</a>
         <a class="ac{% if pagina is defined and pagina == 'leiame' %} viva{% endif %}"
            href="/leiame" title="Como nomear os arquivos e como o motor decide F/R">Readme</a>
-        <a class="ac sair" href="/sair">Sair</a>
+        {# Sair e Labs na mesma linha, e Labs cai logo abaixo do Readme (mesma
+           coluna, uma linha adiante) porque a grade preenche da esquerda para a
+           direita: Workspace (linha cheia), Perfil|Readme, Sair|Labs. #}
+        {# Sair é POST: como GET, um <img src="/sair"> em página alheia derrubava
+           a sessão de quem abrisse (achado L2). O form não tem borda nem
+           espaçamento próprios para o botão ocupar a célula da grade igual aos
+           links vizinhos. #}
+        <form method="post" action="/sair" style="display:contents">
+          <button type="submit" class="ac sair">Sair</button>
+        </form>
+        <a class="ac{% if pagina is defined and pagina == 'labs' %} viva{% endif %}"
+           href="/labs" title="Laboratórios cadastrados no site">Labs</a>
       </div>
     </div>
 

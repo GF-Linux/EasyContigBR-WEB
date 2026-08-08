@@ -77,6 +77,37 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 POST_SEM_SESSAO = {"/entrar"}
 
 
+def _origem_confere(request: Request) -> bool:
+    """O POST veio de uma página DESTE site? (achado M3 de 2026-08-08)
+
+    O cookie de sessão é `SameSite=Lax`, e Lax é *same-**site***, não
+    *same-**origin***. A diferença não é acadêmica quando o endereço final for
+    `easycontig.ufrrj.br`: aí **qualquer host sob `ufrrj.br`** — o site
+    departamental com um XSS, o subdomínio de um evento abandonado — é
+    same-site, e um `<form method=post>` escondido lá dentro sai com o cookie
+    junto. Os alvos são de estado e alguns são irreversíveis: `/perfil`
+    (sobrescreve), `/lotes/{id}/apagar`, `/bancos/meu`, `/bancos/{id}/remover`.
+
+    Em vez de token CSRF em seis formulários — que a sétima rota esqueceria —,
+    a checagem mora aqui, no middleware que já vê TODO POST: rota nova nasce
+    coberta, do mesmo jeito que já nasce com teto de leitura e exigindo sessão.
+
+    **Ausência de `Origin` passa de propósito.** Navegador manda `Origin` em
+    todo POST desde 2020 (inclusive same-origin); quem não manda é cliente de
+    linha de comando — `curl`, o `TestClient` da suíte, um script do laboratório
+    —, e esses não carregam cookie de terceiro, que é o mecanismo do ataque.
+    Recusar sem `Origin` quebraria os três sem fechar nada.
+    """
+    origem = request.headers.get("origin")
+    if not origem:
+        return True
+    base = os.environ.get("EASYCONTIG_URL_BASE", "").rstrip("/")
+    # Sem URL_BASE (desenvolvimento) o espelho é a própria requisição. Atrás do
+    # nginx isso viria com o host errado — daí a configuração vencer quando há.
+    esperado = base or str(request.base_url).rstrip("/")
+    return origem.rstrip("/").lower() == esperado.lower()
+
+
 # ⚠️ A POSIÇÃO DESTE BLOCO É O QUE O FAZ FUNCIONAR — não mova para junto dos
 # outros middlewares lá embaixo. `add_middleware` empilha de dentro para fora:
 # quem é registrado DEPOIS fica por FORA. Registrando o limitador aqui, entre o
@@ -112,6 +143,11 @@ async def _limite_de_leitura(request: Request, call_next):
     caminho = request.url.path
     if caminho.startswith("/estatico/"):
         return await call_next(request)
+
+    if request.method == "POST" and not _origem_confere(request):
+        # Recusado ANTES do 401 e antes do parser: um POST forjado de fora não
+        # merece nem que o corpo dele seja lido.
+        return JSONResponse({"detail": "origem não confere"}, status_code=403)
 
     if request.method == "POST" and caminho not in POST_SEM_SESSAO:
         try:
@@ -220,6 +256,14 @@ async def _cabecalhos_de_seguranca(request: Request, call_next):
     nonce = secrets.token_urlsafe(16)
     request.state.nonce = nonce
     resposta = await call_next(request)
+    _marcar_resposta(resposta, nonce)
+    return resposta
+
+
+def _marcar_resposta(resposta, nonce: str) -> None:
+    """Carimba a política de segurança numa resposta. Fica em função à parte
+    porque a página de 500 precisa dos MESMOS cabeçalhos e **não passa por
+    middleware nenhum** — ver `_erro_nao_previsto`."""
     h = resposta.headers
     h["X-Robots-Tag"] = "noindex, nofollow, noarchive"
     h["X-Content-Type-Options"] = "nosniff"
@@ -237,7 +281,6 @@ async def _cabecalhos_de_seguranca(request: Request, call_next):
         "frame-ancestors 'none'")
     if os.environ.get("EASYCONTIG_HTTPS_ONLY", "0") == "1":
         h["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    return resposta
 
 
 @app.exception_handler(HTTPException)
@@ -275,20 +318,41 @@ def _erro_nao_previsto(request: Request, exc: Exception):
 
     O texto NÃO leva a exceção: quem está do outro lado não pode ler caminho de
     arquivo nem consulta. O detalhe vai para o log, onde quem opera lê.
+
+    ⚠️ **ESTA RESPOSTA NÃO PASSA POR MIDDLEWARE NENHUM**, e por isso ela carimba
+    os cabeçalhos à mão. Achado M1 de 2026-08-08: um `@app.exception_handler(
+    Exception)` é servido pelo `ServerErrorMiddleware`, que o Starlette põe no
+    ponto MAIS DE FORA da pilha — fora, portanto, do `_cabecalhos_de_seguranca`
+    e do `_sem_cache`, que são `@app.middleware("http")`. O resultado é que a
+    única página que sai numa hora ruim saía **sem** CSP, sem `nosniff`, sem
+    `X-Frame-Options`, sem `noindex` e **cacheável** — e ela herda o `base.html`,
+    ou seja, leva a lateral com o nome, o e-mail de quem entrou e os nomes das
+    corridas. A 500 do HTTPException (`_erro`) não tem o problema: aquela vem do
+    `ExceptionMiddleware`, que fica por DENTRO da pilha.
     """
     print(f"  ⚠️  erro não previsto em {request.method} {request.url.path}: "
           f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
     traceback.print_exc(file=sys.stderr)
+    # O nonce é posto por `_cabecalhos_de_seguranca` antes de a rota rodar; o
+    # sorteio aqui é só para o caso de a exceção nascer antes disso — uma CSP
+    # com nonce que não casa é mais segura que CSP nenhuma.
+    nonce = getattr(request.state, "nonce", None) or secrets.token_urlsafe(16)
     if "text/html" not in request.headers.get("accept", ""):
-        return JSONResponse({"detail": "erro interno do servidor"}, status_code=500)
-    u = _u(request)
-    return TEMPLATES.TemplateResponse(request, "erro.html", {
-        **(_casca(u) if u else {"usuario": None}),
-        "codigo": 500,
-        "detalhe": ("Algo quebrou do lado do servidor, e não foi por causa do "
-                    "que você mandou. O registro do erro ficou no log do "
-                    "servidor — avise quem cuida dele."),
-    }, status_code=500)
+        resposta = JSONResponse({"detail": "erro interno do servidor"},
+                                status_code=500)
+    else:
+        u = _u(request)
+        resposta = TEMPLATES.TemplateResponse(request, "erro.html", {
+            **(_casca(u) if u else {"usuario": None}),
+            "codigo": 500,
+            "detalhe": ("Algo quebrou do lado do servidor, e não foi por causa "
+                        "do que você mandou. O registro do erro ficou no log do "
+                        "servidor — avise quem cuida dele."),
+        }, status_code=500)
+    _marcar_resposta(resposta, nonce)
+    resposta.headers["Cache-Control"] = "no-store, must-revalidate"
+    resposta.headers["Pragma"] = "no-cache"
+    return resposta
 
 
 EXT_ACEITAS = {".ab1", ".abi", ".scf"}
@@ -476,8 +540,19 @@ def volta_google(request: Request, code: str = "", state: str = "", error: str =
     return RedirectResponse("/", status_code=303)
 
 
-@app.get("/sair")
+@app.post("/sair")
 def sair(request: Request):
+    """Sair é POST, não GET (achado L2 de 2026-08-08).
+
+    Como GET, bastava um `<img src="https://.../sair">` numa página qualquer
+    para derrubar a sessão de quem abrisse: o cookie `Lax` acompanha navegação
+    de topo por GET, e foi reproduzido — `303` + `session=null` com `Referer`
+    externo. Não perde dado, mas é ação de estado num verbo que o navegador
+    trata como seguro (e que qualquer pré-carregador pode disparar sozinho).
+
+    Como POST, passa pela checagem de `Origin` do `_origem_confere` junto com
+    todos os outros — não precisa de guarda própria.
+    """
     auth.sair_da_sessao(request)
     return RedirectResponse("/entrar", status_code=303)
 
@@ -688,6 +763,29 @@ def foto_do_perfil(request: Request):
     if not caminho.exists():
         raise HTTPException(status_code=404, detail="sem foto")
     return FileResponse(caminho)
+
+
+# ------------------------------------------------------------ labs (diretório)
+@app.get("/labs", response_class=HTMLResponse)
+def pagina_labs(request: Request):
+    """O diretório dos laboratórios cadastrados no site.
+
+    Fica atrás do login como todo o resto (`_exigir`): é uma lista de quem usa o
+    site, não uma página pública — nada aqui vai para o Google (o `noindex` do
+    middleware vale para toda resposta).
+
+    Mostra só o que a pessoa DECLAROU no perfil (ver `perfil.listar_perfis`) —
+    nunca corridas, `.ab1` ou o que o BLAST achou, que é dado não publicado do
+    laboratório e não sai daqui por diretório. A foto NÃO é servida por e-mail
+    de propósito: a lista usa a inicial, para não abrir uma rota de foto
+    adivinhável por endereço. A funcionalidade final será informada pelo autor;
+    por ora é a vitrine de quem está cadastrado.
+    """
+    u = _exigir(request)
+    return TEMPLATES.TemplateResponse(request, "labs.html", {
+        **_casca(u), "pagina": "labs",
+        "perfis": perfil.listar_perfis(cfg.sqlite_path, u.email),
+    })
 
 
 # ------------------------------------------------------- bancos de referência

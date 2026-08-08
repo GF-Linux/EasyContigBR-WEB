@@ -39,3 +39,12 @@ CLAUDE-SECURITY-*/
 # (`git log -p`) ate alguem reescrever a arvore. Copia em ../easycontig-docs-privados/
 docs/auditoria-do-nucleo.md
 docs/checklist-de-producao.md
+# Mesma regra, dois documentos novos de 2026-08-08 (o repositorio JA E PUBLICO,
+# conferido na API do GitHub nesta data):
+#   checklist.md            — IP publico, IP da Tailscale, apelido e nome da
+#                             chave de SSH, onde ficam os dados e os backups, e
+#                             a lista do que ainda NAO esta feito.
+#   achados-seguranca-*.md  — relatorio de vulnerabilidades com o mecanismo de
+#                             cada uma; parte segue sem correcao (M2, M4, L3).
+docs/checklist.md
+docs/achados-seguranca-*.md

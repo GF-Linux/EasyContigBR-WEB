@@ -76,6 +76,21 @@ def conferir_producao() -> list[str]:
             "decidido, e a lista de usuários de teste do Google NÃO restringe "
             "nada (medido). Ponha os domínios (ex.: `ufrrj.br`) ou `*` para "
             "declarar que é aberto de propósito")
+    # Achado L5 de 2026-08-08: em branco, o `redirect_uri` do OAuth passa a sair
+    # do cabeçalho `Host` do cliente — quem faz a requisição escolhe para onde o
+    # Google devolve. A exploração é limitada (o Google exige casamento exato
+    # com o cadastrado, então na prática dá `redirect_uri_mismatch`), mas o
+    # sintoma que sobra é o login inteiro quebrado por um proxy que reescreva o
+    # Host, e a trava já documentada em três lugares simplesmente não existia.
+    # É também de onde sai o espelho do `_origem_confere` (a checagem de CSRF do
+    # achado M3): sem `URL_BASE`, ela cai no `base_url` da requisição — atrás do
+    # nginx, o host errado.
+    if not os.environ.get("EASYCONTIG_URL_BASE", "").strip():
+        problemas.append(
+            "EASYCONTIG_URL_BASE está em branco: o endereço de volta do Google "
+            "e a checagem de origem dos POST passam a sair do cabeçalho Host, "
+            "que é do cliente. Ponha o endereço público (ex.: "
+            "`https://easycontigbr.com.br`)")
     return problemas
 
 
