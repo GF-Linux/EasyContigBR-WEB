@@ -9,7 +9,10 @@ O que estes testes travam:
   • a página exige sessão, como todo o resto;
   • lista SÓ o que a pessoa declarou (nome, laboratório, portfólio) — nunca
     corridas nem o que o BLAST achou;
-  • quem só entrou e nunca salvou perfil NÃO aparece (não há linha em `perfis`);
+  • ENTRAR já cadastra (mudou em 2026-08-08 — antes só salvar cadastrava, e o
+    diretório mostrava uma pessoa só num site com duas contas em uso);
+  • o cadastro automático nunca grava o local-part do e-mail (achado L1);
+  • a foto do cartão sai por nome de arquivo sorteado, nunca por e-mail;
   • o botão está na lateral e marca a página quando aberta.
 """
 from __future__ import annotations
@@ -66,12 +69,66 @@ def test_a_pagina_labs_fica_marcada_na_lateral_quando_aberta(cliente):
         or 'class="ac viva"' in html, "a página aberta não fica marcada"
 
 
-# ───────────────────────────────── só quem declarou perfil aparece
-def test_quem_nunca_salvou_perfil_nao_aparece(cliente):
-    """`pegar` devolve padrões sem criar registro; `listar_perfis` só lê a tabela.
-    Entrar no site não cadastra perfil — salvar cadastra."""
+# ───────────────────────────────── entrar já cadastra; declarar é o que enche
+def test_entrar_no_site_ja_cadastra_no_diretorio(cliente):
+    """Mudou em 2026-08-08. Antes, só quem SALVAVA o perfil ganhava linha em
+    `perfis` — e o efeito prático foi o autor abrir o `/labs` e ver só a si
+    mesmo, embora a orientadora já tivesse entrado e mandado uma corrida no dia
+    anterior. Um diretório para um laboratório achar outro (ADR 0052) não pode
+    depender de um formulário que ninguém pediu para preencher.
+
+    A `cliente` já entrou na fixture, então há de existir um cartão.
+    """
     html = cliente.get("/labs").text
-    assert "Ainda não há perfis cadastrados" in html
+    assert "Ainda não há perfis cadastrados" not in html
+    assert "perfil sem nome" in html, "entrou, mas não apareceu no diretório"
+
+
+def test_cadastro_automatico_nao_grava_o_local_part_do_email(cliente):
+    """A trava que impede o cadastro automático de reabrir o achado L1.
+
+    O `Usuario.nome` cai em `email.split("@")[0]` quando não há nome declarado —
+    inofensivo na lateral (é o endereço de quem lê), fatal no diretório. Quem
+    grava é `garantir_registro`, e ele só aceita nome que o PROVEDOR declarou.
+    """
+    from easycontig_web import main as m
+    guardado = perfil.listar_perfis(m.cfg.sqlite_path)[0]
+    assert guardado["nome"] == "", (
+        f"gravou {guardado['nome']!r} no cadastro automático")
+    # Os NOMES DOS CARTÕES, e não a página inteira: a lateral mostra o nome de
+    # quem está logado (ali o local-part é o próprio endereço de quem lê) e o
+    # rodapé traz a autoria do software. Nenhum dos dois é vazamento, e varrer
+    # por substring confundia os três.
+    import re
+    html = cliente.get("/labs").text
+    nomes = re.findall(r'<div class="nm">(.*?)</div>', html, re.S)
+    assert nomes, "nenhum cartão no diretório"
+    assert all("gustavo" not in n.lower() for n in nomes), (
+        f"o cartão remontou o e-mail: {nomes}")
+    assert "perfil sem nome" in nomes[0]
+
+
+def test_nome_declarado_pelo_provedor_entra_no_cadastro(cliente):
+    """O caminho do Google: a pessoa não digitou nada, mas a conta dela declara
+    um nome — e é esse que o diretório mostra. É o que faz a orientadora
+    aparecer como ela mesma sem preencher formulário nenhum."""
+    from easycontig_web import main as m
+    perfil.garantir_registro(m.cfg.sqlite_path, "maristela@ufrrj.br",
+                             "Maristela Peckle")
+    html = cliente.get("/labs").text
+    assert "Maristela Peckle" in html
+    assert "maristela@ufrrj.br" not in html, "o e-mail foi para a tela"
+
+
+def test_cadastro_automatico_nao_pisa_no_que_a_pessoa_declarou(cliente):
+    """Entrar de novo não pode apagar o perfil de quem editou — por isso o
+    UPDATE do conflito é condicionado a `perfis.nome=''`."""
+    from easycontig_web import main as m
+    cliente.post("/perfil", data={"nome": "Gustavo Freitas", "laboratorio": "LHV"},
+                 follow_redirects=False)
+    perfil.garantir_registro(m.cfg.sqlite_path, "gustavo@ufrrj.br", "Outro Nome")
+    p = perfil.pegar(m.cfg.sqlite_path, "gustavo@ufrrj.br")
+    assert (p["nome"], p["laboratorio"]) == ("Gustavo Freitas", "LHV")
 
 
 def test_perfil_salvo_aparece_com_o_que_foi_declarado(cliente):
@@ -148,3 +205,68 @@ def test_quem_nao_digitou_nome_nao_vira_o_local_part_do_email(cliente):
     corpo = cliente.get("/labs").text
     assert "joao.silva" not in corpo, "o /labs remontou o e-mail de terceiro"
     assert "perfil sem nome" in corpo
+
+
+# ───────────────────────────────── a foto no cartão (pedido do autor, 08/08)
+def _com_foto(c, nome="Gustavo"):
+    """Salva um perfil com foto e devolve o nome sorteado do arquivo."""
+    png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    c.post("/perfil", data={"nome": nome},
+           files={"foto": ("minha.png", png, "image/png")},
+           follow_redirects=False)
+    from easycontig_web import main as m
+    return perfil.pegar(m.cfg.sqlite_path, "gustavo@ufrrj.br")["foto"]
+
+
+def test_o_cartao_do_labs_usa_a_foto_do_perfil(cliente):
+    """O autor reparou que a lateral mostrava a foto e o cartão do diretório
+    continuava com a inicial — a mesma pessoa aparecendo de dois jeitos."""
+    arquivo = _com_foto(cliente)
+    assert arquivo, "o perfil não guardou foto"
+    cartoes = cliente.get("/labs").text.split('class="trabalho"', 1)[1]
+    assert f'/labs/foto/{arquivo}' in cartoes, "o cartão continuou na inicial"
+    assert cliente.get(f"/labs/foto/{arquivo}").status_code == 200
+
+
+def test_a_foto_do_diretorio_nao_sai_sem_sessao(cliente, tmp_path, monkeypatch):
+    arquivo = _com_foto(cliente)
+    from easycontig_web import main as m
+    anonimo = TestClient(m.app)
+    r = anonimo.get(f"/labs/foto/{arquivo}", headers={"accept": "application/json"})
+    assert r.status_code == 401
+
+
+def test_a_rota_de_foto_so_entrega_foto_de_perfil(cliente):
+    """A trava que impede a rota de virar leitor da pasta: sai só o que está na
+    coluna `foto` de algum perfil, não qualquer arquivo que caia no volume."""
+    from easycontig_web import main as m
+    _com_foto(cliente)
+    intruso = m.cfg.data_dir / "fotos" / "naoehperfil.png"
+    intruso.write_bytes(b"\x89PNG\r\n\x1a\n")
+    assert cliente.get("/labs/foto/naoehperfil.png").status_code == 404
+
+
+@pytest.mark.parametrize("mau", ["../fila.sqlite3", "..%2ffila.sqlite3",
+                                 "....//fila.sqlite3", "/etc/passwd"])
+def test_a_rota_de_foto_nao_atravessa_pasta(cliente, mau):
+    assert cliente.get(f"/labs/foto/{mau}").status_code in (404, 400)
+
+
+def test_o_nome_do_provedor_preenche_cadastro_que_estava_vazio(cliente):
+    """A armadilha que o `ON CONFLICT DO NOTHING` teria criado.
+
+    Quem entra pela primeira vez sem nome declarado ganha linha VAZIA. Se o
+    conflito não fizesse nada, o login seguinte — já com o nome vindo do
+    provedor — não escreveria, e a pessoa ficaria "perfil sem nome" para
+    sempre. O UPDATE condicional preenche o vazio e só o vazio.
+    """
+    from easycontig_web import main as m
+    perfil.garantir_registro(m.cfg.sqlite_path, "zulmira@ufrrj.br")        # sem nome
+    assert perfil.pegar(m.cfg.sqlite_path, "zulmira@ufrrj.br")["nome"] == ""
+
+    perfil.garantir_registro(m.cfg.sqlite_path, "zulmira@ufrrj.br", "Zulmira Dias")
+    assert perfil.pegar(m.cfg.sqlite_path, "zulmira@ufrrj.br")["nome"] == "Zulmira Dias"
+
+    # e um login posterior sem nome não apaga o que já está lá
+    perfil.garantir_registro(m.cfg.sqlite_path, "zulmira@ufrrj.br")
+    assert perfil.pegar(m.cfg.sqlite_path, "zulmira@ufrrj.br")["nome"] == "Zulmira Dias"

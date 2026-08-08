@@ -40,6 +40,15 @@ SESSAO_CHAVE = "usuario"
 class Usuario:
     email: str
     nome: str = ""
+    # O nome que o provedor DECLAROU, separado do `nome` acima porque aquele cai
+    # no local-part do e-mail quando não há nada. Para a lateral esse tombo é
+    # inofensivo — é o próprio endereço de quem está lendo. Para o diretório
+    # `/labs` não é: foi exatamente assim que o e-mail alheio vazava (achado L1
+    # de 2026-08-08). Quem grava perfil no primeiro login usa ESTE campo, que
+    # fica vazio quando ninguém declarou nada.
+    # ⚠️ Não entra na sessão (`entrar_na_sessao` grava só email e nome): tem
+    # padrão para que `Usuario(**d)` continue montando a partir do cookie.
+    nome_google: str = ""
 
     @property
     def dominio(self) -> str:
@@ -243,7 +252,9 @@ def usuario_da_volta(request: Request, code: str, estado: str,
         # Conta sem e-mail confirmado não prova domínio, e é o domínio que
         # decide quem entra.
         raise HTTPException(status_code=403, detail="o Google não confirmou este e-mail")
-    return Usuario(email=email, nome=perfil.get("name") or email.split("@")[0])
+    declarado = (perfil.get("name") or "").strip()
+    return Usuario(email=email, nome=declarado or email.split("@")[0],
+                   nome_google=declarado)
 
 
 def usuario_da_sessao(request: Request) -> Usuario | None:

@@ -284,6 +284,54 @@ def salvar(sqlite_path: Path, email: str, *, nome: str = "", laboratorio: str = 
     return pegar(sqlite_path, email)
 
 
+def foto_registrada(sqlite_path: Path, arquivo: str) -> bool:
+    """Este nome de arquivo é mesmo a foto de algum perfil?
+
+    O diretório `/labs` precisa mostrar a foto dos OUTROS, e por isso ela deixa
+    de sair só pela rota do dono. A pergunta que sobra é o que aquela rota pode
+    entregar — e a resposta é: só o que está gravado na coluna `foto` de alguma
+    linha. Pertencimento a um conjunto do banco, e não "existe um arquivo com
+    esse nome na pasta", que entregaria qualquer coisa que caísse ali.
+    """
+    if not arquivo:
+        return False
+    with conectar(sqlite_path) as con:
+        r = con.execute("SELECT 1 FROM perfis WHERE foto=? LIMIT 1",
+                        (arquivo,)).fetchone()
+    return r is not None
+
+
+def garantir_registro(sqlite_path: Path, email: str, nome_declarado: str = "") -> None:
+    """Entrar no site já cadastra a pessoa no diretório (decisão de 2026-08-08).
+
+    Antes, só quem SALVAVA o perfil ganhava linha em `perfis` — e o efeito
+    prático foi o autor abrir o `/labs` e ver só a si mesmo, embora a
+    orientadora já tivesse entrado e mandado uma corrida no dia anterior. Um
+    diretório cujo propósito é um laboratório achar outro (ADR 0052) não pode
+    depender de um formulário que ninguém pediu para preencher.
+
+    ⚠️ `nome_declarado` é o nome que o PROVEDOR devolveu — o que a pessoa pôs na
+    conta Google dela —, nunca o `Usuario.nome`, que cai no local-part do
+    e-mail. Gravar o local-part aqui reabriria o achado L1: com o domínio
+    anunciado na tela de entrada, qualquer conta remontaria o e-mail
+    institucional das outras. Sem nome declarado, fica vazio, e o `/labs`
+    mostra "perfil sem nome".
+
+    ⚠️ O `UPDATE` do conflito preenche o nome **só quando o guardado está
+    vazio** — e essa condição é a função inteira. Com um `DO NOTHING` seco,
+    quem já tivesse linha sem nome (entrou por aqui antes de o provedor mandar
+    um, ou veio de uma migração) ficaria "perfil sem nome" para sempre, porque
+    todo login seguinte não faria nada. E com um `UPDATE` seco seria o contrário:
+    o nome do Google pisaria no que a pessoa digitou, a cada login. As duas
+    coisas erradas por um lado só.
+    """
+    nome = " ".join((nome_declarado or "").split())[:MAX_TEXTO]
+    with conectar(sqlite_path) as con:
+        con.execute("INSERT INTO perfis (email, nome) VALUES (?,?) "
+                    "ON CONFLICT(email) DO UPDATE SET nome=excluded.nome "
+                    "WHERE perfis.nome='' AND excluded.nome<>''", (email, nome))
+
+
 def listar_perfis(sqlite_path: Path, eu: str = "") -> list[dict]:
     """O diretório dos laboratórios cadastrados — quem tem perfil no site.
 

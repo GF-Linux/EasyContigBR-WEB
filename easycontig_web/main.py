@@ -501,6 +501,11 @@ def entrar_dev(request: Request, email: str = Form(...), proximo: str = Form("")
             f"/entrar?erro=fora+do+dominio+{cfg.dominio_permitido}{volta}",
             status_code=303)
     auth.entrar_na_sessao(request, auth.Usuario(email=email, nome=email.split("@")[0]))
+    # Cadastra no diretório como o Google faz — mas SEM nome: aqui não há
+    # provedor que declare um, e o `email.split("@")[0]` acima é só para a
+    # lateral (o próprio endereço de quem lê). Passá-lo adiante gravaria o
+    # local-part no diretório, que é o achado L1.
+    perfil.garantir_registro(cfg.sqlite_path, email)
     return RedirectResponse(destino, status_code=303)
 
 
@@ -537,6 +542,11 @@ def volta_google(request: Request, code: str = "", state: str = "", error: str =
             f"/entrar?erro=conta+fora+do+dominio+{quote(cfg.dominio_permitido)}",
             status_code=303)
     auth.entrar_na_sessao(request, u)
+    # Entrar cadastra no diretório, com o nome que o Google declarou (ver
+    # `perfil.garantir_registro`). Depois da sessão de propósito: se isto
+    # falhar, a pessoa entra do mesmo jeito — o diretório é conveniência, não
+    # condição para usar o site.
+    perfil.garantir_registro(cfg.sqlite_path, u.email, u.nome_google)
     return RedirectResponse("/", status_code=303)
 
 
@@ -760,6 +770,33 @@ def foto_do_perfil(request: Request):
     if not p["foto"]:
         raise HTTPException(status_code=404, detail="sem foto")
     caminho = cfg.data_dir / "fotos" / Path(p["foto"]).name
+    if not caminho.exists():
+        raise HTTPException(status_code=404, detail="sem foto")
+    return FileResponse(caminho)
+
+
+@app.get("/labs/foto/{arquivo}")
+def foto_do_diretorio(request: Request, arquivo: str):
+    """A foto de QUALQUER perfil, para o diretório desenhar os cartões.
+
+    A `/perfil/foto` continua existindo e continua sendo só do dono; esta é a
+    outra pergunta: mostrar a foto dos outros no `/labs`. O receio anotado no
+    template era servir foto **por e-mail**, o que daria uma rota adivinhável —
+    quem soubesse o endereço de alguém pediria a foto dele. Aqui o endereço é o
+    **nome do arquivo**, que é `secrets.token_urlsafe(8)` sorteado no envio: não
+    se adivinha, não diz de quem é, e não se deriva do e-mail.
+
+    Três travas, e nenhuma delas confia na anterior:
+      * `_exigir` — o diretório inteiro é atrás do login;
+      * `Path(...).name` — o `{arquivo}` não vira caminho para fora da pasta;
+      * `foto_registrada` — só sai o que está na coluna `foto` de algum perfil,
+        e não qualquer arquivo que exista no volume.
+    """
+    _exigir(request)
+    nome = Path(arquivo).name
+    if not perfil.foto_registrada(cfg.sqlite_path, nome):
+        raise HTTPException(status_code=404, detail="sem foto")
+    caminho = cfg.data_dir / "fotos" / nome
     if not caminho.exists():
         raise HTTPException(status_code=404, detail="sem foto")
     return FileResponse(caminho)

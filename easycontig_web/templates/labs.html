@@ -15,7 +15,11 @@
 .lab-cabeca{ display:flex; align-items:center; gap:.7rem; min-width:0 }
 .lab-av{ width:44px; height:44px; border-radius:50%; flex:none; display:grid;
   place-items:center; font-size:15px; font-weight:800; color:#14121f;
-  background:linear-gradient(135deg,var(--violeta),#6f63b8) }
+  background:linear-gradient(135deg,var(--violeta),#6f63b8); overflow:hidden }
+/* `cover` e não `contain`: foto de perfil vem em qualquer proporção, e sem isto
+   uma imagem larga entra deitada dentro do círculo, com faixa de fundo em cima
+   e embaixo. O `overflow:hidden` acima é o que faz o corte seguir o raio. */
+.lab-av img{ width:100%; height:100%; object-fit:cover; display:block }
 .lab-quem{ min-width:0; flex:1 }
 .lab-quem .nm{ font-size:.98rem; font-weight:700; line-height:1.25;
   overflow-wrap:anywhere }
@@ -54,14 +58,22 @@
   {% for p in perfis %}
   <div class="lab-cartao{% if p.eu %} eu{% endif %}">
     <div class="lab-cabeca">
-      {# A inicial, não a foto: servir a foto por e-mail abriria uma rota
-         adivinhável por endereço. A foto continua sendo de quem entrou.
+      {# A foto sai por `/labs/foto/<arquivo>`, e o <arquivo> é o nome sorteado
+         no envio — não o e-mail. Era o e-mail que abriria rota adivinhável
+         (quem soubesse o endereço pediria a foto), e é por isso que este cartão
+         mostrava a inicial mesmo de quem já tinha foto: a lateral trocava, o
+         diretório não, e a mesma pessoa aparecia de dois jeitos.
 
-         ⚠️ E a inicial NÃO cai no e-mail (achado L1): caindo, o cartão de quem
-         nunca digitou nome trazia as duas primeiras letras do endereço
-         institucional — e com o domínio anunciado na tela de entrada isso
-         reconstrói o e-mail alheio. Sem nome, mostra o traço. #}
-      <div class="lab-av">{{ (p.nome or '—')[:2]|upper }}</div>
+         ⚠️ A inicial, quando não há foto, NÃO cai no e-mail (achado L1): caindo,
+         o cartão de quem nunca digitou nome trazia as duas primeiras letras do
+         endereço institucional. Sem nome, mostra o traço. #}
+      <div class="lab-av">
+        {%- if p.foto -%}
+          <img src="/labs/foto/{{ p.foto }}" alt="">
+        {%- else -%}
+          {{ (p.nome or '—')[:2]|upper }}
+        {%- endif -%}
+      </div>
       <div class="lab-quem">
         <div class="nm">{{ p.nome or 'perfil sem nome' }}</div>
         {% if p.laboratorio or p.instituicao %}
