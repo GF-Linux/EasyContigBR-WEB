@@ -210,7 +210,13 @@ async def _limite_de_leitura(request: Request, call_next):
                                         status_code=303)
             return JSONResponse({"detail": "entre para continuar"}, status_code=401)
 
-    if request.method == "GET":
+    # ⚠️ HEAD conta junto com GET. HEAD é leitura — o servidor resolve a rota,
+    # monta a resposta inteira e só descarta o corpo — e enquanto isto dizia
+    # apenas `== "GET"` havia um método que não gastava orçamento NENHUM: bastava
+    # trocar o verbo para bater à vontade. Apareceu ao abrir o `/saude` para
+    # HEAD (o UptimeRobot só fala HEAD no plano grátis), mas o buraco não era do
+    # `/saude`: era de toda rota deste app.
+    if request.method in ("GET", "HEAD"):
         quem = None
         try:
             u = auth.usuario_da_sessao(request)
@@ -1220,9 +1226,19 @@ def relatorio_json(request: Request, lote_id: str):
 
 
 # ----------------------------------------------------------------------- saúde
-@app.get("/saude")
+@app.api_route("/saude", methods=["GET", "HEAD"])
 def saude(request: Request):
     """De pé ou não. Detalhe só para quem entrou.
+
+    ⚠️ **HEAD, não só GET** (2026-08-08). O FastAPI — ao contrário do Starlette
+    puro — NÃO acrescenta HEAD numa rota declarada com `@app.get`, então a rota
+    respondia `405 Method Not Allowed` a quem falasse HEAD. O UptimeRobot usa
+    HEAD, e escolher o método é recurso PAGO lá: o monitor externo nasceu em
+    "down" e assim ficou, apontado para um site que estava de pé o tempo todo.
+    O 503 que a nota abaixo descreve não servia para nada, porque o monitor
+    nunca chegava a ler código de saúde algum. Corrigir aqui é o que não depende
+    do plano de ninguém.
+
 
     ⚠️ Isto respondia a QUALQUER UM com os caminhos absolutos do contêiner
     (`/usr/local/bin/tracy`, `/bancos/referencias_18S`), quais ferramentas

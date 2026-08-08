@@ -129,6 +129,39 @@ def test_saude_responde_sem_cookie_e_o_codigo_segue_a_saude(app, monkeypatch):
     assert c.get("/saude").status_code == 503
 
 
+def test_saude_responde_a_head_porque_e_o_que_o_monitor_fala(app):
+    """O 503 da função acima não vale nada se o monitor não chega a ler o código.
+
+    ⚠️ Achado de 2026-08-08, com o site DE PÉ e o UptimeRobot em "down" havia
+    horas: o FastAPI, ao contrário do Starlette puro, **não** acrescenta HEAD a
+    uma rota declarada com `@app.get` — então `HEAD /saude` levava `405`, e o
+    monitor lia 405 como fora do ar. Escolher o método é recurso PAGO no
+    UptimeRobot; o conserto que não depende do plano de ninguém é este.
+
+    Trava as duas metades: HEAD é atendido, e o código dele ACOMPANHA a saúde
+    igual ao do GET — um HEAD que respondesse 200 fixo devolveria o defeito
+    original (monitor cego) por outro caminho.
+    """
+    from easycontig_web import config
+    c = _cli(app)
+    r = c.head("/saude")
+    assert r.status_code != 405, (
+        "HEAD voltou a levar 405: o monitor externo vê o site de pé como caído")
+    assert r.status_code in (200, 503)
+
+    monkeypatch_livre = pytest.MonkeyPatch()
+    try:
+        monkeypatch_livre.setattr(config, "diagnostico",
+                                  lambda cfg: [("tracy", False, "sumiu")])
+        assert c.head("/saude").status_code == 503, (
+            "HEAD respondeu de pé com a máquina doente")
+        monkeypatch_livre.setattr(config, "diagnostico",
+                                  lambda cfg: [("tracy", True, "ok")])
+        assert c.head("/saude").status_code == 200
+    finally:
+        monkeypatch_livre.undo()
+
+
 # ═════════════════════════════════════════ F2 — rota desligada queimando o teto
 # Atrás de um proxy, todo visitante anônimo divide um balde só. Uma rota que
 # está DESLIGADA não pode gastar esse orçamento: era uma forma de trancar o

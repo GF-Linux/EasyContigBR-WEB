@@ -87,6 +87,27 @@ def test_quem_nao_entrou_continua_contado_por_ip(montar):
         "quando não há conta")
 
 
+def test_head_gasta_o_teto_igual_ao_get(montar):
+    """HEAD é leitura, e leitura paga.
+
+    ⚠️ Apareceu ao abrir o `/saude` para HEAD em 2026-08-08, mas o buraco era de
+    TODA rota: o middleware dizia `request.method == "GET"`, então bastava trocar
+    o verbo para bater à vontade sem gastar orçamento nenhum. O servidor resolve
+    a rota e monta a resposta inteira num HEAD — só descarta o corpo. Cobrar
+    menos por isso seria cobrar pelo tamanho da resposta, não pelo trabalho.
+    """
+    main = montar(teto="5")
+    c = TestClient(main.app)
+    for _ in range(5):
+        assert c.head("/saude").status_code != 429
+    assert c.head("/saude").status_code == 429, (
+        "HEAD não gastou o teto: existe um verbo que bate de graça")
+
+    # E o balde é o MESMO — não um por verbo, senão o teto vira dois tetos.
+    assert c.get("/saude").status_code == 429, (
+        "GET passou depois de HEAD estourar: cada verbo ganhou balde próprio")
+
+
 def test_sessao_ilegivel_nao_derruba_a_requisicao(montar):
     """Cookie assinado com outra chave (todo reinício sem SECRET_KEY fixa gera
     uma nova) não pode virar erro 500: cai para o IP e segue."""
