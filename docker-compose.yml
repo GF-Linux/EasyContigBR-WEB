@@ -75,6 +75,12 @@ services:
       #   mkdir -p /var/lib/easycontig && chown 10001:10001 /var/lib/easycontig
       - /var/lib/easycontig:/dados
       - ./bancos:/bancos:ro
+    # ⚠️ Este `status==200` só passou a significar alguma coisa em 2026-08-08.
+    # Antes o /saude devolvia 200 mesmo com `ok: false`, então a checagem
+    # respondia "saudável" com o tracy sumido ou os bancos sem índice. Hoje
+    # doente responde 503 e o `urlopen` levanta, o que derruba a checagem — que
+    # é o comportamento que sempre se quis. Não há reinício automático por
+    # unhealthy no compose: o contêiner fica MARCADO, e quem opera vê no `ps`.
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/saude').status==200 else 1)"]

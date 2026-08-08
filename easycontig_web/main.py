@@ -1105,14 +1105,27 @@ def saude(request: Request):
     A rota continua aberta porque o `healthcheck` do compose a usa sem cookie —
     e para ele `{"ok": true}` com 200 basta. Quem precisa do detalhe é quem
     opera, e quem opera tem sessão.
+
+    ⚠️ **DOENTE RESPONDE 503, NÃO 200** (2026-08-08). Antes, `ok: false` saía com
+    **200**, e o efeito é que a rota mentia para todo mundo que fala HTTP em vez
+    de ler JSON: um monitor externo olhando o código de status veria "no ar" com
+    o `tracy` sumido ou os bancos sem índice — que é justamente o estado em que
+    o serviço aceita corrida e não consegue identificar nada. O `healthcheck` do
+    compose tinha o mesmo buraco: conferia `status == 200`, e 200 era o que
+    chegava sempre.
+
+    Os quatro itens de `config.diagnostico` são estáveis dentro do contêiner
+    (dois binários da imagem e dois índices do volume), então 503 aqui não
+    pisca: quando aparecer, quebrou mesmo.
     """
     itens = config.diagnostico(cfg)
     ok = all(x for _, x, _ in itens)
+    codigo = 200 if ok else 503
     if not _u(request):
-        return {"ok": ok}
-    return {
+        return JSONResponse({"ok": ok}, status_code=codigo)
+    return JSONResponse({
         "ok": ok,
         "dependencias": [{"item": i, "ok": x, "detalhe": d} for i, x, d in itens],
         "na_fila": sum(1 for x in fila.listar(cfg.sqlite_path, limite=500)
                        if x["status"] == fila.NA_FILA),
-    }
+    }, status_code=codigo)
