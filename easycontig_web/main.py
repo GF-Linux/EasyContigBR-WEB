@@ -110,6 +110,49 @@ def _origem_confere(request: Request) -> bool:
     return origem.rstrip("/").lower() == esperado.lower()
 
 
+# Teto de CORPO, em bytes. Sobra generosa sobre `EASYCONTIG_MAX_BYTES` (o teto
+# por lote, 300 MB por padrão) porque o multipart carrega cabeçalho e fronteira
+# por arquivo — 400 partes somam alguns MB só de moldura.
+_FOLGA_MULTIPART = 16 * 1024 * 1024
+MAX_CORPO = int(os.environ.get("EASYCONTIG_MAX_CORPO",
+                               str(cfg.max_bytes + _FOLGA_MULTIPART)))
+
+
+def _corpo_grande_demais(request: Request) -> str:
+    """Recusa pelo `Content-Length`, antes de o corpo existir (achado H1).
+
+    O `MultiPartParser` do Starlette spoola **cada parte de arquivo** num
+    `SpooledTemporaryFile`, que vira arquivo real em `/tmp` assim que passa do
+    limiar — e isso acontece **antes** de a função da rota rodar. Ou seja,
+    `max_bytes`, cota e retenção agem todos DEPOIS de os bytes já terem tocado o
+    disco. Medido em 2026-08-08: 12.000.296 bytes subiram inteiros num
+    `POST /perfil` cujo teto é 2 MB, e só então voltou o 413.
+
+    A barreira de verdade é o `client_max_body_size` do nginx (512 MB, em
+    `implantacao/nginx-easycontig.conf`). Isto aqui é defesa em profundidade,
+    e vale por dois motivos concretos: quem roda o app sem nginx na frente
+    (desenvolvimento, ou uma instalação nova que ainda não copiou a receita)
+    não tem barreira NENHUMA; e o teto do app acompanha `MAX_BYTES`, enquanto o
+    do nginx é um número fixo que alguém teria de lembrar de mexer junto.
+
+    ⚠️ **Sem `Content-Length` não há o que conferir** — corpo em `chunked` não
+    declara tamanho. Aí a barreira volta a ser só o nginx. Recusar requisição
+    sem o cabeçalho quebraria cliente legítimo para fechar um caminho que o
+    proxy já fecha.
+    """
+    bruto = request.headers.get("content-length")
+    if not bruto:
+        return ""
+    try:
+        n = int(bruto)
+    except ValueError:
+        return "content-length inválido"
+    if n > MAX_CORPO:
+        return (f"o envio passa do teto de {MAX_CORPO // (1024 * 1024)} MB por "
+                "requisição; mande em lotes menores")
+    return ""
+
+
 # ⚠️ A POSIÇÃO DESTE BLOCO É O QUE O FAZ FUNCIONAR — não mova para junto dos
 # outros middlewares lá embaixo. `add_middleware` empilha de dentro para fora:
 # quem é registrado DEPOIS fica por FORA. Registrando o limitador aqui, entre o
@@ -150,6 +193,11 @@ async def _limite_de_leitura(request: Request, call_next):
         # Recusado ANTES do 401 e antes do parser: um POST forjado de fora não
         # merece nem que o corpo dele seja lido.
         return JSONResponse({"detail": "origem não confere"}, status_code=403)
+
+    if request.method == "POST":
+        grande = _corpo_grande_demais(request)
+        if grande:
+            return JSONResponse({"detail": grande}, status_code=413)
 
     if request.method == "POST" and caminho not in POST_SEM_SESSAO:
         try:
