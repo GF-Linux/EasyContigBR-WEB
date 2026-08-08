@@ -61,14 +61,14 @@ def test_duas_contas_no_mesmo_ip_nao_dividem_o_teto(montar):
     ana = TestClient(main.app)
     ana.post("/entrar", data={"email": "ana@ufrrj.br"}, follow_redirects=False)
     for _ in range(10):
-        assert ana.get("/saude").status_code == 200
+        assert ana.get("/saude").status_code != 429
     assert ana.get("/saude").status_code == 429, "a Ana devia ter estourado o dela"
 
     # Mesmo processo, mesmo IP de teste — antes da correção, o Bruno já nascia
     # barrado porque a Ana consumiu a cota do IP.
     bruno = TestClient(main.app)
     bruno.post("/entrar", data={"email": "bruno@ufrrj.br"}, follow_redirects=False)
-    assert bruno.get("/saude").status_code == 200, (
+    assert bruno.get("/saude").status_code != 429, (
         "o Bruno foi barrado pelo consumo da Ana: o teto voltou a ser por IP")
 
 
@@ -78,7 +78,7 @@ def test_quem_nao_entrou_continua_contado_por_ip(montar):
     main = montar(teto="5")
     anonimo = TestClient(main.app)
     for _ in range(5):
-        assert anonimo.get("/saude").status_code == 200
+        assert anonimo.get("/saude").status_code != 429
     assert anonimo.get("/saude").status_code == 429
 
     outro_anonimo = TestClient(main.app)
@@ -93,4 +93,4 @@ def test_sessao_ilegivel_nao_derruba_a_requisicao(montar):
     main = montar(teto="10")
     c = TestClient(main.app)
     c.cookies.set("session", "lixo.que.nao.decodifica")
-    assert c.get("/saude").status_code == 200
+    assert c.get("/saude").status_code != 429

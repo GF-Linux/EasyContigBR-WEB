@@ -366,7 +366,7 @@ def test_teto_zero_desliga_a_regra(app, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_LIM_LEITURA", "0")
     c = _cli(app)
     _entrar(c, "a@ufrrj.br")
-    assert all(c.get("/saude").status_code == 200 for _ in range(30))
+    assert all(c.get("/saude").status_code != 429 for _ in range(30))
 
 
 def test_resposta_de_429_diz_quando_tentar_de_novo(app, monkeypatch):

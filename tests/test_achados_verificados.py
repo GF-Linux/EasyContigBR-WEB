@@ -110,9 +110,23 @@ def test_saude_com_sessao_continua_util_para_quem_opera(app):
     assert "dependencias" in d and "na_fila" in d
 
 
-def test_saude_responde_200_sem_cookie(app):
-    """O `healthcheck` do compose chama sem sessão e só olha o código."""
-    assert _cli(app).get("/saude").status_code == 200
+def test_saude_responde_sem_cookie_e_o_codigo_segue_a_saude(app, monkeypatch):
+    """O `healthcheck` do compose chama sem sessão e só olha o código.
+
+    ⚠️ Este teste afirmava `== 200` fixo, e o 200 era incidental: até 2026-08-08
+    a rota devolvia 200 **mesmo doente**, então qualquer ambiente passava. Hoje
+    o que se trava são as duas coisas de verdade — a rota não exige sessão (não
+    é 401/403), e o código ACOMPANHA a saúde, que é o que faz o monitor externo
+    servir para alguma coisa.
+    """
+    from easycontig_web import config
+    c = _cli(app)
+    assert c.get("/saude").status_code in (200, 503), "a rota passou a exigir sessão"
+
+    monkeypatch.setattr(config, "diagnostico", lambda cfg: [("tracy", True, "ok")])
+    assert c.get("/saude").status_code == 200
+    monkeypatch.setattr(config, "diagnostico", lambda cfg: [("tracy", False, "sumiu")])
+    assert c.get("/saude").status_code == 503
 
 
 # ═════════════════════════════════════════ F2 — rota desligada queimando o teto
