@@ -85,6 +85,29 @@ def conferir_producao() -> list[str]:
     # É também de onde sai o espelho do `_origem_confere` (a checagem de CSRF do
     # achado M3): sem `URL_BASE`, ela cai no `base_url` da requisição — atrás do
     # nginx, o host errado.
+    # Achado de 2026-08-11. `EASYCONTIG_PROXIES_CONFIAVEIS` em branco atrás de um
+    # proxy faz TODO visitante anônimo cair num balde só — o do IP do nginx. O
+    # teto de login é 20 por 600 s, então ele deixa de ser "20 tentativas por
+    # pessoa" e vira **20 tentativas no mundo**: uma pessoa que erre o login
+    # vinte vezes tranca a entrada do site para todo mundo por dez minutos. A
+    # ADR 0054 registrou isso como "chato e reversível" — era o julgamento certo
+    # sobre o lado errável a escolher, mas subestimou o efeito, porque naquele
+    # dia o teto de login ainda não era o único caminho anônimo que sobrara.
+    #
+    # ⚠️ Não há conserto em código: atrás de um proxy que não se confia, o
+    # servidor NÃO TEM como distinguir dois clientes — confiar no cabeçalho é o
+    # buraco que a própria 0054 fechou. Então o que se exige aqui é a
+    # DECLARAÇÃO, no mesmo formato que o `EASYCONTIG_DOMINIO` já usa com o `*`:
+    # ou os endereços dos proxies, ou `nenhum` para dizer "não há proxy na
+    # frente" de propósito. O que não pode continuar é o branco, que hoje
+    # significa as duas coisas ao mesmo tempo e não avisa qual.
+    if not os.environ.get("EASYCONTIG_PROXIES_CONFIAVEIS", "").strip():
+        problemas.append(
+            "EASYCONTIG_PROXIES_CONFIAVEIS está em branco, e em branco atrás de "
+            "um proxy põe TODO visitante anônimo no mesmo balde de limite: "
+            "vinte erros de login trancam a entrada do site inteiro. Ponha o "
+            "endereço de onde o proxy chega (no compose padrão, o gateway "
+            "172.18.0.1) ou `nenhum` se realmente não há proxy na frente")
     if not os.environ.get("EASYCONTIG_URL_BASE", "").strip():
         problemas.append(
             "EASYCONTIG_URL_BASE está em branco: o endereço de volta do Google "

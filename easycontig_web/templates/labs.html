@@ -6,8 +6,12 @@
 
 /* Grade de cartões: cresce em colunas conforme a tela dá, e quebra sozinha
    quando aperta — sem número de colunas escrito à mão, como as redes do perfil. */
+/* `align-items:start` porque o cartão passou a ter um formulário que ABRE: sem
+   isto, o padrão `stretch` faz todos os cartões da fileira crescerem até a
+   altura do que está aberto, e abrir o pedido de um laboratório deixa os
+   vizinhos como colunas vazias de 700px. Cada cartão tem a própria altura. */
 .labs{ display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,20rem),1fr));
-  gap:12px; margin-top:14px }
+  gap:12px; margin-top:14px; align-items:start }
 .lab-cartao{ background:var(--painel); border:1px solid var(--linha); border-radius:11px;
   padding:1rem 1.15rem; display:flex; flex-direction:column; gap:.6rem }
 .lab-cartao.eu{ border-color:var(--violeta); background:var(--selecao) }
@@ -43,6 +47,47 @@
 .lab-vazio{ background:var(--painel); border:1px dashed var(--linha-forte);
   border-radius:11px; padding:1.4rem 1.5rem; color:var(--apoio); line-height:1.6;
   margin-top:14px }
+
+/* ── pedir amostra ─────────────────────────────────────────────────────────
+   `<details>` e não um botão que abre painel por JS: a CSP deste app é com
+   nonce e SEM `unsafe-inline` no script (ADR de 2026-08-06), então todo
+   comportamento em JS pede arquivo próprio e nonce. Aqui o navegador já faz o
+   abre-fecha sozinho, e o formulário funciona com o JS desligado — o que
+   importa numa tela que um laboratório pode abrir de qualquer máquina. */
+.pedir{ border-top:1px solid var(--linha); margin-top:.2rem; padding-top:.6rem }
+.pedir>summary{ cursor:pointer; font-size:.8rem; color:var(--violeta-claro);
+  list-style:none; user-select:none }
+.pedir>summary::-webkit-details-marker{ display:none }
+.pedir>summary:hover{ color:var(--tinta) }
+.pedir[open]>summary{ color:var(--apoio); margin-bottom:.55rem }
+.pedir label{ display:block; font-size:.76rem; color:var(--apoio);
+  margin:.5rem 0 .22rem }
+.pedir .marcas{ display:flex; flex-wrap:wrap; gap:.3rem }
+/* A caixa de seleção inteira é clicável, e não só o quadradinho: são nomes de
+   espécie e de marcador, alvos pequenos demais para um clique de 13px. */
+.pedir .marca{ display:inline-flex; align-items:center; gap:.32rem;
+  font-size:.74rem; color:var(--apoio); border:1px solid var(--linha-forte);
+  border-radius:20px; padding:.2rem .55rem; cursor:pointer }
+.pedir .marca:has(input:checked){ border-color:var(--violeta);
+  background:var(--selecao); color:var(--tinta) }
+.pedir .marca input{ accent-color:var(--violeta); margin:0 }
+.pedir input[type=text],.pedir textarea{ width:100%; box-sizing:border-box;
+  background:var(--interno); border:1px solid var(--linha-forte); border-radius:7px;
+  color:var(--tinta); font:inherit; font-size:.8rem; padding:.4rem .55rem }
+.pedir textarea{ min-height:4.2rem; resize:vertical; line-height:1.45 }
+.pedir .aviso{ font-size:.72rem; color:var(--fraco); line-height:1.45;
+  margin:.55rem 0 0 }
+.pedir button{ margin-top:.55rem; width:100%; font:inherit; font-size:.8rem;
+  cursor:pointer; background:var(--selecao); color:var(--tinta);
+  border:1px solid var(--violeta); border-radius:7px; padding:.42rem .7rem }
+.pedir button:hover{ background:var(--violeta); color:#14121f }
+
+.recado{ border-radius:9px; padding:.7rem .95rem; margin-top:14px;
+  font-size:.85rem; line-height:1.5 }
+.recado.mal{ border:1px solid rgba(240,82,74,.45); background:rgba(240,82,74,.08);
+  color:var(--tinta) }
+.recado.bem{ border:1px solid var(--violeta); background:var(--selecao);
+  color:var(--tinta) }
 {% endblock %}
 
 {% block conteudo %}
@@ -51,7 +96,13 @@
 <p class="sub leitura">Os laboratórios cadastrados no EasyContig BR. Cada cartão é o
   que a pessoa <strong style="color:var(--apoio)">declarou</strong> no próprio
   perfil — não é contagem do que o BLAST achou nas corridas, e nada de sequência
-  aparece aqui. Só quem entrou vê esta lista.</p>
+  aparece aqui. Só quem entrou vê esta lista. Achou quem trabalha com o que você
+  precisa? <strong style="color:var(--apoio)">Peça a amostra pelo cartão</strong> —
+  o outro laboratório aceita ou recusa, e explica.</p>
+
+{% if erro %}<div class="recado mal">{{ erro }}</div>{% endif %}
+{% if enviado %}<div class="recado bem">Pedido enviado. Ele aparece em
+  <a href="/pedidos">Pedidos de amostra</a> enquanto espera resposta.</div>{% endif %}
 
 {% if perfis %}
 <div class="labs">
@@ -98,6 +149,60 @@
       {% for m in p.marcadores[:6] %}<span class="selo">{{ m }}</span>{% endfor %}
       {% if p.marcadores|length > 6 %}<span class="mais">+{{ p.marcadores|length - 6 }}</span>{% endif %}
     </div>
+    {% endif %}
+
+    {# ── pedir amostra (ADR 0052) ─────────────────────────────────────────
+       O alvo do formulário é `p.chave`, uma cadeia SORTEADA por conta — nunca
+       o e-mail e nunca o hash dele. O e-mail está fora por causa do achado L1
+       (com o domínio institucional anunciado na entrada, um pedaço do endereço
+       alheio remonta o endereço inteiro); o hash está fora porque e-mail
+       institucional é adivinhável, e hash de valor adivinhável só confirma o
+       palpite de quem já tinha a lista.
+
+       Não aparece no próprio cartão: pedir a si mesmo não é um estado que
+       precise existir. E não aparece sem chave — que só acontece durante uma
+       atualização, antes de a migração 5 sortear as que faltam. #}
+    {% if not p.eu and p.chave %}
+    <details class="pedir">
+      <summary>✉ Pedir amostra</summary>
+      <form method="post" action="/labs/{{ p.chave }}/pedido">
+        {% if p.especies or p.marcadores %}
+        <label>Do que este laboratório declara trabalhar:</label>
+        <div class="marcas">
+          {% for e in p.especies %}
+          <label class="marca"><input type="checkbox" name="itens" value="{{ e }}">
+            <i>{{ e }}</i></label>
+          {% endfor %}
+          {% for m in p.marcadores %}
+          <label class="marca"><input type="checkbox" name="itens" value="{{ m }}">
+            {{ m }}</label>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {# O texto livre existe mesmo quando há portfólio: o que o laboratório
+           declara é resumo, não inventário. Quando NÃO há portfólio declarado,
+           ele é o único caminho — e é por isso que o rótulo muda. #}
+        <label for="outro-{{ p.chave }}">{% if p.especies or p.marcadores
+          %}Ou outra coisa (opcional):{% else %}O que você precisa:{% endif %}</label>
+        <input type="text" id="outro-{{ p.chave }}" name="outro" maxlength="600"
+               placeholder="ex.: DNA extraído de Anaplasma platys, controle positivo">
+
+        <label for="motivo-{{ p.chave }}">Para que serve (obrigatório):</label>
+        <textarea id="motivo-{{ p.chave }}" name="motivo" maxlength="600" required
+          placeholder="Quem recebe decide com isto. Diga o uso, o projeto e o prazo."></textarea>
+
+        {# ⚠️ O aviso do e-mail fica ANTES do botão, e não numa página seguinte:
+           é a única troca de endereço entre contas que este site faz, e quem
+           manda o pedido tem que saber disso na hora de mandar. #}
+        <p class="aviso">Seu e-mail só aparece para este laboratório
+          <strong style="color:var(--apoio)">se ele aceitar</strong> o pedido —
+          e o dele aparece para você no mesmo instante. Recusado ou pendente,
+          nenhum dos dois vê o endereço do outro.</p>
+
+        <button type="submit">Enviar pedido</button>
+      </form>
+    </details>
     {% endif %}
   </div>
   {% endfor %}

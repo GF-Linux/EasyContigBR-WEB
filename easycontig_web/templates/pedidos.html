@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block titulo %}Pedidos de amostra — EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* Sem teto próprio: herda o da casca, que acompanha a tela (ADR 0055). */
+
+.pd-secao{ margin-top:1.5rem }
+.pd-secao h2{ font-size:.95rem; margin:0 0 .1rem }
+.pd-secao .qt{ font-family:var(--mono); font-size:.7rem; color:var(--fraco) }
+
+.pd-lista{ display:flex; flex-direction:column; gap:10px; margin-top:.7rem }
+.pd{ background:var(--painel); border:1px solid var(--linha); border-radius:11px;
+  padding:.95rem 1.1rem; display:flex; flex-direction:column; gap:.55rem }
+/* Só o que ESPERA RESPOSTA ganha a borda de acento. Um pedido já respondido é
+   histórico: continua legível, para de pedir atenção. */
+.pd.pendente{ border-color:var(--violeta) }
+
+.pd-topo{ display:flex; align-items:center; gap:.7rem; min-width:0 }
+.pd-av{ width:34px; height:34px; border-radius:50%; flex:none; display:grid;
+  place-items:center; font-size:12px; font-weight:800; color:#14121f;
+  background:linear-gradient(135deg,var(--violeta),#6f63b8); overflow:hidden }
+.pd-av img{ width:100%; height:100%; object-fit:cover; display:block }
+.pd-quem{ min-width:0; flex:1 }
+.pd-quem .nm{ font-size:.9rem; font-weight:700; overflow-wrap:anywhere }
+.pd-quem .lab{ color:var(--apoio); font-size:.76rem; overflow-wrap:anywhere }
+
+.pd-estado{ font-family:var(--mono); font-size:.6rem; letter-spacing:.09em;
+  text-transform:uppercase; border-radius:20px; padding:.18rem .55rem; flex:none;
+  border:1px solid var(--linha-forte); color:var(--apoio) }
+.pd-estado.pendente{ border-color:var(--violeta); color:var(--violeta-claro) }
+.pd-estado.aceito{ border-color:rgba(120,200,140,.5); color:#8fd3a4 }
+.pd-estado.recusado{ border-color:rgba(240,82,74,.45); color:#f0938c }
+
+.pd-itens{ display:flex; gap:.35rem; flex-wrap:wrap }
+.pd-itens .selo{ font-size:.72rem; color:var(--violeta-claro);
+  border:1px solid rgba(145,132,217,.45); border-radius:20px; padding:.2rem .55rem }
+.pd-itens .selo.livre{ font-family:var(--mono); font-size:.68rem;
+  color:var(--apoio); border-color:var(--linha-forte) }
+
+/* A justificativa é o conteúdo do pedido, não decoração: recuo e barra à
+   esquerda para distinguir o que foi ESCRITO do que a tela diz. */
+.pd-fala{ border-left:2px solid var(--linha-forte); padding-left:.7rem;
+  color:var(--apoio); font-size:.84rem; line-height:1.5; margin:0;
+  white-space:pre-wrap; overflow-wrap:anywhere }
+.pd-fala b{ color:var(--tinta); font-weight:600 }
+
+.pd-contato{ border:1px solid rgba(120,200,140,.4); background:rgba(120,200,140,.07);
+  border-radius:8px; padding:.55rem .75rem; font-size:.82rem; line-height:1.5 }
+.pd-contato a{ font-family:var(--mono); font-size:.82rem }
+
+.pd-resp{ border-top:1px solid var(--linha); padding-top:.6rem;
+  display:flex; flex-direction:column; gap:.4rem }
+.pd-resp textarea{ width:100%; box-sizing:border-box; background:var(--interno);
+  border:1px solid var(--linha-forte); border-radius:7px; color:var(--tinta);
+  font:inherit; font-size:.82rem; padding:.45rem .6rem; min-height:3.6rem;
+  resize:vertical; line-height:1.45 }
+.pd-resp .aviso{ font-size:.72rem; color:var(--fraco); line-height:1.45; margin:0 }
+.pd-bts{ display:flex; gap:.5rem; flex-wrap:wrap }
+.pd-bts button{ font:inherit; font-size:.82rem; cursor:pointer; border-radius:7px;
+  padding:.42rem .9rem; background:var(--interno); color:var(--apoio);
+  border:1px solid var(--linha-forte) }
+.pd-bts button.sim{ border-color:var(--violeta); background:var(--selecao);
+  color:var(--tinta) }
+.pd-bts button.sim:hover{ background:var(--violeta); color:#14121f }
+.pd-bts button.nao:hover{ border-color:rgba(240,82,74,.45); color:#f0938c }
+
+.pd-vazio{ background:var(--painel); border:1px dashed var(--linha-forte);
+  border-radius:11px; padding:1.2rem 1.4rem; color:var(--apoio); line-height:1.6;
+  font-size:.86rem }
+.recado.bem{ border:1px solid var(--violeta); background:var(--selecao);
+  color:var(--tinta); border-radius:9px; padding:.7rem .95rem; margin-top:14px;
+  font-size:.85rem }
+{% endblock %}
+
+{% block conteudo %}
+
+{# Um cartão de pedido. As duas listas mostram a MESMA coisa vista de lados
+   diferentes, e `meu` é só quem pode agir: quem recebeu responde, quem mandou
+   cancela enquanto ninguém respondeu. O que é privacidade — mostrar ou não o
+   e-mail — NÃO se decide aqui: vem pronto em `p.contato`, que o
+   `pedidos._visao()` só preenche quando o pedido está aceito. Se a decisão
+   morasse no template, a próxima tela que listasse pedidos teria de acertá-la
+   de novo. #}
+{% macro cartao(p, meu) %}
+<div class="pd {{ p.estado }}">
+  <div class="pd-topo">
+    <div class="pd-av">
+      {%- if p.quem.foto -%}<img src="/labs/foto/{{ p.quem.foto }}" alt="">
+      {%- else -%}{{ (p.quem.nome or '—')[:2]|upper }}{%- endif -%}
+    </div>
+    <div class="pd-quem">
+      <div class="nm">{% if meu %}Para{% else %}De{% endif %}:
+        {{ p.quem.nome or 'perfil sem nome' }}</div>
+      {% if p.quem.laboratorio or p.quem.instituicao %}
+      <div class="lab">{{ p.quem.laboratorio }}{% if p.quem.laboratorio
+        and p.quem.instituicao %} · {% endif %}{{ p.quem.instituicao }}</div>
+      {% endif %}
+    </div>
+    <span class="pd-estado {{ p.estado }}">{{ p.estado }}</span>
+  </div>
+
+  {% if p.itens or p.outro %}
+  <div class="pd-itens">
+    {% for i in p.itens %}<span class="selo">{{ i }}</span>{% endfor %}
+    {% if p.outro %}<span class="selo livre">{{ p.outro }}</span>{% endif %}
+  </div>
+  {% endif %}
+
+  <p class="pd-fala"><b>Motivo:</b> {{ p.motivo }}</p>
+  {% if p.resposta %}<p class="pd-fala"><b>Resposta:</b> {{ p.resposta }}</p>{% endif %}
+
+  {# ⚠️ O e-mail aparece SÓ aqui, e só porque `p.contato` veio preenchido — o
+     que acontece exclusivamente com pedido aceito. É a única travessia de
+     endereço entre contas neste site (achado L1 / ADR 0066). #}
+  {% if p.contato %}
+  <div class="pd-contato">✉ Contato liberado pelo aceite:
+    <a href="mailto:{{ p.contato }}">{{ p.contato }}</a><br>
+    <span style="color:var(--fraco);font-size:.76rem">O envio da amostra é
+      combinado entre vocês, fora do site.</span></div>
+  {% endif %}
+
+  {% if p.estado == 'pendente' and not meu %}
+  <form class="pd-resp" method="post" action="/pedidos/{{ p.id }}/responder">
+    <textarea name="resposta" maxlength="600" required
+      placeholder="Diga por quê — nas duas respostas. Ex.: “Temos alíquota de 2021, mando por Sedex” ou “Só temos DNA extraído, não temos mais o sangue”."></textarea>
+    <p class="aviso">⚠️ Se aceitar, seu e-mail passa a aparecer para quem pediu —
+      e o dele para você. Recusando, nenhum dos dois vê o endereço do outro.</p>
+    <div class="pd-bts">
+      <button class="sim" type="submit" name="acao" value="aceitar">Aceitar</button>
+      <button class="nao" type="submit" name="acao" value="recusar">Recusar</button>
+    </div>
+  </form>
+  {% elif p.estado == 'pendente' and meu %}
+  <form class="pd-resp" method="post" action="/pedidos/{{ p.id }}/cancelar">
+    <p class="aviso">Esperando resposta. Você pode desistir enquanto ninguém
+      respondeu — o pedido some da caixa do outro laboratório.</p>
+    <div class="pd-bts"><button class="nao" type="submit">Cancelar pedido</button></div>
+  </form>
+  {% endif %}
+</div>
+{% endmacro %}
+
+<h1>Pedidos de amostra</h1>
+<p class="sub leitura">Um laboratório pede uma amostra a outro, e o outro
+  <strong style="color:var(--apoio)">aceita ou recusa, dizendo por quê</strong>.
+  Não é conversa: cada pedido tem uma resposta e acaba ali. Para insistir depois,
+  mande um pedido novo pelo <a href="/labs">Labs</a>.</p>
+
+{% if enviado %}<div class="recado bem">Pedido enviado — ele fica em
+  “O que eu pedi” até o outro laboratório responder.</div>{% endif %}
+
+{# ─────────────────────────────── o que pediram a mim (é o que exige ação) #}
+<div class="pd-secao">
+  <h2>O que pediram a mim</h2>
+  <div class="qt">{{ recebidos|selectattr('estado','equalto','pendente')|list|length }}
+    esperando resposta · {{ recebidos|length }} no total</div>
+
+  {% if recebidos %}
+  <div class="pd-lista">
+    {% for p in recebidos %}{{ cartao(p, meu=false) }}{% endfor %}
+  </div>
+  {% else %}
+  <div class="pd-vazio" style="margin-top:.7rem">Ninguém pediu amostra ainda. Quem
+    quiser pedir vai achar você pelo <a href="/labs">Labs</a> — e acha melhor se o
+    seu <a href="/perfil?editando=1">perfil</a> disser com que espécies e
+    marcadores você trabalha.</div>
+  {% endif %}
+</div>
+
+{# ─────────────────────────────────────────────────── o que eu pedi #}
+<div class="pd-secao">
+  <h2>O que eu pedi</h2>
+  <div class="qt">{{ enviados|selectattr('estado','equalto','pendente')|list|length }}
+    esperando resposta · {{ enviados|length }} no total</div>
+
+  {% if enviados %}
+  <div class="pd-lista">
+    {% for p in enviados %}{{ cartao(p, meu=true) }}{% endfor %}
+  </div>
+  {% else %}
+  <div class="pd-vazio" style="margin-top:.7rem">Você ainda não pediu nada. O
+    <a href="/labs">Labs</a> lista quem está cadastrado e o que cada um declara
+    trabalhar.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

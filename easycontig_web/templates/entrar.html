@@ -144,6 +144,39 @@
 
 </div>
 
+{# ⚠️ Sair da conta tem de apagar os RASCUNHOS DO CROMATOGRAMA do navegador.
+   Achado de 2026-08-11, confirmado por 3 de 3 verificadores.
+
+   O que estava guardado não é preferência de tela: é `est.seq`, as sequências
+   alinhadas de cada leitura, que vieram de `/api/lotes/.../traco` — rota atrás
+   de `_exigir` E de dono do lote. Ou seja, sequenciamento **não publicado**,
+   que é o ativo que este serviço existe para não deixar vazar. O `/sair`
+   derruba a sessão no servidor e o `no-store` tira as páginas do cache, mas
+   nada disso alcança o `localStorage`: o rascunho ficava no disco do navegador
+   e o próximo usuário da máquina o lia. E máquina de laboratório compartilhada
+   não é hipótese aqui — é o cenário que o `auth.py` cita para justificar o
+   `select_account` no login.
+
+   Só apaga quando a saída foi DELIBERADA (`?saiu=1`, posto pela rota `/sair`).
+   Apagar em toda visita a esta página destruiria o rascunho vivo de quem só
+   abriu a tela de entrada noutra aba, ou de quem teve a sessão expirada no meio
+   de uma edição — perder trabalho em silêncio é o defeito que a ADR 0052 manda
+   evitar. ⚠️ A contrapartida fica dita: sessão que expira sozinha numa máquina
+   compartilhada ainda deixa o rascunho para trás. Fechar isso pede um prazo de
+   validade no próprio rascunho, e é outra tarefa. #}
+<script nonce="{{ request.state.nonce }}">
+if (new URLSearchParams(location.search).get("saiu") === "1") {
+  try {
+    for (var i = localStorage.length - 1; i >= 0; i--) {
+      var k = localStorage.key(i);
+      /* De trás para frente: remover encolhe a lista e um laço crescente
+         pularia a chave seguinte a cada remoção. */
+      if (k && k.indexOf("easycontig:rascunho:") === 0) localStorage.removeItem(k);
+    }
+  } catch (e) { /* modo anônimo: não havia o que apagar */ }
+}
+</script>
+
 {% if not google_ok %}
 <script nonce="{{ request.state.nonce }}">
 /* O aviso já está visível (não depende deste script): o clique só leva o foco

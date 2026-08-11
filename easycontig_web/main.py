@@ -24,12 +24,13 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import amostras as mod_amostras
-from . import (auth, bancos, config, cotas, executor, fila, limites, perfil,
-               retencao, traco)
+from . import (auth, bancos, config, cotas, executor, fila, limites, pedidos,
+               perfil, retencao, traco)
 
 cfg = config.carregar()
 
@@ -55,6 +56,7 @@ if os.environ.get("EASYCONTIG_AUTH", "dev").lower() == "google":
 
 fila.criar_esquema(cfg.sqlite_path)
 perfil.criar_esquema(cfg.sqlite_path)
+pedidos.criar_esquema(cfg.sqlite_path)
 
 # `docs_url=None` em produção: `/api/docs`, `/redoc` e `/openapi.json` respondiam
 # 200 SEM sessão (verificado em 2026-08-06) e publicam o mapa inteiro da API —
@@ -349,9 +351,17 @@ def _erro(request: Request, exc: HTTPException):
     do servidor (ver o comentário do SessionMiddleware), então TODO reinício
     desloga todo mundo e leva todos a esta parede.
     """
+    # ⚠️ Os cabeçalhos da exceção viajam junto (achado de 2026-08-11, encontrado
+    # ao escrever o teste do 503 de `_vaga_pesada`). Este manipulador montava a
+    # resposta do zero e descartava `exc.headers` — então o `Retry-After` que
+    # `_vaga_pesada()` e `limites.conferir()` põem no 503 e no 429 nunca chegava
+    # a ninguém. O servidor sabia em quantos segundos valia tentar de novo e não
+    # contava, e um cliente educado não tinha como ser educado.
+    cabecalhos = dict(exc.headers or {})
     quer_html = "text/html" in request.headers.get("accept", "")
     if not quer_html:
-        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                            headers=cabecalhos)
     if exc.status_code == 401:
         # `proximo` preserva o destino: depois de entrar, a pessoa volta para o
         # lote que tentou abrir, em vez de cair na lista e ter de procurá-lo.
@@ -361,7 +371,7 @@ def _erro(request: Request, exc: HTTPException):
     return TEMPLATES.TemplateResponse(request, "erro.html", {
         **(_casca(u) if u else {"usuario": None}),
         "codigo": exc.status_code, "detalhe": exc.detail,
-    }, status_code=exc.status_code)
+    }, status_code=exc.status_code, headers=cabecalhos)
 
 @app.exception_handler(Exception)
 def _erro_nao_previsto(request: Request, exc: Exception):
@@ -461,6 +471,37 @@ def _exigir(request: Request) -> auth.Usuario:
     return u
 
 
+# ------------------------------------------------------- recado de uma vez só
+# ⚠️ A MENSAGEM DE ERRO NÃO VIAJA MAIS NA URL (achado de 2026-08-11).
+#
+# O padrão antigo era `RedirectResponse("/bancos?erro=" + quote(texto))`, e a
+# página imprimia `{{ erro }}` direto do parâmetro. Como o leitor não conferia
+# nada, o texto exibido não era o que o app escreveu — era o que estivesse na
+# URL. Qualquer um monta `/labs?erro=sua+sessão+expirou,+reenvie+suas+
+# credenciais+em...` e a frase sai dentro da caixa de erro do próprio site, com
+# a autoridade visual dele. Não é XSS (o Jinja escapa, e foi conferido), é
+# falsificação de conteúdo — que é o que uma isca precisa.
+#
+# Podia ter virado um catálogo de códigos (`?erro=cota_bancos`), mas isso
+# obrigaria a jogar fora o detalhe das falhas de montagem, que é justamente o
+# que ajuda quem está tentando entender por que o banco não subiu. A sessão
+# resolve melhor: ela é um cookie ASSINADO pelo servidor, então o cliente não
+# consegue escrever nela, e o texto continua sendo exatamente o que o app pôs.
+#
+# "De uma vez só" é a outra metade: o recado é REMOVIDO ao ser lido, senão ele
+# reaparece em todo recarregamento da página e a pessoa fica olhando um erro que
+# já resolveu.
+_RECADO = "recado"
+
+
+def _por_recado(request: Request, texto: str) -> None:
+    request.session[_RECADO] = (texto or "")[:300]
+
+
+def _pegar_recado(request: Request) -> str:
+    return request.session.pop(_RECADO, "")
+
+
 def _referencias(u: auth.Usuario) -> list[dict]:
     """As referências que esta conta pode escolher para identificar.
 
@@ -501,6 +542,12 @@ def _casca(u: auth.Usuario) -> dict:
         "usuario": u,
         "corridas": fila.listar(cfg.sqlite_path, dono=u.email, limite=25),
         "perfil_lateral": {"nome": p.get("nome") or "", "foto": p.get("foto") or ""},
+        # O contador de pedidos esperando ESTA conta. Vai na casca, e não só na
+        # página de pedidos, porque este app **não manda e-mail**: se o número
+        # não estiver na lateral de toda página, um pedido pode ficar meses sem
+        # ninguém saber que chegou. É um COUNT com índice próprio
+        # (`idx_pedidos_para`), medido em microssegundos.
+        "pedidos_pendentes": pedidos.contar_pendentes(cfg.sqlite_path, u.email),
     }
 
 
@@ -560,12 +607,12 @@ def _destino(proximo: str) -> str:
 
 
 @app.get("/entrar", response_class=HTMLResponse)
-def pagina_entrar(request: Request, erro: str = "", proximo: str = ""):
+def pagina_entrar(request: Request, proximo: str = ""):
     return TEMPLATES.TemplateResponse(request, "entrar.html", {
         "modo": auth.modo(),
         "google_ok": auth.google_configurado(),
         "dominio": cfg.dominio_permitido,
-        "erro": erro,
+        "erro": _pegar_recado(request),
         "proximo": _destino(proximo),
     })
 
@@ -584,13 +631,17 @@ def entrar_dev(request: Request, email: str = Form(...), proximo: str = Form("")
     limites.conferir("login", request)
     email = email.strip().lower()
     destino = _destino(proximo)
-    volta = f"&proximo={quote(destino)}" if destino != "/" else ""
+    # Sem `?erro=` na frente, `proximo` passou a ser o único parâmetro que
+    # sobra — então ele abre a query com `?` em vez de emendar com `&`.
+    volta = f"?proximo={quote(destino)}" if destino != "/" else ""
     if "@" not in email:
-        return RedirectResponse(f"/entrar?erro=e-mail+invalido{volta}", status_code=303)
+        _por_recado(request, "e-mail inválido")
+        return RedirectResponse(f"/entrar{volta}", status_code=303)
     if not auth.dominio_ok(email, cfg.dominio_permitido):
-        return RedirectResponse(
-            f"/entrar?erro=fora+do+dominio+{cfg.dominio_permitido}{volta}",
-            status_code=303)
+        # A mensagem nomeia o domínio a partir da CONFIGURAÇÃO do servidor, e
+        # nunca de nada que tenha vindo na requisição.
+        _por_recado(request, f"conta fora do domínio {cfg.dominio_permitido}")
+        return RedirectResponse(f"/entrar{volta}", status_code=303)
     auth.entrar_na_sessao(request, auth.Usuario(email=email, nome=email.split("@")[0]))
     # Cadastra no diretório como o Google faz — mas SEM nome: aqui não há
     # provedor que declare um, e o `email.split("@")[0]` acima é só para a
@@ -624,14 +675,14 @@ def volta_google(request: Request, code: str = "", state: str = "", error: str =
     if auth.modo() != "google" or not auth.google_configurado():
         raise HTTPException(status_code=404, detail="login pelo Google não configurado")
     if error or not code:
-        return RedirectResponse(f"/entrar?erro={quote(error or 'entrada cancelada')}",
+        _por_recado(request, error or "entrada cancelada")
+        return RedirectResponse("/entrar",
                                 status_code=303)
     u = auth.usuario_da_volta(request, code, state, _redirect_uri(request))
     if not auth.dominio_ok(u.email, cfg.dominio_permitido):
         # O Google prova QUEM é; o domínio decide SE entra (ADR 0050).
-        return RedirectResponse(
-            f"/entrar?erro=conta+fora+do+dominio+{quote(cfg.dominio_permitido)}",
-            status_code=303)
+        _por_recado(request, f"conta fora do domínio {cfg.dominio_permitido}")
+        return RedirectResponse("/entrar", status_code=303)
     auth.entrar_na_sessao(request, u)
     # Entrar cadastra no diretório, com o nome que o Google declarou (ver
     # `perfil.garantir_registro`). Depois da sessão de propósito: se isto
@@ -655,7 +706,11 @@ def sair(request: Request):
     todos os outros — não precisa de guarda própria.
     """
     auth.sair_da_sessao(request)
-    return RedirectResponse("/entrar", status_code=303)
+    # ⚠️ `?saiu=1` não é enfeite: é o que manda o navegador APAGAR os rascunhos
+    # de cromatograma do `localStorage` (achado de 2026-08-11, 3 de 3
+    # verificadores). Derrubar a sessão é do servidor; o rascunho é do navegador,
+    # e nada aqui o alcança — ver o bloco correspondente em `entrar.html`.
+    return RedirectResponse("/entrar?saiu=1", status_code=303)
 
 
 # ----------------------------------------------------------------------- lotes
@@ -929,19 +984,114 @@ def pagina_labs(request: Request):
     nunca corridas, `.ab1` ou o que o BLAST achou, que é dado não publicado do
     laboratório e não sai daqui por diretório. A foto NÃO é servida por e-mail
     de propósito: a lista usa a inicial, para não abrir uma rota de foto
-    adivinhável por endereço. A funcionalidade final será informada pelo autor;
-    por ora é a vitrine de quem está cadastrado.
+    adivinhável por endereço.
+
+    Desde 2026-08-10 o diretório deixou de ser só vitrine: cada cartão tem o
+    formulário de **pedido de amostra** (ADR 0052 — o portfólio existe para
+    outro laboratório achar quem trabalha com o quê e pedir uma sequência).
     """
     u = _exigir(request)
     return TEMPLATES.TemplateResponse(request, "labs.html", {
         **_casca(u), "pagina": "labs",
         "perfis": perfil.listar_perfis(cfg.sqlite_path, u.email),
+        "erro": _pegar_recado(request),
+        "enviado": request.query_params.get("enviado", "") == "1",
     })
+
+
+# ------------------------------------------------- pedidos de amostra (0052)
+@app.post("/labs/{chave}/pedido")
+def pedir_amostra(request: Request, chave: str,
+                  itens: list[str] = Form(default=[]),
+                  outro: str = Form(""), motivo: str = Form("")):
+    """Um laboratório pede uma amostra a outro.
+
+    ⚠️ O alvo vem por `chave` sorteada, nunca por e-mail — se fosse por e-mail,
+    o endereço do outro teria de estar no HTML do `/labs`, que é exatamente o
+    vazamento fechado pelo achado L1. E nem por hash do e-mail, que confirma
+    palpite (ver o cabeçalho de `pedidos.py`).
+
+    **Chave desconhecida responde como pedido inválido, e não 404.** Um 404 aqui
+    responderia "esta chave não é de ninguém", transformando a rota num oráculo
+    para varrer o espaço de chaves. O custo é uma mensagem menos precisa num
+    caso que, para quem usa a tela, não acontece.
+    """
+    u = _exigir(request)
+    limites.conferir("pedido", request, u.email)
+    destino = perfil.email_da_chave(cfg.sqlite_path, chave)
+    if not destino:
+        _por_recado(request, "não foi possível enviar o pedido a este "
+                             "laboratório; recarregue a página")
+        return RedirectResponse("/labs", status_code=303)
+    try:
+        pedidos.criar(cfg.sqlite_path, de_email=u.email, para_email=destino,
+                      itens=itens, outro=outro, motivo=motivo)
+    except pedidos.NaoPode as e:
+        _por_recado(request, str(e))
+        return RedirectResponse("/labs", status_code=303)
+    return RedirectResponse("/pedidos?enviado=1", status_code=303)
+
+
+@app.get("/pedidos", response_class=HTMLResponse)
+def pagina_pedidos(request: Request, enviado: int = 0):
+    """A caixa de pedidos: o que pediram a mim, e o que eu pedi.
+
+    Não é caixa de mensagens (ver o cabeçalho de `pedidos.py`): cada linha tem
+    no máximo dois textos — o motivo de quem pediu e a justificativa de quem
+    respondeu — e um estado final.
+
+    Esta página existe porque o app **não manda e-mail**. Sem SMTP, o único
+    lugar onde um pedido pode aparecer é dentro do site, e é por isso que o
+    contador vai também na lateral de toda página (`_casca`).
+    """
+    u = _exigir(request)
+    return TEMPLATES.TemplateResponse(request, "pedidos.html", {
+        **_casca(u), "pagina": "pedidos",
+        "recebidos": pedidos.recebidos(cfg.sqlite_path, u.email),
+        "enviados": pedidos.enviados(cfg.sqlite_path, u.email),
+        "enviado": bool(enviado),
+    })
+
+
+@app.post("/pedidos/{pedido_id}/responder")
+def responder_pedido(request: Request, pedido_id: str,
+                     acao: str = Form(""), resposta: str = Form("")):
+    """Aceitar ou recusar, sempre com justificativa (decisão do autor).
+
+    ⚠️ **Aceitar libera o e-mail dos dois lados naquele pedido** — é o único
+    ponto do app em que um endereço atravessa a fronteira entre contas, e o
+    clique aqui é o consentimento que autoriza. A tela avisa disso ANTES do
+    botão; se este comportamento mudar, o aviso do template muda junto.
+    """
+    u = _exigir(request)
+    limites.conferir("pedido", request, u.email)
+    if acao not in ("aceitar", "recusar"):
+        raise HTTPException(status_code=400, detail="ação desconhecida")
+    try:
+        atualizado = pedidos.responder(cfg.sqlite_path, pedido_id, u.email,
+                                       aceitar=(acao == "aceitar"),
+                                       resposta=resposta)
+    except pedidos.NaoPode as e:
+        _por_recado(request, str(e))
+        return RedirectResponse("/pedidos", status_code=303)
+    if atualizado is None:
+        # Não existe, não é seu, ou já foi respondido — a mesma resposta para os
+        # três, pelo motivo anotado em `pedidos.responder`.
+        raise HTTPException(status_code=404, detail="pedido não encontrado")
+    return RedirectResponse("/pedidos", status_code=303)
+
+
+@app.post("/pedidos/{pedido_id}/cancelar")
+def cancelar_pedido(request: Request, pedido_id: str):
+    u = _exigir(request)
+    if not pedidos.cancelar(cfg.sqlite_path, pedido_id, u.email):
+        raise HTTPException(status_code=404, detail="pedido não encontrado")
+    return RedirectResponse("/pedidos", status_code=303)
 
 
 # ------------------------------------------------------- bancos de referência
 @app.get("/bancos", response_class=HTMLResponse)
-def pagina_bancos(request: Request, erro: str = "", feito: str = ""):
+def pagina_bancos(request: Request, feito: str = ""):
     u = _exigir(request)
     grupos: dict[str, list] = {}
     for c in bancos.CATALOGO:
@@ -950,7 +1100,7 @@ def pagina_bancos(request: Request, erro: str = "", feito: str = ""):
     return TEMPLATES.TemplateResponse(request, "bancos.html", {
         **_casca(u), "grupos": grupos,
         "meus": bancos.meus_bancos(cfg.data_dir, u.email),
-        "erro": erro, "feito": feito,
+        "erro": _pegar_recado(request), "feito": feito,
     })
 
 
@@ -965,7 +1115,8 @@ def montar_banco(request: Request, banco_id: str):
     try:
         bancos.montar(cfg.data_dir, banco_id, blast_bin=cfg.blast_bin)
     except Exception as e:                      # noqa: BLE001
-        return RedirectResponse(f"/bancos?erro={quote(str(e)[:200])}", status_code=303)
+        _por_recado(request, str(e)[:200])
+        return RedirectResponse("/bancos", status_code=303)
     return RedirectResponse(f"/bancos?feito={quote(banco_id)}", status_code=303)
 
 
@@ -1026,20 +1177,51 @@ async def enviar_banco(request: Request, apelido: str = Form(...),
     # para efeito prático: o teto tinha de ser de QUANTIDADE e de BYTES.
     quanto = cotas.situacao(cfg.sqlite_path, cfg.lotes_dir, u.email, cfg.data_dir)
     if quanto.max_bancos and quanto.bancos >= quanto.max_bancos:
-        return RedirectResponse(
-            f"/bancos?erro={quote(f'você já mantém {quanto.bancos} bancos próprios (o limite é {quanto.max_bancos}); remova um antes de montar outro')}",
-            status_code=303)
+        _por_recado(request, f"você já mantém {quanto.bancos} bancos próprios "
+                             f"(o limite é {quanto.max_bancos}); remova um "
+                             "antes de montar outro")
+        return RedirectResponse("/bancos", status_code=303)
     if not quanto.pode_enviar and quanto.bytes_usados >= quanto.max_bytes_conta > 0:
-        return RedirectResponse(f"/bancos?erro={quote(quanto.motivo)}", status_code=303)
+        _por_recado(request, quanto.motivo)
+        return RedirectResponse("/bancos", status_code=303)
 
+    # ⚠️ ESTA ROTA É `async def`, E POR ISSO O `makeblastdb` NÃO PODE SER CHAMADO
+    # DIRETO (achado do painel de 2026-08-11, 3 de 3 verificadores).
+    #
+    # O corpo de uma rota `async def` roda NO EVENT LOOP, não no threadpool. E
+    # `montar_do_usuario` termina em `subprocess.run(makeblastdb, timeout=600)`
+    # (`bancos.py:171`), que bloqueia de verdade. Com um uvicorn de um
+    # trabalhador só — que é o que o `Dockerfile` sobe —, enquanto esse
+    # subprocesso roda o servidor **não atende mais ninguém**: nem o login, nem
+    # o `/saude`, nem um envio em curso. O teto de taxa é 10/hora por conta, e
+    # 10 × 600 s cobre a hora inteira que ele mede.
+    #
+    # A rota irmã que monta do NCBI (`montar_banco`) nunca teve o problema por
+    # ser um `def` simples — o Starlette manda `def` para o threadpool sozinho.
+    # Ou seja, o padrão certo já existia no arquivo e só esta rota escapou dele.
+    #
+    # Duas correções, e as duas fazem falta:
+    #   * `run_in_threadpool` tira o bloqueio do event loop;
+    #   * `_vaga_pesada()` é o mesmo semáforo que `api_traco` e `api_consultar`
+    #     já usam. Sem ele, sair do event loop só troca o problema de lugar:
+    #     40 montagens simultâneas ocupariam o threadpool inteiro, que é o
+    #     achado M4 de 2026-08-08 outra vez, por uma rota nova.
     try:
         banco_id = bancos.id_do_usuario(u.email, apelido.strip())
         dados = (await fasta.read(20 * 1024 * 1024 + 1)).decode("utf-8", "replace")
         if len(dados) > 20 * 1024 * 1024:
             raise ValueError("o FASTA passa de 20 MB")
-        bancos.montar_do_usuario(cfg.data_dir, banco_id, dados, blast_bin=cfg.blast_bin)
+        with _vaga_pesada():
+            await run_in_threadpool(bancos.montar_do_usuario, cfg.data_dir,
+                                    banco_id, dados, blast_bin=cfg.blast_bin)
+    except HTTPException:
+        # ⚠️ ANTES do `except Exception`, senão o 503 de "sem vaga" é engolido e
+        # volta como um texto de erro na página — a trava existiria e ninguém
+        # veria que ela agiu.
+        raise
     except Exception as e:                      # noqa: BLE001
-        return RedirectResponse(f"/bancos?erro={quote(str(e)[:200])}", status_code=303)
+        _por_recado(request, str(e)[:200])
+        return RedirectResponse("/bancos", status_code=303)
     return RedirectResponse("/bancos?feito=meu", status_code=303)
 
 

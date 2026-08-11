@@ -135,6 +135,14 @@ a:hover{ text-decoration:underline }
 .lat-acao{ margin:10px 8px 0; padding:7px 9px; border-radius:7px; font-size:12.5px;
   color:var(--apoio); display:block }
 .lat-acao:hover{ background:var(--interno); color:var(--tinta); text-decoration:none }
+/* O contador de pedidos esperando resposta. Este app não manda e-mail — a
+   lateral é o ÚNICO lugar onde um pedido pode chamar atenção, então o número
+   ganha o violeta, que é o único acento da paleta, e o link inteiro clareia
+   quando há algo pendente. Sem pendência, o link é discreto como os vizinhos. */
+.lat-acao.tem{ color:var(--tinta) }
+.lat-acao .cont{ float:right; font-family:var(--mono); font-size:10.5px;
+  background:var(--violeta); color:#14121f; font-weight:700; border-radius:20px;
+  padding:.1rem .42rem; margin-left:.4rem }
 .lat-pe{ margin-top:auto; padding:12px 14px 0; border-top:1px solid var(--linha);
   font-family:var(--mono); font-size:9.5px; color:var(--fraco) }
 
@@ -257,6 +265,17 @@ pre{ font-family:var(--mono); font-size:.8rem }
        histórico. #}
     <a class="lat-acao" href="/bancos" style="margin:8px 8px 0"
       >▧ Bancos de referência</a>
+
+    {# A caixa de pedidos de amostra (ADR 0052). Fica na lateral, e não só numa
+       aba do Labs, porque o app NÃO MANDA E-MAIL: se o número não estiver à
+       vista em toda página, um pedido pode ficar meses sem ninguém saber que
+       chegou. O contador conta só o que espera resposta DESTA conta — o que eu
+       pedi e ainda não responderam não é tarefa minha. #}
+    <a class="lat-acao{% if pedidos_pendentes %} tem{% endif %}" href="/pedidos"
+       style="margin:2px 8px 0"
+       title="Pedidos de amostra entre laboratórios"
+      >✉ Pedidos de amostra{% if pedidos_pendentes
+        %}<span class="cont">{{ pedidos_pendentes }}</span>{% endif %}</a>
 
     <div class="sec">WorkFolder</div>
     <div class="corridas">

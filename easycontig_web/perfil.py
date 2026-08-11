@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -38,8 +39,11 @@ CREATE TABLE IF NOT EXISTS perfis (
     marcadores   TEXT NOT NULL DEFAULT '[]',   -- idem
     foto         TEXT NOT NULL DEFAULT '',     -- nome do arquivo no volume
     atualizado   TEXT NOT NULL DEFAULT '',
-    links        TEXT NOT NULL DEFAULT '[]'    -- endereços de rede (ver REDES)
+    links        TEXT NOT NULL DEFAULT '[]',   -- endereços de rede (ver REDES)
+    chave        TEXT NOT NULL DEFAULT ''      -- id público sorteado (ver `chave_de`)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_perfis_chave
+    ON perfis(chave) WHERE chave <> '';
 """
 
 # As redes que ganham ícone próprio. A chave é procurada no HOST do endereço;
@@ -130,8 +134,11 @@ def pegar(sqlite_path: Path, email: str) -> dict:
     if not r:
         return {"email": email, "nome": email.split("@")[0], "laboratorio": "",
                 "instituicao": "", "sobre": "", "especies": [], "marcadores": [],
-                "foto": "", "atualizado": "", "links": []}
+                "foto": "", "atualizado": "", "links": [], "chave": ""}
     d = dict(r)
+    # `.get` pelo mesmo motivo dos `links` logo abaixo: banco que ainda não
+    # passou pela migração 5 não tem a coluna, e a página não pode quebrar.
+    d["chave"] = d.get("chave") or ""
     d["especies"] = _lista(d["especies"])
     d["marcadores"] = _lista(d["marcadores"])
     # `.get`: um banco que ainda não passou pela migração 2 não tem a coluna, e
@@ -281,6 +288,11 @@ def salvar(sqlite_path: Path, email: str, *, nome: str = "", laboratorio: str = 
             (email, dados["nome"], dados["laboratorio"], dados["instituicao"],
              dados["sobre"], dados["especies"], dados["marcadores"],
              dados["foto"], dados["atualizado"], dados["links"]))
+        # Quem chega aqui já passou pelo login (e por `garantir_registro`), mas
+        # `salvar` também é chamado direto — pela suíte, e por qualquer script
+        # de manutenção. Perfil sem chave é perfil que o `/labs` mostra sem
+        # botão de pedir, e isso é pior do que uma escrita a mais.
+        _garantir_chave(con, email)
     return pegar(sqlite_path, email)
 
 
@@ -299,6 +311,45 @@ def foto_registrada(sqlite_path: Path, arquivo: str) -> bool:
         r = con.execute("SELECT 1 FROM perfis WHERE foto=? LIMIT 1",
                         (arquivo,)).fetchone()
     return r is not None
+
+
+def _garantir_chave(con, email: str) -> None:
+    """Sorteia a chave pública da conta, se ela ainda não tem uma.
+
+    Roda dentro de uma conexão que o chamador já abriu, e é idempotente: o
+    `WHERE chave=''` faz o segundo login não trocar a chave do primeiro. Trocar
+    seria pior do que parece — uma chave é o alvo de um formulário de pedido já
+    desenhado numa aba aberta, e girar o valor faria o envio falhar sem motivo
+    visível.
+    """
+    con.execute("UPDATE perfis SET chave=? WHERE email=? AND chave=''",
+                (secrets.token_urlsafe(9), email))
+
+
+def chave_de(sqlite_path: Path, email: str) -> str:
+    """A chave pública da conta, criando-a se faltar."""
+    with conectar(sqlite_path) as con:
+        _garantir_chave(con, email)
+        r = con.execute("SELECT chave FROM perfis WHERE email=?",
+                        (email,)).fetchone()
+    return (r["chave"] if r else "") or ""
+
+
+def email_da_chave(sqlite_path: Path, chave: str) -> str:
+    """De quem é esta chave. Cadeia vazia quando não é de ninguém.
+
+    ⚠️ **Chave vazia não casa com ninguém**, e o `if not chave` acima da consulta
+    é o que garante isso. A coluna nasce `''` e é preenchida depois (migração 5
+    e `_garantir_chave`), então existir linha com `chave=''` é estado normal
+    durante uma atualização — e sem esta guarda um `POST` com o campo em branco
+    escolheria a primeira dessas linhas como alvo do pedido.
+    """
+    if not chave:
+        return ""
+    with conectar(sqlite_path) as con:
+        r = con.execute("SELECT email FROM perfis WHERE chave=?",
+                        (chave,)).fetchone()
+    return (r["email"] if r else "") or ""
 
 
 def garantir_registro(sqlite_path: Path, email: str, nome_declarado: str = "") -> None:
@@ -330,6 +381,12 @@ def garantir_registro(sqlite_path: Path, email: str, nome_declarado: str = "") -
         con.execute("INSERT INTO perfis (email, nome) VALUES (?,?) "
                     "ON CONFLICT(email) DO UPDATE SET nome=excluded.nome "
                     "WHERE perfis.nome='' AND excluded.nome<>''", (email, nome))
+        # ⚠️ Instrução SEPARADA, e não mais uma coluna no `ON CONFLICT` acima: o
+        # `WHERE` daquele UPDATE vale para a linha inteira, e ele é condicionado
+        # a `perfis.nome=''`. Escrita junto, a chave só nasceria para quem ainda
+        # não tem nome — ou seja, quem já preencheu o perfil ficaria para sempre
+        # sem chave, que é justamente quem tem portfólio para alguém pedir.
+        _garantir_chave(con, email)
 
 
 def listar_perfis(sqlite_path: Path, eu: str = "") -> list[dict]:
@@ -358,7 +415,7 @@ def listar_perfis(sqlite_path: Path, eu: str = "") -> list[dict]:
     with conectar(sqlite_path) as con:
         linhas = con.execute(
             "SELECT email, nome, laboratorio, instituicao, sobre, especies, "
-            "marcadores, foto, atualizado FROM perfis "
+            "marcadores, foto, atualizado, chave FROM perfis "
             "ORDER BY nome COLLATE NOCASE, email COLLATE NOCASE"
         ).fetchall()
     saida = []
@@ -366,6 +423,7 @@ def listar_perfis(sqlite_path: Path, eu: str = "") -> list[dict]:
         d = dict(r)
         d["especies"] = _lista(d["especies"])
         d["marcadores"] = _lista(d["marcadores"])
+        d["chave"] = d.get("chave") or ""
         d["eu"] = (d["email"] == eu)
         if not d["eu"]:
             d.pop("email")

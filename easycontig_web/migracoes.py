@@ -26,6 +26,7 @@ alterar. Rodar num banco novo e num banco antigo dá o mesmo resultado.
 from __future__ import annotations
 
 import logging
+import secrets
 import shutil
 import sqlite3
 from datetime import datetime, timezone
@@ -112,11 +113,76 @@ def _v4_bytes_previstos_do_lote(con: sqlite3.Connection) -> None:
                     "bytes_previstos INTEGER NOT NULL DEFAULT 0")
 
 
+def _v5_pedidos_de_amostra(con: sqlite3.Connection) -> None:
+    """A tabela de pedidos entre laboratórios, e a chave pública do perfil.
+
+    A tabela nasce aqui **e** em `pedidos._ESQUEMA` (`IF NOT EXISTS` nos dois),
+    pelo mesmo arranjo da migração 2: num banco novo a migração roda antes de o
+    módulo criar o esquema, num banco antigo é o contrário, e as duas ordens
+    precisam chegar ao mesmo lugar.
+
+    ⚠️ **A parte que não é `IF NOT EXISTS` é o preenchimento da `chave`.** Ela é
+    o identificador que vai para o HTML no lugar do e-mail (ver o cabeçalho de
+    `pedidos.py`), e é sorteada — logo, quem já tem linha em `perfis` não ganha
+    uma por padrão de coluna. Sem este laço, todo perfil anterior a esta versão
+    apareceria no `/labs` **sem botão de pedir amostra** até a pessoa entrar de
+    novo; e como este app não manda e-mail, ninguém seria avisado de que era só
+    isso que faltava. É o mesmo gênero da consequência anotada na ADR 0066
+    ("quem já entrou antes não aparece até entrar de novo") — que ali foi aceita
+    por não haver de onde tirar o dado, e aqui é evitável, porque a chave não
+    depende de dado nenhum: é sorteio.
+
+    O `UPDATE` é linha a linha, e não um `randomblob` do SQLite, porque a chave
+    precisa sair do mesmo `secrets` que gera as demais — um dia alguém audita o
+    formato e não pode encontrar duas origens de aleatoriedade.
+    """
+    existe = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='perfis'").fetchone()
+    if existe and "chave" not in _colunas(con, "perfis"):
+        con.execute("ALTER TABLE perfis ADD COLUMN chave TEXT NOT NULL DEFAULT ''")
+    if existe:
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_perfis_chave "
+                    "ON perfis(chave) WHERE chave <> ''")
+        sem = [r[0] for r in con.execute(
+            "SELECT email FROM perfis WHERE chave=''")]
+        for email in sem:
+            con.execute("UPDATE perfis SET chave=? WHERE email=?",
+                        (secrets.token_urlsafe(9), email))
+        if sem:
+            log.info("chave pública sorteada para %d perfil(is)", len(sem))
+
+    # ⚠️ `execute` uma a uma, e NÃO `executescript`. O `executescript` do módulo
+    # `sqlite3` faz COMMIT do que estiver pendente antes de rodar o script — e
+    # esta função roda dentro do `BEGIN IMMEDIATE` de `aplicar()`. Escrita com
+    # `executescript`, a migração fecharia sozinha a transação que existe para
+    # que ela seja atômica com o `PRAGMA user_version`, e um erro depois deste
+    # ponto deixaria o banco com a tabela criada e a versão antiga — que é
+    # exatamente o estado que este módulo foi escrito para nunca produzir.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pedidos (
+            id          TEXT PRIMARY KEY,
+            de_email    TEXT NOT NULL,
+            para_email  TEXT NOT NULL,
+            itens       TEXT NOT NULL DEFAULT '[]',
+            outro       TEXT NOT NULL DEFAULT '',
+            motivo      TEXT NOT NULL DEFAULT '',
+            estado      TEXT NOT NULL DEFAULT 'pendente',
+            resposta    TEXT NOT NULL DEFAULT '',
+            criado      TEXT NOT NULL DEFAULT '',
+            respondido  TEXT NOT NULL DEFAULT ''
+        )""")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_para "
+                "ON pedidos(para_email, estado)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_de "
+                "ON pedidos(de_email, estado)")
+
+
 MIGRACOES: list[tuple[int, str, object]] = [
     (1, "referencia gravada no lote", _v1_referencia_no_lote),
     (2, "endereços de rede no perfil", _v2_links_do_perfil),
     (3, "qual trabalhador reivindicou o lote", _v3_quem_reivindicou_o_lote),
     (4, "bytes previstos do lote, para a cota reservar", _v4_bytes_previstos_do_lote),
+    (5, "pedidos de amostra entre laboratórios", _v5_pedidos_de_amostra),
 ]
 
 VERSAO_ALVO = max(n for n, _d, _f in MIGRACOES) if MIGRACOES else 0
