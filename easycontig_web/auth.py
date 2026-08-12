@@ -125,8 +125,7 @@ def dominio_ok(email: str, dominio_permitido: str) -> bool:
         if d.startswith('@'): #* "@ufrrj.br"
 
             d = d[1:] #? Aqui é para que o dominio seja comparado sem o '@' no começo, pois o email ja foi separado do dominio
-
-            continue
+            
 
         if not d:
 

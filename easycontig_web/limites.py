@@ -79,7 +79,7 @@ def ip_de_origem(request: Request) -> str:
     confiaveis = proxies_confiaveis()
 
     if conexão in confiaveis:
-        cadeia = [p.strip() for p in request.headers.get('X-Forwarded-For', '').split(',') if p.strip()]
+        cadeia = [p.strip() for p in request.headers.get('x-forwarded-for', '').split(',') if p.strip()]
 
         for endereco in reversed(cadeia):
             if endereco not in confiaveis:
