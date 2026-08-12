@@ -55,7 +55,7 @@ class Usuario:
 
 def modo() -> str:
     """Qual provedor de autenticação está ativo."""
-    return os.environ.get('EASYCONTIG_AUTENTICACAO', 'dev').lower()
+    return os.environ.get('EASYCONTIG_AUTH', 'dev').lower()
 
 
 def google_configurado() -> bool:

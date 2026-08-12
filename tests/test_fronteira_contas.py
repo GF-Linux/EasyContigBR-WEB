@@ -123,6 +123,10 @@ def test_em_producao_o_openapi_nao_e_montado(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "ufrrj.br")
     monkeypatch.setenv("EASYCONTIG_URL_BASE", "https://easycontigbr.com.br")
+    # Exigida desde 2026-08-11: em branco atrás de um proxy, todo anônimo divide
+    # o mesmo balde de limite. Sem ela o arranque de produção recusa — que é o
+    # comportamento certo, e é por isso que este cenário precisou dela.
+    monkeypatch.setenv("EASYCONTIG_PROXIES_CONFIAVEIS", "nenhum")
     monkeypatch.setenv("EASYCONTIG_PRODUCAO", "1")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "id")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "segredo")

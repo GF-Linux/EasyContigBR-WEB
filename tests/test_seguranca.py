@@ -392,20 +392,27 @@ def test_producao_recusa_subir_com_a_porta_aberta(monkeypatch):
 
     E CINCO em 2026-08-08 (achado L5): sem `EASYCONTIG_URL_BASE`, tanto o
     endereço de volta do OAuth quanto a checagem de origem dos POST passam a
-    sair do cabeçalho `Host`, que é escolhido pelo cliente."""
+    sair do cabeçalho `Host`, que é escolhido pelo cliente.
+
+    E SEIS em 2026-08-11: `EASYCONTIG_PROXIES_CONFIAVEIS` em branco põe TODO
+    visitante anônimo no mesmo balde de limite, e o teto de login deixa de ser
+    vinte tentativas por pessoa para ser vinte no mundo — uma pessoa errando o
+    login tranca a entrada do site inteiro por dez minutos."""
     from easycontig_web import config
     monkeypatch.setenv("EASYCONTIG_AUTH", "dev")
     monkeypatch.delenv("EASYCONTIG_SECRET_KEY", raising=False)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "0")
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.delenv("EASYCONTIG_URL_BASE", raising=False)
+    monkeypatch.delenv("EASYCONTIG_PROXIES_CONFIAVEIS", raising=False)
     p = config.conferir_producao()
-    assert len(p) == 5
+    assert len(p) == 6
     assert any("dev" in x for x in p)
     assert any("SECRET_KEY" in x for x in p)
     assert any("HTTPS" in x for x in p)
     assert any("EASYCONTIG_DOMINIO" in x for x in p)
     assert any("EASYCONTIG_URL_BASE" in x for x in p)
+    assert any("PROXIES_CONFIAVEIS" in x for x in p)
 
 
 def test_producao_bem_configurada_nao_reclama(monkeypatch):
@@ -415,6 +422,10 @@ def test_producao_bem_configurada_nao_reclama(monkeypatch):
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "ufrrj.br")
     monkeypatch.setenv("EASYCONTIG_URL_BASE", "https://easycontigbr.com.br")
+    # Desde 2026-08-11 a política de proxy também precisa estar ESCRITA: em
+    # branco atrás de um proxy, todo anônimo divide um balde de limite só e
+    # vinte erros de login trancam a entrada do site inteiro.
+    monkeypatch.setenv("EASYCONTIG_PROXIES_CONFIAVEIS", "nenhum")
     assert config.conferir_producao() == []
 
 

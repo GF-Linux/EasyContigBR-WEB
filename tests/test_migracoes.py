@@ -142,3 +142,90 @@ def test_migracao_que_falha_nao_avanca_a_versao(tmp_path, monkeypatch):
     with fila.conectar(caminho) as con:
         colunas = {r[1] for r in con.execute("PRAGMA table_info(lotes)")}
     assert "meia_feita" not in colunas, "o ALTER não foi desfeito pelo ROLLBACK"
+
+
+# ───────────────────────────── v5: pedidos de amostra e a chave pública
+_PERFIS_V4 = """
+CREATE TABLE perfis (
+    email        TEXT PRIMARY KEY,
+    nome         TEXT NOT NULL DEFAULT '',
+    laboratorio  TEXT NOT NULL DEFAULT '',
+    instituicao  TEXT NOT NULL DEFAULT '',
+    sobre        TEXT NOT NULL DEFAULT '',
+    especies     TEXT NOT NULL DEFAULT '[]',
+    marcadores   TEXT NOT NULL DEFAULT '[]',
+    foto         TEXT NOT NULL DEFAULT '',
+    atualizado   TEXT NOT NULL DEFAULT '',
+    links        TEXT NOT NULL DEFAULT '[]'
+);
+"""
+
+
+def _banco_na_v4(tmp_path):
+    """O banco como está na VPS hoje: perfis sem `chave`, `user_version=4`."""
+    caminho = _banco_antigo(tmp_path)
+    con = sqlite3.connect(caminho)
+    con.executescript(_PERFIS_V4)
+    con.execute("INSERT INTO perfis (email, nome) VALUES (?,?)",
+                ("g.freitas@ufrrj.br", "Gustavo"))
+    con.execute("INSERT INTO perfis (email, nome) VALUES (?,?)",
+                ("m.peckle@ufrrj.br", "Maristela"))
+    con.execute("PRAGMA user_version = 4")
+    con.commit()
+    con.close()
+    return caminho
+
+
+def test_v5_sorteia_chave_para_quem_ja_tinha_perfil(tmp_path):
+    """⚠️ A parte da migração 5 que NÃO é `IF NOT EXISTS`.
+
+    A chave é sorteada, então nenhum padrão de coluna a produz: sem este laço,
+    todo perfil anterior a esta versão apareceria no `/labs` **sem botão de
+    pedir amostra** até a pessoa entrar de novo — e o app não manda e-mail para
+    avisar que era só isso que faltava.
+    """
+    caminho = _banco_na_v4(tmp_path)
+    migracoes.aplicar(caminho)
+    assert migracoes.versao(caminho) == migracoes.VERSAO_ALVO
+
+    with fila.conectar(caminho) as con:
+        chaves = {r["email"]: r["chave"]
+                  for r in con.execute("SELECT email, chave FROM perfis")}
+        assert con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pedidos'"
+        ).fetchone(), "a tabela de pedidos não foi criada"
+
+    assert all(chaves.values()), f"perfil ficou sem chave: {chaves}"
+    assert len(set(chaves.values())) == len(chaves), "duas contas, a mesma chave"
+    # a corrida da Maristela continua lá (a migração não é só sobre perfis)
+    assert fila.pegar(caminho, "velho")["nome"] == "F13719"
+
+
+def test_v5_nao_troca_a_chave_de_quem_ja_tem(tmp_path):
+    """Girar a chave faria falhar, sem motivo visível, um formulário de pedido
+    já aberto numa aba."""
+    caminho = _banco_na_v4(tmp_path)
+    migracoes.aplicar(caminho)
+    with fila.conectar(caminho) as con:
+        antes = {r["email"]: r["chave"]
+                 for r in con.execute("SELECT email, chave FROM perfis")}
+
+    assert migracoes.aplicar(caminho) == 0, "rodou de novo o que já estava feito"
+    with fila.conectar(caminho) as con:
+        depois = {r["email"]: r["chave"]
+                  for r in con.execute("SELECT email, chave FROM perfis")}
+    assert antes == depois
+
+
+def test_v5_o_indice_unico_barra_duas_contas_com_a_mesma_chave(tmp_path):
+    """A chave é o alvo de um POST: duas contas com a mesma chave significaria
+    um pedido chegando na caixa da pessoa errada."""
+    caminho = _banco_na_v4(tmp_path)
+    migracoes.aplicar(caminho)
+    with fila.conectar(caminho) as con:
+        dele = con.execute("SELECT chave FROM perfis WHERE email=?",
+                           ("g.freitas@ufrrj.br",)).fetchone()["chave"]
+    with pytest.raises(sqlite3.IntegrityError):
+        with fila.conectar(caminho) as con:
+            con.execute("UPDATE perfis SET chave=? WHERE email=?",
+                        (dele, "m.peckle@ufrrj.br"))

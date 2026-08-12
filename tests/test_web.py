@@ -63,7 +63,10 @@ def test_dominio_restrito_recusa_conta_de_fora(tmp_path, monkeypatch):
     importlib.reload(main)
     c = TestClient(main.app)
     r = c.post("/entrar", data={"email": "alguem@gmail.com"}, follow_redirects=False)
-    assert "erro=" in r.headers["location"]
+    # O motivo da recusa saiu da URL em 2026-08-11 e vai na sessão assinada;
+    # o que importa é que ela recusou e que a página diz por quê.
+    assert r.headers["location"] == "/entrar"
+    assert "fora do domínio" in c.get("/entrar").text
     assert c.get("/", follow_redirects=False).headers["location"] == "/entrar"
 
 
