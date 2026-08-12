@@ -91,8 +91,8 @@ def ip_de_origem(request: Request) -> str:
 def chave(request: Request, quem: str | None = None) -> str:
 
     if quem:
-        return 'u' + quem 
-    return 'ip' + ip_de_origem(request)
+        return 'u:' + quem 
+    return 'ip:' + ip_de_origem(request)
 
 
 def conferir(nome: str, request: Request, quem: str | None = None, agora: float | None = None) -> None:

@@ -168,7 +168,7 @@ def url_de_ida(request: Request, redirect_uri: str) -> str:
     estado = secrets.token_urlsafe(24)
     request.session[ESTADO_CHAVE] = estado
     return AUTORIZA + "?" + urllib.parse.urlencode({
-        "client_id": os.environ['EASYCONTIG_GOOGLE_CLIENT_ID'],
+        "client_id": os.environ['GOOGLE_CLIENT_ID'],
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "openid email profile",
@@ -200,8 +200,8 @@ def usuario_da_volta(request: Request, code: str, estado: str, redirect_uri: str
 
     corpo = urllib.parse.urlencode({
         "code": code,
-        "client_id": os.environ['EASYCONTIG_GOOGLE_CLIENT_ID'],
-        "client_secret": os.environ['EASYCONTIG_GOOGLE_CLIENT_SECRET'],
+        "client_id": os.environ['GOOGLE_CLIENT_ID'],
+        "client_secret": os.environ['GOOGLE_CLIENT_SECRET'],
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
     }).encode()
