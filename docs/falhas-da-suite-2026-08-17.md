@@ -80,3 +80,61 @@ teste que sabe que não pode rodar e um que estoura.
 #! Fica a lição para teste novo: caminho absoluto de máquina pessoal dentro de
 #! um teste é uma falha que só aparece no computador de outra pessoa — e aparece
 #! como 23 defeitos, escondendo que era um.
+
+
+# Decisão sobre exercitar a tese do produto 17/08/2026
+
+1. O leia-me do site afirma que o programa descobre forward e reverse **lendo o
+   DNA**, não o nome do arquivo. É a tese do produto.
+2. Nenhum teste exercitava isso. O `test_leiame` confere que a **página diz** a
+   frase; ninguém conferia que o programa **faz** o que ela promete.
+3. Os testes que rodam o pipeline de verdade ficavam pulados por falta de
+   `tracy`, `blastn` e dos bancos.
+
+## O que foi feito
+
+1. `tracy` v0.8.9 e BLAST+ 2.17.0 instalados em `~/.local`, sem tocar no
+   sistema. Os bancos vieram do pacote do Deck.
+2. Isso destravou 2 testes que estavam pulados por falta do `makeblastdb`.
+3. Foi escrito `tests/test_orientacao_sai_do_dna.py`, com quatro verificações
+   que rodam **em qualquer máquina** — orientação é reverso-complementaridade,
+   que é geometria da sequência e não depende de biologia:
+   - um par de verdade é reconhecido pelo DNA;
+   - duas amostras diferentes não viram par;
+   - o par sobrevive a nome trocado de propósito;
+   - a distância entre par e não-par é larga, não apertada.
+
+Medido no par sintético: `1.0` invertido contra `0.0` no mesmo sentido.
+
+## O limite, medido e declarado
+
+1. Sem referência, o detector afirma que as duas leituras estão em sentidos
+   OPOSTOS — e isso ele tira do DNA.
+2. Qual das duas é a forward em termos ABSOLUTOS ele não decide sozinho: compara
+   com as referências 18S, que estão na orientação canônica.
+3. Por isso o teste do nome trocado afirma o que é verdade (o PAR sobrevive) e
+   não afirma o que seria falso (que o rótulo absoluto sobreviveria). DNA
+   sorteado não bate com referência nenhuma.
+
+## Como deixar esta máquina rodando o pipeline inteiro
+
+```bash
+curl -fL -o ~/.local/bin/tracy \
+  https://github.com/gear-genomics/tracy/releases/download/v0.8.9/tracy-v0.8.9-linux-amd64
+chmod +x ~/.local/bin/tracy
+
+# BLAST+ do NCBI, binário estático, sem root
+curl -fLO https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+
+export EASYCONTIG_TRACY_BIN=~/.local/bin/tracy
+export EASYCONTIG_BLAST_BIN=~/.local/bin
+export EASYCONTIG_DB_18S=~/projetos/bancos-easycontig/referencias_18S
+export EASYCONTIG_DB_16S=~/projetos/bancos-easycontig/referencias_16S
+```
+
+Resultado: `427 passam` com as ferramentas, `425 passam` sem elas. Verde nos dois.
+
+#! O `test_executor` continua exigindo `.ab1` REAIS, e pula sem eles. Ele confere
+#! a ESPÉCIE identificada, e DNA sorteado nunca vai dar Babesia vogeli. Rodá-lo
+#! com dado sintético produziria uma falha que não é defeito do programa —
+#! aconteceu comigo, e foi assim que este limite ficou claro.

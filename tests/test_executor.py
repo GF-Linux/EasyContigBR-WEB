@@ -15,10 +15,26 @@ import pytest
 from easycontig_web import configuracao as config
 from easycontig_web.processamento import executor_de_lote as executor
 
-#! Os .ab1 são FABRICADOS, não lidos de um caminho da máquina do autor.
-#!   Ver `tests/amostras_sinteticas.py` — o caminho antigo derrubava 23 testes
-#!   fora daquele computador.
-from amostras_sinteticas import PASTA as AB1
+#! Aqui, e SÓ aqui, o .ab1 precisa ser REAL.
+#!   Os outros testes exercitam o caminho do arquivo (upload, fila, recusa), e
+#!   para isso o sintético serve. Este roda o pipeline inteiro e confere a
+#!   ESPÉCIE identificada — coisa que DNA sorteado nunca vai dar.
+#!   Sem os arquivos reais, o teste é PULADO. Rodá-lo com dado sintético daria
+#!   uma falha que não é defeito do programa.
+#* Onde procurar, em ordem: a variável de ambiente, ou a pasta da demo ao lado.
+import os
+
+def _pasta_real() -> Path | None:
+    candidatos = [os.environ.get("EASYCONTIG_AB1_REAIS", ""),
+                  str(Path.home() / "Desktop/EasyContig-BR-Demo-Deck/ab1_por_especie/Babesia_vogeli"),
+                  "/home/deck/Desktop/EasyContig-BR-Demo-Deck/ab1_por_especie/Babesia_vogeli"]
+    for c in candidatos:
+        if c and Path(c).is_dir():
+            return Path(c)
+    return None
+
+
+AB1 = _pasta_real()
 PAR = ["amostra28_F_BTF2.ab1", "amostra28_R_BTR2.ab1"]
 
 
@@ -28,6 +44,9 @@ def cfg(tmp_path, monkeypatch):
     c = config.carregar()
     if not all(ok for _, ok, _ in config.diagnostico(c)):
         pytest.skip("tracy/blastn/bancos não configurados neste ambiente")
+    if AB1 is None:
+        pytest.skip("os .ab1 reais não estão nesta máquina "
+                    "(defina EASYCONTIG_AB1_REAIS para rodar)")
     return c
 
 
