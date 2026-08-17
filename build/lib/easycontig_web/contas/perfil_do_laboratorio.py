@@ -1,23 +1,13 @@
-"""
-perfil.py — quem é a conta, e o que o laboratório declara trabalhar.
-
-Duas coisas moram aqui, e a diferença entre elas é a razão do módulo existir:
-
-* **Identidade** — nome de exibição, laboratório, foto. Editável pela pessoa; o
-  e-mail não, porque vem do login.
-* **Portfólio de espécies e marcadores** — o que o laboratório **declara** que
-  trabalha. É texto do dono, não estatística.
-
-⚠️ **O portfólio NÃO é contagem do que o BLAST devolveu.** A primeira versão
-desta tela mostrava um ranking das espécies encontradas nas corridas, e isso
-convida a ler prevalência onde não há: aquilo contava amostras (não animais) e
-só enxergava o que estava no banco local. O portfólio é declaração — serve para
-outro laboratório **achar quem trabalha com o quê** e pedir uma sequência, que é
-o rumo de compartilhamento por pedido da ADR 0052.
-
-Guardado no mesmo SQLite da fila: é um registro por conta, lido em toda página.
-Um segundo banco só para isto seria mais uma coisa para a universidade manter.
-"""
+#? PERFIL DO LABORATÓRIO — Decisão sobre portfólio declarado 07/08/2026
+#!
+#! 1. Duas coisas moram aqui, e a diferença entre elas é a razão do módulo:
+#! 2. IDENTIDADE — nome, laboratório, foto. Editável; o e-mail não, porque vem
+#!    do login.
+#! 3. PORTFÓLIO — as espécies e marcadores que o laboratório DECLARA trabalhar.
+#!    É texto do dono, não estatística.
+#! 4. ⚠️ O portfólio NÃO é contagem do que o BLAST devolveu. A primeira versão
+#!    mostrava ranking das espécies encontradas, e isso convida a ler
+#!    prevalência onde não há: contava amostras, não animais.
 from __future__ import annotations
 
 import json

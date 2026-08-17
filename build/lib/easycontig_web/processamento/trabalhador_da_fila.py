@@ -1,15 +1,12 @@
-"""
-trabalhador.py — o processo que esvazia a fila. `python -m easycontig_web.trabalhador`
-
-Roda SEPARADO do servidor web de propósito. É o que faz a conta da ADR 0050
-fechar: a requisição HTTP devolve um protocolo em milissegundos e some, e os
-~26 s de um lote de 40 amostras acontecem aqui, onde ninguém está esperando com
-uma conexão aberta.
-
-Para dobrar a vazão, suba mais de um: eles disputam a mesma fila e o UPDATE
-condicional de `fila.reivindicar` garante que cada lote é de um só. Uma VPS de
-4 vCPU comporta ~3 trabalhadores (deixando um núcleo para o servidor web).
-"""
+#? TRABALHADOR DA FILA — Decisão sobre rodar fora do servidor 04/08/2026
+#!
+#! 1. Sobe assim: `python -m easycontig_web.processamento.trabalhador_da_fila`
+#! 2. Roda SEPARADO do servidor web: a requisição devolve o protocolo em
+#!    milissegundos e some; os ~26 s do lote acontecem aqui, sem ninguém
+#!    esperando com uma conexão aberta.
+#! 3. Para dobrar a vazão, suba mais de um: disputam a mesma fila, e o UPDATE
+#!    condicional garante que cada lote é de um só.
+#! 4. Uma VPS de 4 vCPU comporta ~3 trabalhadores, deixando um núcleo para a web.
 from __future__ import annotations
 
 import logging

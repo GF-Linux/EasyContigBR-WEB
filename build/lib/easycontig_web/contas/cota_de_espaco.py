@@ -1,17 +1,14 @@
-"""
-cotas.py — quanto UMA CONTA pode ocupar, não quanto cabe em um lote.
-
-Os tetos do `config.py` (400 arquivos, 300 MB) valem por lote: seguram o envio
-único absurdo e não seguram mais nada. Cinquenta lotes legítimos, um atrás do
-outro, enchem o disco da VPS da universidade sem nunca cruzar um teto de lote —
-e disco cheio no meio de um upload é justamente o defeito de sempre: metade dos
-arquivos gravados, relatório com menos amostras do que a corrida tem.
-
-Este módulo NÃO levanta exceção e NÃO decide status HTTP. Ele responde "como
-está esta conta agora" e deixa `main.py` traduzir isso em 413. A mesma função
-serve para (a) barrar o envio e (b) dizer na tela quanto ainda sobra — se
-fossem duas, uma envelheceria em relação à outra e a tela mentiria.
-"""
+#? COTA DE ESPAÇO — Decisão sobre limite por conta 05/08/2026
+#!
+#! 1. Mede quanto UMA CONTA ocupa, não quanto cabe em um lote.
+#! 2. Os tetos por lote (400 arquivos, 300 MB) seguram o envio único absurdo e
+#!    mais nada: 50 lotes legítimos enchem o disco sem cruzar teto nenhum.
+#! 3. ⚠️ Disco cheio no meio de um upload é o defeito de sempre — metade dos
+#!    arquivos gravados e relatório com menos amostras do que a corrida tem.
+#! 4. Este módulo NÃO levanta exceção e NÃO decide status HTTP. Responde "como
+#!    está esta conta agora" e deixa o servidor traduzir em 413.
+#! 5. A MESMA função serve para barrar o envio e para dizer na tela quanto
+#!    sobra. Se fossem duas, uma envelheceria e a tela mentiria.
 from __future__ import annotations
 
 import os

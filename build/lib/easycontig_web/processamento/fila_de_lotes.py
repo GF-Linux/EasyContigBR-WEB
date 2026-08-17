@@ -1,16 +1,13 @@
-"""
-fila.py — a fila de lotes, em SQLite.
-
-Por que existe (ADR 0050): o processamento em si é barato — 0,65 s de CPU por
-amostra, medido. O que derruba um servidor não é o BLAST, é manter a requisição
-HTTP ABERTA os ~26 s que um lote de 40 leva: vinte pessoas e acabaram as
-conexões, com a CPU quase parada. Então a requisição só ENFILEIRA e devolve um
-protocolo; quem trabalha é um processo à parte.
-
-SQLite e não Redis de propósito: uma dependência a menos para a universidade
-manter, e o volume real (algumas corridas por mês) não chega perto de justificar
-outro serviço. A troca por Redis/RQ é local — só este arquivo muda.
-"""
+#? FILA DE LOTES — Decisão sobre não segurar a requisição 04/08/2026
+#!
+#! 1. Processar é barato: 0,65 s de CPU por amostra, medido.
+#! 2. O que derruba o servidor é manter a requisição HTTP ABERTA os ~26 s de um
+#!    lote de 40 — vinte pessoas e acabaram as conexões, com a CPU quase parada.
+#! 3. Então a requisição só ENFILEIRA e devolve um protocolo. Quem trabalha é
+#!    outro processo.
+#! 4. SQLite e não Redis: uma dependência a menos para a universidade manter, e
+#!    o volume real (algumas corridas por mês) não justifica outro serviço.
+#! 5. A troca por Redis é local — só este arquivo muda.
 from __future__ import annotations
 
 import json

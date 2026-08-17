@@ -1,10 +1,9 @@
-"""
-config.py — tudo que muda entre a máquina do autor, a VPS da universidade e o
-contêiner vem daqui, por variável de ambiente.
-
-Nada de caminho absoluto no código: o mesmo pacote roda no Deck (bancos e tracy
-dentro do repo da demo) e na VPS (bancos num volume montado) só trocando o `.env`.
-"""
+#? CONFIGURAÇÃO — Decisão sobre o que muda entre máquinas 04/08/2026
+#!
+#! 1. Tudo que muda entre a máquina do autor, a VPS e o contêiner vem daqui, por
+#!    variável de ambiente.
+#! 2. ⚠️ Nada de caminho absoluto no código: o mesmo pacote roda no Deck (bancos
+#!    e tracy dentro do repo) e na VPS (bancos num volume) só trocando o `.env`.
 from __future__ import annotations
 
 import os

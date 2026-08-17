@@ -1,9 +1,11 @@
-'''
-limites_re - Quantas requisições em uma conta (ou ip) pode fazer por janela.     
-Por que existe : Medido em 2026-08-06, 200 requisições seguidas passaram em 1,4 segundos sem resistência. Para um volume real de laboratório,
-isso nunca seria problema. Mas uma pessoa distraída ou um robô que encontra a URL, pode derrubar.
-Sem dependências novas, e em memória de propósito, o volume é de algumas dezenas de pessoas. 
-'''
+#? LIMITE DE REQUISIÇÕES — Decisão sobre o balde por conta 06/08/2026
+#!
+#! 1. Quantas requisições uma conta (ou IP) pode fazer por janela de tempo.
+#! 2. Medido em 06/08: 200 requisições seguidas passaram em 1,4 s sem resistência.
+#! 3. Para o volume real de um laboratório isso nunca seria problema — mas uma
+#!    pessoa distraída, ou um robô que acha a URL, derruba.
+#! 4. Em memória e sem dependência nova, de propósito: são algumas dezenas de
+#!    pessoas, não milhares.
 
 #* Autor: Gustavo Gonçalves Freitas - LHV
 #* Copyright (c) 2026 Gustavo Gonçalves Freitas. Todos os direitos reservados.

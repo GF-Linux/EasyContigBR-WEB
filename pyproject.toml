@@ -31,6 +31,7 @@ packages = [
     "easycontig_web.contas",
     "easycontig_web.dados",
     "easycontig_web.processamento",
+    "easycontig_web.web",
 ]
 
 [tool.setuptools.package-data]

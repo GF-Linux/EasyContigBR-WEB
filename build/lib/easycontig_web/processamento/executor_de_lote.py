@@ -1,12 +1,10 @@
-"""
-executor.py — roda UM lote: a única ponte entre a web e o núcleo científico.
-
-Toda a ciência mora em `app.core` (a biblioteca da ADR 0050). Este arquivo não
-decide nada sobre montagem, identidade ou limiar — ele copia parâmetro, chama
-`run_batch`, e escreve os três artefatos que o usuário baixa. Se um dia alguém
-precisar mudar o que o relatório afirma, o lugar é `app/core/report.py`, nunca
-aqui: é o que mantém web e desktop dizendo a mesma coisa sobre a mesma amostra.
-"""
+#? EXECUTOR DE LOTE — Decisão sobre a fronteira com a ciência 04/08/2026
+#!
+#! 1. Roda UM lote. É a única ponte entre a web e o núcleo científico.
+#! 2. Este arquivo NÃO decide nada sobre montagem, identidade ou limiar: copia
+#!    parâmetro, chama `run_batch` e grava os três artefatos que o usuário baixa.
+#! 3. ⚠️ Mudou o que o relatório afirma? O lugar é `app/core/report.py`, nunca
+#!    aqui — é o que mantém web e desktop dizendo a mesma coisa da mesma amostra.
 from __future__ import annotations
 
 import csv
