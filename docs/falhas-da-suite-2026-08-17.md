@@ -24,9 +24,33 @@
    sequenciador.
 3. Semente fixa por arquivo: a mesma execução produz sempre o mesmo byte, e
    nenhum teste fica intermitente.
-4. Os quatro nomes foram preservados (`amostra12_F_BTF2.ab1` e os outros três)
-   porque o app lê o sentido F/R e o primer **a partir do nome** — trocar por
-   `a.ab1` mudaria o que está sendo exercitado.
+4. Os quatro nomes foram preservados, mas **não pelo motivo que escrevi na
+   primeira versão desta nota**. Eu disse que o app lê o sentido F/R do nome, e
+   isso está errado — o autor corrigiu, e o código confirma.
+
+### O que o nome decide, e o que o DNA decide
+
+5. O **sentido** (forward ou reverse) sai do DNA. Duas leituras da mesma região
+   em sentidos opostos são reverso-complementares, e isso se mede
+   (`app/core/orientation.py`). O detector por nome acerta **0 de 36** nos
+   arquivos reais do laboratório: em `amostra12_F_BTF2.ab1` a marca está no meio
+   do nome, e quando acerta é por acidente.
+6. O **nome** decide outra coisa: quais duas leituras são da **mesma amostra**.
+   Isso o DNA não resolve — duas amostras da mesma espécie são quase idênticas, e
+   um par cruzado chega a parecer melhor que o verdadeiro.
+7. É por isso que os nomes foram preservados: deles sai a identidade
+   (`amostra12` é uma amostra, `amostra28` é outra).
+8. E é por isso que o par F/R passou a ser gerado como **reverso-complemento** um
+   do outro, e não com duas sequências sorteadas à toa. Duas sequências
+   independentes com nome de par seriam um dado que mente: pelo nome pareceriam
+   par, pelo DNA não seriam.
+
+Medido depois da correção:
+
+```
+F x reverso-complemento(R)      420/420 bases iguais (100 %)   -> é par
+F(amostra12) x F(amostra28)     24 % iguais                    -> acaso, como deve
+```
 
 ## O que NÃO foi feito, e por quê
 
