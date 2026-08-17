@@ -1,95 +1,146 @@
-#? LEITURA DE AMOSTRAS — Decisão sobre ler o relatório já gravado 05/08/2026
+#? LEITURA DE AMOSTRAS — Decisão sobre olhar UMA amostra 05/08/2026
 #!
-#! 1. Lê, por amostra, o `relatorio.json` que já foi gravado.
-#! 2. ⚠️ Nenhuma decisão científica mora aqui.
-#! 3. Os limiares são reescritos — cada ressalva carrega o seu `rule`.
-#! 4. Ausência continua ausência.
-#! 5. "Não achou" e "não conseguiu procurar" são coisas diferentes.
+#! 1. Lê, por amostra, o `relatorio.json` já gravado no lote.
+#! 2. Existe porque a corrida real tem 40 amostras, e a única forma de olhar UMA
+#!    era abrir o relatório inteiro e procurar com Ctrl+F.
+#! 3. Aqui não se monta nem se identifica nada: o arquivo já está em disco,
+#!    escrito por `app/core/report.py`. Este módulo só formata para a tela.
+#! 4. ⚠️ Nenhuma decisão científica mora aqui.
+#! 5. Os limiares NÃO são reescritos: cada ressalva carrega o seu em `rule`, e é
+#!    esse texto que a tela imprime. Repetir o número aqui criaria uma segunda
+#!    fonte para o mesmo dado.
+#! 6. Ausência continua ausência: sem medida vira string vazia, nunca `0` — zero
+#!    é um número e seria lido como medida.
+#! 7. "Não achou" e "não conseguiu procurar" são coisas diferentes, e saem com
+#!    textos diferentes.
 #!
 #* Autor: Gustavo Gonçalves Freitas — LHV
 #* Copyright (c) 2026 Gustavo Gonçalves Freitas. Todos os direitos reservados.
-
-
 from __future__ import annotations
-
 
 import json
 from pathlib import Path
 
-
-SITUACOES : dict[str, tuple[str, str, str]] = {
-    'ok': ('acerto no banco local', 'pronto', 'Melhor acerto do BLAST dentro do banco local consultado - uma semelhança ' 
-           'com o que existe nesse banco local, não uma identificação de espécie.')
-,
-    'sem_acerto': ('Sem acerto no banco local', 'sub', 'O banco local foi consultado e nenhuma referência foi alcançada.'
-                'isso descreve o banco consultado, não a amostra.'),
-
-
-    'blast_indisponivel': ('Busca não executada, blastn indisponível', 'rodando',
-                           'A busca no banco local não chegou a rodar porque o blastn não pôde ser executado'
-                           ' Ocorreu um erro de execução do blastn, ou o blastn não está instalado, ou o banco local não foi montado.'),
-
-
-    'sem_banco': ('Busca não executada, banco local não montado', 'rodando',
-                'A busca no banco local não chegou a rodar porque o banco local não foi montado'
-                ' Ocorreu um erro de execução do blastn, ou o blastn não está instalado, ou o banco local não foi montado.'),
-
-
-
-    'nao_montou': ('Não montou, nada foi consultado', 'falhou', 
-                   'A montagem do consenso falho, ou não houve sequência para encontrar'
-                   'no banco. Isso não configure acerto, uma vez que nada foi consultado.'), 
+# Como cada `id_status` de `app/core/report.py` aparece na tela: texto, classe de
+# cor (as de `base.html`) e a frase que diz de QUEM a situação fala.
+#
+# `sem_acerto` é NEUTRO de propósito. Numa corrida real de 40 amostras, 19 vêm
+# de marcadores groEL/dsb/sodB — não são rRNA, então não estão num banco 18S/16S
+# e não terem acerto é o resultado CERTO. Pintar essas 19 de vermelho seria
+# afirmar uma falha que não houve.
+#
+# `blast_indisponivel` e `sem_banco` usam o âmbar de "pendente" porque falam da
+# instalação, não da amostra: há o que consertar, e não é o material do usuário.
+SITUACOES: dict[str, tuple[str, str, str]] = {
+    "ok": (
+        "acerto no banco local", "pronto",
+        "Melhor acerto do BLAST dentro do banco local consultado — uma semelhança "
+        "com o que existe nesse banco, não uma identificação de espécie.",
+    ),
+    "sem_acerto": (
+        "sem acerto no banco local", "sub",
+        "O banco local foi consultado e nenhuma referência foi alcançada. Isso "
+        "descreve o banco consultado, não a amostra.",
+    ),
+    "blast_indisponivel": (
+        "busca não executada — blastn indisponível", "rodando",
+        "A busca no banco local não chegou a rodar porque o blastn não pôde ser "
+        "chamado. Fala da instalação, não do conteúdo da amostra.",
+    ),
+    "sem_banco": (
+        "busca não executada — sem banco local", "rodando",
+        "Nenhum banco de referência local estava disponível para consulta. Fala "
+        "da instalação, não do conteúdo da amostra.",
+    ),
+    # Achado testando em 2026-08-05: uma amostra que não montou (Tracy falhou,
+    # consenso de 0 pb) recebia a pílula de `sem_acerto` — mesma palavra e mesma
+    # cor das 19 cujo "sem acerto" é o resultado CERTO —, e ainda entrava naquela
+    # contagem. É a afirmação falsa mais cara possível aqui: dizer que o banco
+    # foi consultado quando não houve o que consultar. Situação própria, e
+    # vermelha, porque desta vez a falha é real.
+    "nao_montou": (
+        "não montou — nada foi consultado", "falhou",
+        "A montagem do consenso falhou, então não houve sequência para procurar "
+        "no banco. Isto NÃO é 'sem acerto': nada chegou a ser consultado.",
+    ),
 }
 
-
-ORDEM_SITUACOES = ('ok', 'sem_acerto', 'blast_indisponivel', 'sem_banco', 'nao_montou')
-
+# A ordem em que as situações aparecem no cabeçalho. Fixa, para o cabeçalho não
+# mudar de forma entre um lote e outro.
+ORDEM_SITUACOES = ("ok", "sem_acerto", "blast_indisponivel", "sem_banco",
+                   "nao_montou")
 
 
 def carregar(relatorio_json: Path) -> dict | None:
-    ''' Lê o `relatorio.json` do lote. `None` se não existe ou não serve. '''
+    """Lê o `relatorio.json` do lote. `None` se não existe ou não serve.
+
+    Não levanta: um relatório ilegível é assunto da página, que diz "relatório
+    indisponível", e não motivo para derrubar a requisição inteira. Também
+    devolve `None` para um JSON válido que não tenha a forma de um relatório —
+    aceitá-lo daria uma tela vazia se passando por lote sem amostras.
+    """
     try:
         texto = Path(relatorio_json).read_text(encoding="utf-8")
         rep = json.loads(texto)
     except (OSError, ValueError):
         return None
-    if not isinstance(rep, dict) or not isinstance(rep.get('samples'), list):
+    if not isinstance(rep, dict) or not isinstance(rep.get("samples"), list):
         return None
     return rep
 
 
-_contagens : dict[str, tuple[int, int]] = {}
+# ------------------------------------------------- quantas amostras, e só isso
+#
+# Medido em 2026-08-06: a página do perfil abria e decodificava o
+# `relatorio.json` de CADA corrida da conta — 25,89 ms para 40 delas, e o teto
+# ali é 500 lotes, não 50. O que ela faz com todo esse JSON é contar `samples`:
+# a tabela mostra o número e o resumo o soma. Um relatório de 40 amostras tem
+# 64 KB e produzia um inteiro.
+#
+# Guardar o JSON inteiro em memória resolveria o tempo e criaria um problema
+# pior (dezenas de MB por conta ativa). O que se guarda é o inteiro.
+#
+# A validação é `mtime`+tamanho, e não "lote pronto não muda mais": um `os.stat`
+# custa microssegundos e não depende de eu ter razão sobre o ciclo de vida do
+# arquivo. Se o relatório for regravado, o número é recontado.
+_contagens: dict[str, tuple[int, int, int]] = {}      # caminho -> (mtime, tam, n)
+
 
 def contar_amostras(relatorio_json: Path) -> int | None:
-    ''' Conta as amostras do `relatorio.json` do lote. 
-      '''
-    caminho = Path(relatorio_json)
+    """Quantas amostras o relatório tem. `None` quando não há relatório válido.
 
+    Mesma resposta que `len(carregar(...)["samples"])`, sem pagar a decodificação
+    de novo a cada visita.
+    """
+    caminho = Path(relatorio_json)
     try:
         st = caminho.stat()
     except OSError:
-        return None 
-    
+        _contagens.pop(str(caminho), None)
+        return None
+
     chave = str(caminho)
-    marca = (st.st_mtime, st.st_size)
+    marca = (st.st_mtime_ns, st.st_size)
     guardado = _contagens.get(chave)
     if guardado and guardado[:2] == marca:
-
         return guardado[2]
 
     rep = carregar(caminho)
     if rep is None:
         _contagens.pop(chave, None)
         return None
-
-    n = len(rep.get('samples', []))
+    n = len(rep.get("samples") or [])
     _contagens[chave] = (*marca, n)
     return n
 
 
 def resumo(rep: dict) -> dict:
-    #? Contagens do lote para cabeçalho do relatório. 
+    """Contagens do lote para o cabeçalho. Só contagem — nada de nota ou score.
 
+    `situacoes` já vem pronta para a tela (texto, classe e a frase de contexto),
+    e só com as situações que realmente ocorreram: um "0 sem acerto" impresso
+    sugeriria que alguém esperava o contrário.
+    """
     amostras = _amostras(rep)
     por_situacao: dict[str, int] = {}
     for s in amostras:
@@ -108,6 +159,17 @@ def resumo(rep: dict) -> dict:
         "total": len(amostras),
         "por_situacao": por_situacao,
         "situacoes": situacoes,
+        # Leitura que nao formou par. NAO e detalhe: numa corrida cujos nomes
+        # so trazem o poco (`..._A09.ab1`, com SMPL1 identico nos 80), TODAS as
+        # leituras caem aqui -- medido em 2026-08-07, 81 de 81. E o app estava
+        # CERTO: o sentido sai do conteudo e e confiavel, mas a identidade do
+        # individuo so o nome resolve (ADR 0034), e ali nao ha nome que diga
+        # qual leitura e de qual amostra.
+        #
+        # O defeito era a tela CALAR. Quem enviou via 81 linhas de uma leitura
+        # so, sem nada explicando -- e a leitura natural e "o programa falhou",
+        # quando o certo e "os nomes nao permitem parear". Mesmo padrao da ADR
+        # 0039: recusa informada e resultado, silencio parece defeito.
         "avulsas": sum(1 for s in amostras if len(s.get("reads") or []) < 2),
         "pareadas": sum(1 for s in amostras if len(s.get("reads") or []) >= 2),
         "com_ressalva": sum(1 for s in amostras if s.get("caveats")),
@@ -125,63 +187,70 @@ def resumo(rep: dict) -> dict:
 
 
 def listar(rep: dict) -> list[dict]:
-    ''' Lista as amostras do lote para tabela do relatório. '''
-
-    return [_formatar(s) for s in _amostras(rep)] 
+    """As amostras já formatadas para a tabela, na ordem do relatório."""
+    return [_formatar(s) for s in _amostras(rep)]
 
 
 def amostra(rep: dict, key: str) -> dict | None:
-    #? aqui não é necessário _formatar() porque a função listar() já faz isso. Mas aqui sim, porque é só uma amostra.
-    
+    """Uma amostra pelo `key`, na mesma formatação da tabela. `None` se não há.
+
+    Mesma formatação de propósito: a linha da tabela e a página da amostra não
+    podem exibir números diferentes para a mesma medida.
+    """
     for s in _amostras(rep):
         if s.get("key") == key:
             return _formatar(s)
     return None
 
 
-#! ------------------------------------------------------------------------------------------#
-
-
+# ------------------------------------------------------------------ internos
 def _amostras(rep: dict) -> list[dict]:
-    ''' Lista as amostras do lote para tabela do relatório. '''
-
-    itens = rep.get('samples') if isinstance(rep, dict) else None
-
+    itens = rep.get("samples") if isinstance(rep, dict) else None
     return [s for s in (itens or []) if isinstance(s, dict)]
 
 
 def _situacao(s: dict) -> str:
-    ''' Qual a situação da amostra. '''
+    """A situação da IDENTIFICAÇÃO — mas a falha de montagem ganha de tudo.
 
-    if s.get('error') or not s.get('consensus_len'):
-
-        return 'nao_montou'
-
-    return s.get('id_status') or 'sem_acerto'
+    A ordem importa e é o conserto de um defeito real: o `id_status` que
+    `report.py` grava numa amostra que nem montou continua sendo `sem_acerto`,
+    porque do ponto de vista do BLAST não houve acerto mesmo. Só que na tela
+    isso vira a MESMA frase das amostras cujo "sem acerto" é o resultado certo,
+    e passa a afirmar que o banco foi consultado. Não foi: não havia consenso.
+    """
+    if s.get("error") or not s.get("consensus_len"):
+        return "nao_montou"
+    return s.get("id_status") or "sem_acerto"
 
 
 def _rotulo_situacao(codigo: str) -> tuple[str, str, str]:
-    ''' Rótulo da situação da amostra. '''
-
-    return SITUACOES.get(codigo, (codigo, 'sub', ''))
+    # Situação desconhecida (relatório mais novo que esta tela) aparece com o
+    # código cru e sem cor: melhor exibir algo ilegível do que traduzi-lo errado.
+    return SITUACOES.get(codigo, (codigo, "sub", ""))
 
 
 def _num(valor, casas: int) -> str:
-    ''' Número com casas fixas  '''
+    """Número com casas fixas — string VAZIA quando não há medida.
 
-
+    O `0` é o inimigo aqui: preencher a ausência com zero transforma "não medi"
+    em "medi e deu zero", que é uma afirmação que ninguém fez.
+    """
     if valor is None:
-        return ''
-
+        return ""
     try:
         return f"{float(valor):.{casas}f}"
-
-    except (ValueError, TypeError):
-        return ''
+    except (TypeError, ValueError):
+        return ""
 
 
 def _formatar(s: dict) -> dict:
-    ''' Formata a amostra para tabela do relatório. '''
+    # Dois códigos de propósito, e eles PODEM divergir:
+    # `situacao_id` é o que `report.py` gravou e o que sai no CSV — a paridade
+    # entre as duas saídas é testada e tem que continuar valendo.
+    # `situacao` é o que a tela mostra, e numa amostra que não montou ele diz
+    # `nao_montou` onde o CSV ainda diz `sem_acerto`. A divergência é o conserto,
+    # não um descuido: no CSV existe a coluna `erro` ao lado para desfazer a
+    # ambiguidade, e na tela não existia nada.
     codigo_bruto = s.get("id_status") or "sem_acerto"
     codigo = _situacao(s)
     texto, classe, nota = _rotulo_situacao(codigo)
@@ -192,51 +261,55 @@ def _formatar(s: dict) -> dict:
          "regra": c.get("rule") or ""}
         for c in (s.get("caveats") or []) if isinstance(c, dict)
     ]
-
     return {
         "key": s.get("key") or "",
+        # ---- montagem (mesmos valores e mesma formatação do CSV)
         "n_leituras": len(s.get("reads") or []),
         "consenso_pb": consenso,
         "cobertura_media": _num(cobertura, 2) if cobertura else "",
-        'n_cobertura_1': s.get('n_coverage_1') or 0,
-        'pct_cobertura_1': _num(s.get('x: pct_cov1'), 1) if consenso else '',
-        'discordâncias': s.get('n_corrected') or 0,
-        'contig_invertido': 'sim' if s.get('contig_flipped') else 'nao',
-        'invertido': bool(s.get('contig_flipped')),
-        'organismo': s.get("organism") or "",
-        'accession': s.get("accession") or "",
-        'identidade': _num(s.get('pct_identity'), 1),
-        'cobertura_query': _num(s.get('pct_query_coverage'), 1),
-        'e_value': _num(s.get('e_value'), 1),
-        'marcador': s.get("id_source") or "",
-        'situacao_id': codigo_bruto,
-        'situacao': codigo,
-        'situacao_texto': texto,
-        'situacao_classe': classe,
-        'situacao_nota': nota,
-        'identificado': bool(s.get("organism")),
-        'ressalvas': ressalvas,
-        'n_ressalvas': len(ressalvas),
-        'erro': s.get("error") or "",
-        'leituras':[_leitura(r) for r in (s.get("reads") or []) if isinstance(r, dict)],
+        "n_cobertura_1": s.get("n_cov1") or 0,
+        "pct_cobertura_1x": _num(s.get("pct_cov1"), 1) if consenso else "",
+        "discordancias": s.get("n_corrected") or 0,
+        "contig_invertido": "sim" if s.get("contig_flipped") else "nao",
+        "invertido": bool(s.get("contig_flipped")),
+        # ---- identificação
+        "organismo": s.get("organism") or "",
+        "accession": s.get("accession") or "",
+        # 1 casa, e nao 3: `report.py` grava `round(hit.pct_identity, 1)`, entao
+        # imprimir 99.400 onde o blastn mediu 99,44 AFIRMA uma precisao que o
+        # numero nao tem. Conferido contra o blastn cru em 8 amostras.
+        "identidade": _num(s.get("pct_identity"), 1),
+        "cobertura_query": _num(s.get("query_cover"), 1),
+        "e_value": s.get("e_value") or "",
+        "marcador": s.get("id_source") or "",
+        "situacao_id": codigo_bruto,
+        "situacao": codigo,
+        "situacao_texto": texto,
+        "situacao_classe": classe,
+        "situacao_nota": nota,
+        "identificado": bool(s.get("organism")),
+        # ---- ressalvas e falha
+        "ressalvas": ressalvas,
+        "n_ressalvas": len(ressalvas),
+        "erro": s.get("error") or "",
+        "leituras": [_leitura(r) for r in (s.get("reads") or [])
+                     if isinstance(r, dict)],
+    }
 
-    }        
 
 def _leitura(r: dict) -> dict:
-    ''' Formata a leitura para tabela do relatório. '''
-
-    inicio, fim = r.get('col_start') or 0, r.get('col_end') or 0
-    nome, medido = r.get('orien_nome') or '', r.get('orient_content') or ''
-
+    inicio, fim = r.get("col_start") or 0, r.get("col_end") or 0
+    nome, medido = r.get("orient_name"), r.get("orient_content")
     return {
         "nome": r.get("name") or "",
         "primer": r.get("primer") or "",
         "sentido_nome": nome or "",
         "sentido_medido": medido or "",
+        # O relatório aponta a divergência entre o sentido declarado no nome e o
+        # medido no conteúdo; a tela só repete o apontamento.
         "sentido_diverge": bool(nome and medido and nome != medido),
-        'bases': r.get('n_bases') or 0,
+        "bases": r.get("n_bases") or 0,
         "q_medio": f"Q{r['mean_q']}" if r.get("mean_q") else "",
-        'q_rotulo': r.get('q_label') or '',
-         "janela": f"{inicio}–{fim}" if fim else "",
-
+        "q_rotulo": r.get("q_label") or "",
+        "janela": f"{inicio}–{fim}" if fim else "",
     }
