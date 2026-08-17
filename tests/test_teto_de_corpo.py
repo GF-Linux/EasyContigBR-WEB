@@ -23,7 +23,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.setenv("EASYCONTIG_MAX_CORPO", str(4096))
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     return main
 
@@ -75,7 +75,7 @@ def test_o_teto_padrao_acompanha_o_max_bytes(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.delenv("EASYCONTIG_MAX_CORPO", raising=False)
     monkeypatch.setenv("EASYCONTIG_MAX_BYTES", str(50 * 1024 * 1024))
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     assert main.MAX_CORPO > main.cfg.max_bytes, (
         "o teto de corpo ficou abaixo do teto por lote — recusaria envio válido")

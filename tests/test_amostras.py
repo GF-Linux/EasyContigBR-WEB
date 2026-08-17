@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from easycontig_web import amostras
+from easycontig_web.dados import leitura_de_amostras as amostras
 
 LOTE_REAL = Path("/home/deck/Desktop/easycontig-web/dados/lotes/v2-UNsPdWj2E/relatorio.json")
 
@@ -235,7 +235,7 @@ def test_os_valores_batem_com_as_colunas_do_csv(real):
     """O CSV é o formato que o laboratório já recebe; a tela não pode exibir
     outro número nem chamar a coluna de outro nome."""
     report = pytest.importorskip("app.core.report")
-    from easycontig_web import executor
+    from easycontig_web.processamento import executor_de_lote as executor
 
     linhas = executor.para_csv(report.BatchReport.from_json(
         LOTE_REAL.read_text(encoding="utf-8"))).splitlines()

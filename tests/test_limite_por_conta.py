@@ -31,7 +31,7 @@ def montar(tmp_path, monkeypatch):
         monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
         monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
         monkeypatch.setenv("EASYCONTIG_LIM_LEITURA", teto)
-        from easycontig_web import main
+        from easycontig_web import servidor_web as main
         importlib.reload(main)
         return main
     return _montar

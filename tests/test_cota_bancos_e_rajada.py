@@ -16,7 +16,8 @@ import threading
 
 import pytest
 
-from easycontig_web import cotas, fila
+from easycontig_web.contas import cota_de_espaco as cotas
+from easycontig_web.processamento import fila_de_lotes as fila
 
 
 @pytest.fixture()
@@ -28,7 +29,7 @@ def banco(tmp_path):
 
 # ═══════════════════════════════════════════════════════════════════════ M2
 def test_a_migracao_4_criou_a_coluna_de_reserva(banco):
-    from easycontig_web import migracoes
+    from easycontig_web.dados import esquema_e_migracoes as migracoes
     assert migracoes.versao(banco) >= 4
     with fila.conectar(banco) as con:
         colunas = {r[1] for r in con.execute("PRAGMA table_info(lotes)")}
@@ -37,7 +38,7 @@ def test_a_migracao_4_criou_a_coluna_de_reserva(banco):
 
 def test_o_banco_do_usuario_entra_na_cota(banco, tmp_path):
     """Sem `data_dir` a conta enxerga só metade do que ocupa — que era o buraco."""
-    from easycontig_web import bancos as mod
+    from easycontig_web.dados import bancos_de_referencia as mod
     data_dir = tmp_path / "dados"
     # O id tem de ser o que `id_do_usuario` monta, senão `meus_bancos` — que
     # lista por prefixo do espaço da conta — não enxerga a pasta.

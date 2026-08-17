@@ -1,21 +1,13 @@
-"""
-retencao.py — quando o `.ab1` que o laboratório subiu deixa de existir aqui.
-
-Por que existe: no desktop os dados nunca saíam da máquina de quem monta. Na
-web eles passam a morar num servidor, e o que estava anotado como pendência é
-que ali eles ficavam PARA SEMPRE — são corridas Sanger **não publicadas**, e um
-volume que só cresce é ao mesmo tempo risco (dado de terceiro guardado sem
-prazo) e conta de disco (uma corrida de 40 amostras são ~26 MB de traço bruto).
-
-O que este módulo NÃO faz: decidir a política. Quem tem o dado é quem define o
-prazo, e enquanto ninguém definir o padrão é NÃO APAGAR (`DIAS_PADRAO = 0`) —
-o módulo é conservador em todas as bifurcações: na dúvida, guarda.
-
-Fica de propósito sem depender de `executor` (que importa `app.core` inteiro só
-para ter o caminho da pasta) e sem ler `Config`: recebe caminhos por argumento,
-então dá para chamá-lo do trabalhador, de uma rota ou de um cron sem arrastar o
-resto do servidor junto.
-"""
+#? EXPURGO POR RETENÇÃO — Decisão sobre quando o dado some 05/08/2026
+#!
+#! 1. Define quando o `.ab1` que o laboratório subiu deixa de existir aqui.
+#! 2. No desktop o dado nunca saía da máquina de quem monta. Na web ele passa a
+#!    morar num servidor — e ficava PARA SEMPRE.
+#! 3. São corridas Sanger NÃO publicadas: volume que só cresce é risco (dado de
+#!    terceiro sem prazo) e conta de disco (~26 MB por corrida de 40).
+#! 4. Este módulo NÃO decide a política. Quem tem o dado é quem define o prazo.
+#! 5. ⚠️ Se todos os lotes vencem de uma vez, a faxina TRAVA e não apaga nada —
+#!    isso não é passagem do tempo, é relógio errado ou prazo mal posto.
 from __future__ import annotations
 
 import logging
@@ -24,7 +16,7 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .fila import RECEBENDO, RODANDO, conectar
+from ..processamento.fila_de_lotes import RECEBENDO, RODANDO, conectar
 
 log = logging.getLogger("easycontig.retencao")
 

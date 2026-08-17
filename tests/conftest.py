@@ -10,7 +10,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _zerar_limites():
-    from easycontig_web import limites
+    from easycontig_web.contas import limite_de_requisicoes as limites
     limites.limpar()
     yield
     limites.limpar()

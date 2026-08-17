@@ -1,12 +1,10 @@
-"""
-executor.py — roda UM lote: a única ponte entre a web e o núcleo científico.
-
-Toda a ciência mora em `app.core` (a biblioteca da ADR 0050). Este arquivo não
-decide nada sobre montagem, identidade ou limiar — ele copia parâmetro, chama
-`run_batch`, e escreve os três artefatos que o usuário baixa. Se um dia alguém
-precisar mudar o que o relatório afirma, o lugar é `app/core/report.py`, nunca
-aqui: é o que mantém web e desktop dizendo a mesma coisa sobre a mesma amostra.
-"""
+#? EXECUTOR DE LOTE — Decisão sobre a fronteira com a ciência 04/08/2026
+#!
+#! 1. Roda UM lote. É a única ponte entre a web e o núcleo científico.
+#! 2. Este arquivo NÃO decide nada sobre montagem, identidade ou limiar: copia
+#!    parâmetro, chama `run_batch` e grava os três artefatos que o usuário baixa.
+#! 3. ⚠️ Mudou o que o relatório afirma? O lugar é `app/core/report.py`, nunca
+#!    aqui — é o que mantém web e desktop dizendo a mesma coisa da mesma amostra.
 from __future__ import annotations
 
 import csv
@@ -18,7 +16,7 @@ from app.core import batch
 from app.core.report import BatchReport, render_html
 from app.core.tracy_engine import TracyEngine
 
-from .config import Config
+from ..configuracao import Config
 
 
 def pastas_do_lote(cfg: Config, lote_id: str) -> dict[str, Path]:
@@ -61,7 +59,7 @@ def bancos_do_lote(cfg: Config, referencia: str) -> tuple:
     """
     if not referencia or referencia == "curado":
         return cfg.db_18s, cfg.db_16s, "curado (RAIC 2026)"
-    from . import bancos
+    from ..dados import bancos_de_referencia as bancos
     pref = bancos.prefixo(cfg.data_dir, referencia)
     if not bancos.existe(cfg.data_dir, referencia):
         raise ValueError(f"o banco '{referencia}' não está montado nesta instalação")

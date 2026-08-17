@@ -1,56 +1,10 @@
-"""
-pedidos.py — um laboratório pede uma amostra a outro, e o outro aceita ou recusa.
-
-É o que a ADR 0052 já apontava quando decidiu que o portfólio do perfil é
-**declaração** e não estatística: ele existe para *"outro laboratório achar quem
-trabalha com o quê e pedir uma sequência"*. O `/labs` mostrou o quê; isto é o
-pedir.
-
-⚠️ **NÃO É CONVERSA, e a diferença é de desenho, não de acabamento.** Um pedido
-tem exatamente um ciclo:
-
-    pendente ──aceito──▶ fim      (o dono da amostra justifica)
-       │  └──recusado──▶ fim      (idem)
-       └──cancelado───▶ fim       (só quem pediu, e só enquanto pendente)
-
-Estado final é final. Quem quiser tentar de novo manda **outro pedido**, com
-histórico próprio — decisão do autor em 2026-08-10. Sem responder-a-resposta,
-sem linha do tempo, sem caixa de texto que reabre: cada uma dessas coisas
-transforma isto numa caixa de mensagens, que é justamente o que não se quer
-manter (nem moderar) num serviço de laboratório.
-
-## A regra de privacidade, que é a parte delicada
-
-O `/labs` **não entrega e-mail de terceiro** — achado L1 de 2026-08-08: com o
-domínio institucional anunciado na tela de entrada, qualquer pedaço do endereço
-alheio remonta o endereço inteiro. Um pedido de amostra, porém, só termina fora
-do site: alguém precisa mandar o tubo pelo correio.
-
-A saída decidida com o autor: **o aceite é o consentimento**. Enquanto o pedido
-está pendente — ou se for recusado, ou cancelado — nenhum dos dois lados vê o
-e-mail do outro; vê o nome e o laboratório, que já estão no diretório. No
-instante em que alguém **aceita**, os dois e-mails passam a aparecer *naquele
-pedido*, para os dois lados. Aceitar é um ato deliberado de quem foi procurado,
-e é o único ponto do sistema em que um endereço atravessa a fronteira entre
-contas.
-
-⚠️ Por isso `_visao()` é o único lugar que decide mostrar `contato`, e decide
-pelo ESTADO. Nenhuma consulta deste módulo devolve e-mail de terceiro por outro
-caminho; se um dia alguém precisar de um, que passe por aqui.
-
-## Por que o alvo é uma chave sorteada, e não o e-mail (nem o hash dele)
-
-O formulário precisa dizer *para quem* é o pedido, e esse identificador vai para
-o HTML de uma página que todo mundo abre. Não pode ser o e-mail, pelo L1. E
-**também não pode ser `sha256(e-mail)`**, que era o caminho óbvio (a ADR 0054 já
-usa isso para o espaço de disco da conta): e-mail institucional é adivinhável —
-`nome.sobrenome@ufrrj.br` —, então quem tem a lista de hashes do diretório
-confirma, offline e sem bater no servidor, quais endereços têm conta aqui. Hash
-de valor de baixa entropia não esconde o valor; só o embrulha.
-
-A chave é `secrets.token_urlsafe`, sorteada por conta e guardada em `perfis`.
-Não deriva de nada e não confirma palpite nenhum.
-"""
+#? PEDIDOS ENTRE LABORATÓRIOS — Decisão sobre pedir, não conversar 08/08/2026
+#!
+#! 1. Um laboratório pede uma amostra a outro, e o outro aceita ou recusa.
+#! 2. É o par do portfólio do perfil: o `/labs` mostra QUEM trabalha com o quê,
+#!    isto é o PEDIR.
+#! 3. ⚠️ NÃO É CONVERSA, e a diferença é de desenho, não de acabamento: um
+#!    pedido tem exatamente um ciclo, e acaba.
 from __future__ import annotations
 
 import json
@@ -58,7 +12,7 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .fila import conectar
+from ..processamento.fila_de_lotes import conectar
 
 PENDENTE = "pendente"
 ACEITO = "aceito"
@@ -133,7 +87,7 @@ def criar(sqlite_path: Path, *, de_email: str, para_email: str,
     if not motivo:
         raise NaoPode("diga para que serve a amostra — quem recebe decide com isso")
 
-    from . import perfil as mod_perfil
+    from ..contas import perfil_do_laboratorio as mod_perfil
     alvo = mod_perfil.pegar(sqlite_path, para_email)
     declarado = {*(alvo.get("especies") or []), *(alvo.get("marcadores") or [])}
     escolhidos, vistos = [], set()

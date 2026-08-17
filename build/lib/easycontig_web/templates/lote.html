@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block titulo %}{{ lote.nome or lote.id }} — EasyContig BR{% endblock %}
+{% block estilo %}
+/* A tela do lote é uma TABELA de amostras: prender em 64rem deixava metade de um
+   monitor largo vazia e ainda espremia as colunas, quebrando "Hepatozoon canis"
+   e "2 ressalva(s)" em duas linhas. Ela usa a largura que tem. */
+.trabalho > .interno{ max-width:none }
+.cartao{ padding:1rem 1.15rem }
+td{ white-space:nowrap }
+td:first-child a{ font-family:var(--mono); font-size:.85em }
+{% endblock %}
+
+{% block conteudo %}
+
+{% if recarregar %}
+  {# O `meta refresh` fica como plano B para navegador sem JS. Ele sozinho era o
+     gargalo, medido no Deck: um par F+R fica pronto em 582 ms (286 ms de
+     processamento + 296 ms de fila), e a pessoa esperava até 3 s por causa
+     desta linha — a tela custava até 10× o processamento. Não se conserta isso
+     tirando a fila (que custa 8% da espera e é o que impede a conexão
+     pendurada da ADR 0050); conserta-se perguntando mais rápido. #}
+  <noscript><meta http-equiv="refresh" content="3"></noscript>
+  <script nonce="{{ request.state.nonce }}">
+  (function () {
+    // Começa rápido porque a maioria dos envios é um par (ADR 0051), e vai
+    // afrouxando: uma corrida de 40 leva ~14 s e não precisa de 300 ms de
+    // polling o tempo todo. Teto de 3 s = o mesmo do meta refresh antigo.
+    var espera = 300, TETO = 3000, parado = false;
+    function perguntar() {
+      if (parado) { return; }
+      fetch('/api/lotes/{{ lote.id }}', { headers: { 'accept': 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (l) {
+          if (!l) { return agendar(); }
+          if (l.status === 'pronto' || l.status === 'falhou') {
+            parado = true;
+            location.reload();
+            return;
+          }
+          var b = document.getElementById('progresso');
+          if (b && l.total) {
+            b.style.width = Math.round(100 * l.feito / l.total) + '%';
+            var t = document.getElementById('progresso-texto');
+            if (t) {
+              t.textContent = l.feito + ' de ' + l.total + ' amostras'
+                + (l.etapa ? ' · montando ' + l.etapa : '');
+            }
+          }
+          agendar();
+        })
+        .catch(agendar);
+    }
+    function agendar() {
+      setTimeout(perguntar, espera);
+      espera = Math.min(Math.round(espera * 1.4), TETO);
+    }
+    setTimeout(perguntar, espera);
+  })();
+  </script>
+{% endif %}
+
+<p class="sub"><a href="/">← todas as corridas</a></p>
+
+<div class="cartao">
+  <h2 style="margin-top:0">{{ lote.nome or 'lote' }}</h2>
+  <p><span class="rotulo {{ lote.status }}">{{ lote.status.replace('_',' ') }}</span>
+     <span class="sub">· {{ lote.n_arquivos }} arquivo(s) · protocolo
+     <code>{{ lote.id }}</code></span></p>
+
+  {% if lote.status == 'recebendo' %}
+    <p class="sub">Recebendo os arquivos. O lote só entra na fila quando o último
+    byte chegar — processar um envio pela metade daria um relatório com menos
+    amostras do que a corrida tem, sem nada indicando a falta.</p>
+
+  {% elif lote.status == 'na_fila' %}
+    {# "Na fila" é uma PROMESSA: alguém vai pegar. Em 06/08 um par ficou aqui
+       para sempre porque nenhum trabalhador atendia esta fila, e a página
+       seguiu se atualizando e prometendo. Agora a promessa só é feita quando
+       há quem a cumpra. #}
+    {% if fila_atendida %}
+      <p class="sub">Na fila. Esta página se atualiza sozinha — pode fechar e voltar
+      pelo link depois; o processamento não depende de manter a aba aberta.</p>
+    {% else %}
+      <p class="erro"><b>Nada está atendendo a fila.</b></p>
+      <p class="sub">Seus arquivos chegaram inteiros e estão guardados — mas o
+      processo que monta os contigs não está de pé, e este lote vai ficar parado
+      aqui. Não é problema do envio, e reenviar não adianta.
+      <strong>Avise quem cuida do servidor:</strong> falta subir o trabalhador
+      (<code>python -m easycontig_web.trabalhador</code>). Quando ele subir,
+      este lote é pego sozinho — nada se perde.</p>
+    {% endif %}
+
+  {% elif lote.status == 'rodando' %}
+    {% set pct = (100 * lote.feito / lote.total) if lote.total else 0 %}
+    <div class="barra"><i id="progresso" style="width:{{ pct|round(0) }}%"></i></div>
+    <p class="sub" id="progresso-texto">{{ lote.feito }} de {{ lote.total }} amostras
+      {% if lote.etapa %}· montando {{ lote.etapa }}{% endif %}</p>
+
+  {% elif lote.status == 'pronto' %}
+    <p>
+      <a class="botao" href="/lotes/{{ lote.id }}/relatorio">Abrir relatório</a>
+      <a class="botao secundario" href="/lotes/{{ lote.id }}/resultado.csv">Baixar CSV</a>
+      <a class="botao secundario" href="/lotes/{{ lote.id }}/relatorio.json">JSON dos fatos</a>
+    </p>
+    <p class="sub">Para PDF: abra o relatório e imprima (Ctrl+P → Salvar como PDF).</p>
+
+  {% elif lote.status == 'falhou' %}
+
+    <p class="erro">O lote não foi processado.</p>
+    <pre class="sub" style="white-space:pre-wrap">{{ lote.erro }}</pre>
+    <p class="sub">Falha de uma amostra sozinha não chega aqui — ela vira uma linha
+    com ressalva dentro do relatório. Isto aqui é falha do lote inteiro.</p>
+  {% endif %}
+</div>
+
+{# A tabela por amostra evita o Ctrl+F no relatório inteiro: uma corrida real
+   tem 40 amostras. Quando o relatório existe mas não pôde ser lido, dizemos
+   isso — uma tabela vazia passaria por "corrida sem amostras". #}
+{% if lote.status == 'pronto' %}
+  {# Leituras que nao formaram par. A tela CALAVA sobre isto: numa corrida cujos
+     nomes so trazem o poco, as 81 leituras viraram 81 linhas de uma leitura so,
+     sem nada explicando -- e quem envia le "o programa falhou", quando o certo e
+     "os nomes nao dizem qual leitura e de qual amostra". O sentido F/R o app
+     descobre pelo DNA; a identidade do individuo, nao (ADR 0034). #}
+  {% if resumo and resumo.avulsas %}
+    <div class="cartao aviso">
+      <h3>{{ resumo.avulsas }} leitura{{ 's' if resumo.avulsas > 1 }}
+          não formou par</h3>
+      <p>Elas foram montadas sozinhas, sem a leitura complementar. Isso
+      <strong>não é falha do arquivo</strong>: o EasyContig descobre pelo próprio
+      DNA se uma leitura é <em>forward</em> ou <em>reverse</em>, mas
+      <strong>quem diz que duas leituras são da mesma amostra é o nome</strong> —
+      e nestes o nome não diz.</p>
+      <p>Costuma acontecer quando o nome do sequenciador só varia no poço da
+      placa (<code>..._A09.ab1</code>, <code>..._B09.ab1</code>): não há ali nada
+      ligando um ao outro. Renomeando de modo que as duas leituras da mesma
+      amostra compartilhem um identificador e se distingam por
+      <code>_F</code>/<code>_R</code>, elas passam a parear.</p>
+      {% if resumo.pareadas %}<p class="sub">Neste lote,
+      {{ resumo.pareadas }} amostra{{ 's' if resumo.pareadas > 1 }}
+      parearam normalmente.</p>{% endif %}
+    </div>
+  {% endif %}
+  {% if amostras %}
+    {% include "_amostras_tabela.html" %}
+  {% else %}
+    <div class="cartao sub">O relatório deste lote não pôde ser lido
+    (<code>relatorio.json</code> ausente ou ilegível). Os arquivos para download
+    acima podem ainda funcionar.</div>
+  {% endif %}
+{% endif %}
+
+{% if lote.status not in ('recebendo', 'rodando') %}
+<div class="cartao">
+  <h2 style="margin-top:0">Este lote no servidor</h2>
+  {% if expira_em %}
+    <p class="sub">Os arquivos enviados e o relatório serão apagados
+    automaticamente em <strong>{{ expira_em.strftime('%d/%m/%Y') }}</strong>.
+    Baixe o que precisar guardar antes disso.</p>
+  {% else %}
+    <p class="sub">O expurgo automático está desligado nesta instalação: os
+    <code>.ab1</code> enviados ficam aqui até alguém apagá-los.</p>
+  {% endif %}
+  <form method="post" action="/lotes/{{ lote.id }}/apagar" data-confirmar="Apagar este lote do servidor? Os .ab1 enviados e o relatório somem, e não há como desfazer.">
+    <button type="submit" class="secundario">Apagar agora</button>
+  </form>
+  <p class="sub" style="margin-bottom:0">Apagar remove do servidor os
+  <code>.ab1</code> que você enviou e o relatório gerado — os arquivos originais
+  no seu computador não são tocados.</p>
+</div>
+{% endif %}
+
+{% endblock %}

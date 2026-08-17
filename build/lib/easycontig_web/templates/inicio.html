@@ -1,0 +1,501 @@
+{% extends "base.html" %}
+{% block titulo %}EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* A tela inicial É o workspace vazio, e não uma página de envio separada: mesma
+   estrutura de três colunas da amostra, com o centro esperando um par e a coluna
+   da direita já no lugar. Pedido do autor em 05/08 — "login → design da imagem
+   (sem a sequência) → aba de adicionar os arquivos". Antes daqui, entrar levava
+   a um formulário solto, e a tela do trabalho só existia dentro da amostra. */
+.trabalho{ padding:0 }
+.trabalho > .interno{ max-width:none }
+.trabalho > .interno > .rodape{ display:none }
+.oficina{ display:grid; grid-template-columns:minmax(0,1fr) 300px; min-height:100vh }
+@media(max-width:1150px){ .oficina{ grid-template-columns:1fr } }
+/* A coluna do meio OCUPA a altura: antes o conteúdo parava no meio da tela e
+   sobrava um vão escuro embaixo, que num monitor pequeno era metade da página. */
+.meio{ padding:13px; display:flex; flex-direction:column; gap:11px; min-width:0 }
+.bloco{ background:var(--painel); border:1px solid var(--linha); border-radius:10px }
+.bl-topo{ display:flex; align-items:center; gap:10px; padding:8px 13px;
+  border-bottom:1px solid var(--linha); flex-wrap:wrap }
+.bl-topo b{ font-size:12.5px; font-weight:700 }
+.bl-topo .aj{ font-size:11px; color:var(--fraco) }
+
+/* o vazio do centro tem a forma do que vai ocupá-lo: é convite, não tela branca */
+.aguardando{ border:1px dashed var(--linha-forte); border-radius:10px;
+  padding:2rem 1.4rem; text-align:center; background:#0d0e16;
+  /* cresce para tomar a sobra: é o espaço que o alinhamento e os dois
+     cromatogramas vão ocupar quando houver amostra aberta */
+  flex:1 1 auto; min-height:11rem; display:flex; flex-direction:column;
+  align-items:center; justify-content:center }
+.aguardando svg{ display:block; margin:0 auto .8rem; width:min(34rem,70%);
+  height:54px; opacity:.2 }
+.aguardando b{ display:block; color:var(--apoio); font-size:.92rem; margin-bottom:.25rem }
+.aguardando p{ margin:0 auto; max-width:44ch; font-size:.83rem; color:var(--fraco);
+  line-height:1.55 }
+
+.envio{ padding:13px }
+select{ font:inherit; font-size:.9rem; padding:.55rem .7rem; width:100%;
+  border:1px solid var(--linha-forte); border-radius:8px; background:var(--interno);
+  color:var(--tinta) }
+.dois-modos{ display:grid; grid-template-columns:1fr 1fr; gap:.6rem; margin-bottom:1rem }
+@media(max-width:620px){ .dois-modos{ grid-template-columns:1fr } }
+.modo{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
+  padding:.7rem .85rem .8rem 2.2rem; position:relative; cursor:pointer; display:block }
+.modo:hover{ border-color:var(--linha-forte) }
+.modo b{ display:block; font-size:.85rem; margin-bottom:.15rem }
+.modo span{ font-size:.78rem; color:var(--fraco); line-height:1.5; display:block }
+.modo input{ position:absolute; left:.85rem; top:.92rem; accent-color:var(--violeta);
+  width:14px; height:14px; cursor:pointer }
+.modo.destaque{ border-color:var(--violeta); background:var(--violeta-fundo) }
+.modo.destaque b{ color:var(--violeta-claro) }
+
+.lado{ background:var(--painel); border-left:1px solid var(--linha);
+  padding:14px 15px 22px; display:flex; flex-direction:column; gap:12px }
+@media(max-width:1150px){ .lado{ border-left:0; border-top:1px solid var(--linha) } }
+.lado .rot{ font-family:var(--mono); font-size:9px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--fraco); margin-bottom:6px }
+.metricas{ display:grid; grid-template-columns:1fr 1fr; gap:8px }
+.mt-vazio{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
+  padding:9px 11px }
+.mt-vazio b{ display:block; font-family:var(--mono); font-size:1.1rem; color:var(--fraco) }
+.mt-vazio s{ display:block; text-decoration:none; font-family:var(--mono);
+  font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--fraco);
+  margin-top:3px }
+.lq{ display:flex; justify-content:space-between; gap:1rem; padding:5px 0;
+  font-size:12px; border-bottom:1px solid var(--linha) }
+.lq span:last-child{ font-family:var(--mono) }
+{% endblock %}
+
+{% block conteudo %}
+<div class="oficina">
+  <div class="meio">
+
+    {% set faltando = diagnostico | rejectattr(1) | list %}
+    {% if faltando %}
+    <div class="bloco" style="border-color:rgba(240,82,74,.4)">
+      <div class="bl-topo"><b class="erro">Esta instalação está incompleta</b></div>
+      <div style="padding:11px 13px">
+        <p class="sub" style="margin:0 0 .7rem">Enquanto faltar uma dependência o lote
+        roda mas o relatório vem sem a parte correspondente — e <em>ausência de
+        <code>blastn</code> não é "nenhum acerto"</em>, é falta de ferramenta.</p>
+        <table>
+          {% for item, ok, detalhe in diagnostico %}
+          <tr><td style="width:7rem">{{ item }}</td>
+              <td class="{{ 'pronto' if ok else 'falhou' }}" style="width:5rem"
+                >{{ 'OK' if ok else 'FALTA' }}</td>
+              <td class="sub">{{ detalhe }}</td></tr>
+          {% endfor %}
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="aguardando">
+      <svg viewBox="0 0 600 46" preserveAspectRatio="none" aria-hidden="true">
+        <path fill="none" stroke="#6E7490" stroke-width="1.5"
+              d="M0,40 Q12,8 24,40 T48,40 T72,40 T96,40 T120,40 T144,40 T168,40
+                 T192,40 T216,40 T240,40 T264,40 T288,40 T312,40 T336,40 T360,40
+                 T384,40 T408,40 T432,40 T456,40 T480,40 T504,40 T528,40 T552,40
+                 T576,40 T600,40"/>
+      </svg>
+      <b>Nenhuma amostra aberta</b>
+      <p>Mande um par F+R abaixo — ou escolha uma corrida na lateral — e o
+      alinhamento, os dois cromatogramas e a identificação aparecem aqui.</p>
+    </div>
+
+    <section class="bloco">
+      <div class="bl-topo">
+        <b>Adicionar arquivos</b>
+        <span class="aj">o par de uma amostra, ou a pasta inteira de uma corrida</span>
+      </div>
+      <div class="envio">
+        {# Escolha de verdade, não dois cartões decorativos: o modo decide o que
+           o campo de arquivo aceita. "Par" abre o seletor de ARQUIVOS e exige
+           exatamente dois; "corrida" abre o seletor de PASTA. Antes os dois
+           cartões eram enfeite e o campo era sempre o mesmo. #}
+        <div class="dois-modos" role="radiogroup" aria-label="O que você vai enviar">
+          <label class="modo destaque">
+            <input type="radio" name="modo" value="par" checked>
+            <b>Um par F+R</b>
+            <span>Dois arquivos <code>.ab1</code>. Abre direto no cromatograma,
+            pronto para editar base. É o caminho do dia a dia.</span>
+          </label>
+          <label class="modo">
+            <input type="radio" name="modo" value="lote">
+            <b>Uma corrida inteira</b>
+            <span>A pasta toda. Vira um lote com a lista de amostras, e você
+            escolhe qual par abrir.</span>
+          </label>
+        </div>
+
+        <form id="envio" method="post" action="/lotes" enctype="multipart/form-data"
+              data-max-arquivos="{{ max_arquivos }}"
+              data-max-bytes="{{ max_mb * 1024 * 1024 }}">
+          {# A referência é a PRIMEIRA decisão, e é obrigatória: montar consenso
+             sem ter contra o que comparar produz um "não achei" sem significado.
+             O curado vem marcado porque é o que validou tudo até aqui. #}
+          <div class="campo">
+            <label class="sub" for="referencia">1 · Referência para identificar</label>
+            <select id="referencia" name="referencia" required>
+              {% for r in referencias %}
+              <option value="{{ r.id }}"{% if loop.first %} selected{% endif %}
+                >{{ r.nome }} — {{ r.detalhe }}</option>
+              {% endfor %}
+            </select>
+            <p class="sub" style="margin:.35rem 0 0;font-size:.79rem">
+              Mais grupos em <a href="/bancos">Bancos de referência</a>. O banco
+              escolhido fica gravado na corrida e sai no relatório.
+            </p>
+          </div>
+
+          <div class="campo">
+            <label class="sub" for="nome">2 · Nome (só para você achar depois)</label>
+            <input type="text" id="nome" name="nome"
+                   placeholder="ex.: amostra12 · BTF2+BTR2">
+          </div>
+          <div class="campo">
+            <label class="sub" for="arquivos" id="rot-arquivos">Os dois arquivos
+            <code>.ab1</code> da amostra</label><br>
+            <input type="file" id="arquivos" name="arquivos" multiple
+                   accept=".ab1,.abi,.scf" required style="margin-top:.4rem">
+            <p id="resumo" class="sub" style="margin:.4rem 0 0"></p>
+            <p id="aviso-subpasta" class="sub" style="display:none; margin:.4rem 0 0"></p>
+
+            {# O nome e a UNICA fonte de identidade. O sentido F/R sai do
+               conteudo e e confiavel (ADR 0034); o que o app nao tem como saber
+               e QUAIS duas leituras sao da mesma amostra. Dizer isto ANTES do
+               envio custa um paragrafo e evita a corrida que volta com tudo
+               avulso -- aconteceu em 2026-08-07, 81 de 81. #}
+            <details class="sub" style="margin-top:.5rem">
+              <summary>Como nomear os arquivos</summary>
+              <p>O EasyContig descobre sozinho, pelo DNA, se uma leitura é
+              <em>forward</em> ou <em>reverse</em> — o nome não precisa estar
+              certo quanto a isso. O que ele <strong>não</strong> tem como
+              adivinhar é quais duas leituras são da <strong>mesma amostra</strong>.</p>
+              <p>Então basta que as duas leituras de uma amostra compartilhem um
+              identificador e se distingam por <code>_F</code> e <code>_R</code>:</p>
+              <pre style="margin:.3rem 0">amostra12_BTF2_F.ab1
+amostra12_BTR2_R.ab1</pre>
+              <p>⚠️ Nome que só varia no <strong>poço da placa</strong>
+              (<code>corrida_A09.ab1</code>, <code>corrida_B09.ab1</code>) não
+              serve: não há nada ali ligando um ao outro, e as leituras vão ser
+              montadas sozinhas.</p>
+            </details>
+          </div>
+
+          <button type="submit" id="botao-enviar"
+                  {% if cota and not cota.pode_enviar %}disabled{% endif %}
+            >Processar lote</button>
+
+          <div id="progresso" style="display:none; margin-top:.9rem">
+            <div class="barra"><i id="progresso-barra" style="width:0%"></i></div>
+            <p id="progresso-texto" class="sub" style="margin:.4rem 0 0"
+               aria-live="polite"></p>
+          </div>
+          <p id="falha" class="erro" style="display:none; margin:.9rem 0 0"
+             role="alert"></p>
+
+          <p class="sub" style="margin:.8rem 0 0">
+            Até {{ max_arquivos }} arquivos / {{ max_mb }} MB por envio.
+            Trim = {{ trim }} (valor medido, ADR 0042). O pareamento F/R sai do
+            <em>conteúdo</em> das leituras, não do nome do arquivo.</p>
+
+          {% if cota %}
+          {%- macro tam(bytes) -%}
+            {%- set m = bytes / 1048576 -%}
+            {%- if m >= 1024 -%}{{ ((m / 1024) | round(1)) | string | replace('.', ',') }} GB
+            {%- else -%}{{ (m | round(1)) | string | replace('.', ',') }} MB{%- endif -%}
+          {%- endmacro -%}
+          <p class="sub" style="margin:.35rem 0 0">
+            Nesta conta: {{ cota.lotes_ativos }} em processamento{% if cota.max_lotes_ativos %}
+            de {{ cota.max_lotes_ativos }}{% else %} (sem limite){% endif %} ·
+            {{ tam(cota.bytes_usados) }} ocupados{% if cota.max_bytes_conta %}
+            de {{ tam(cota.max_bytes_conta) }}{% else %} (sem limite){% endif %}.</p>
+          {% if not cota.pode_enviar %}
+          <p class="erro" style="margin:.35rem 0 0">{{ cota.motivo }}</p>
+          {% endif %}
+          {% endif %}
+        </form>
+      </div>
+    </section>
+  </div>
+
+  {# A coluna da direita fica no lugar, vazia: sumir com ela aqui faria o layout
+     saltar quando a amostra abrisse. #}
+  <aside class="lado">
+    <div>
+      <div class="rot">identificação</div>
+      <p class="sub" style="margin:0;font-size:12px">Espécie, identidade, cobertura e
+      o acesso do GenBank aparecem aqui quando uma amostra estiver aberta.</p>
+    </div>
+    <div class="metricas">
+      <div class="mt-vazio"><b>—</b><s>identidade</s></div>
+      <div class="mt-vazio"><b>—</b><s>cobertura</s></div>
+      <div class="mt-vazio"><b>—</b><s>e-value</s></div>
+      <div class="mt-vazio"><b>—</b><s>consenso (pb)</s></div>
+    </div>
+    <div>
+      <div class="rot">esta instalação</div>
+      <div class="lq"><span>Trim</span><span>{{ trim }}</span></div>
+      <div class="lq"><span>Teto por envio</span><span>{{ max_arquivos }} arq.</span></div>
+      <div class="lq"><span>Retenção</span><span>{% if retencao_dias %}{{ retencao_dias }}
+        dias{% else %}não apaga{% endif %}</span></div>
+      {% for item, ok, detalhe in diagnostico %}
+      <div class="lq"><span>{{ item }}</span>
+        <span class="{{ 'pronto' if ok else 'falhou' }}"
+          >{{ 'ok' if ok else 'falta' }}</span></div>
+      {% endfor %}
+    </div>
+    <p class="sub" style="font-size:11px;margin-top:auto;line-height:1.55">
+      Motor: Tracy (Rausch et al., 2020) · BLAST contra banco local curado.
+      <strong>O relatório relata, não conclui.</strong> Uso em pesquisa.</p>
+  </aside>
+</div>
+
+<script nonce="{{ request.state.nonce }}">
+/* Envio com progresso e desfecho explícito.
+ *
+ * O <form> acima continua válido sozinho: se este script não rodar, o navegador
+ * envia do jeito antigo. O que ele acrescenta é o que o <form> não sabe fazer —
+ * dizer quanto já subiu dos 26 MB de uma corrida real e, principalmente, dizer
+ * com todas as letras quando o envio MORREU no meio. Um upload que termina pela
+ * metade sem avisar é o defeito mais grave já encontrado neste projeto
+ * (relatório com 33 das 40 amostras); a versão muda deixava exatamente isso em
+ * aberto para o usuário.
+ *
+ * XMLHttpRequest e não fetch: fetch não expõe progresso de upload. */
+(function () {
+  var form = document.getElementById('envio');
+  if (!form || !window.FormData || !window.XMLHttpRequest) return;
+  if (!('upload' in new XMLHttpRequest())) return;  // sem progresso: envio nativo
+
+  var entrada = document.getElementById('arquivos');
+  var botao = document.getElementById('botao-enviar');
+  var resumo = document.getElementById('resumo');
+  var caixa = document.getElementById('progresso');
+  var barra = document.getElementById('progresso-barra');
+  var texto = document.getElementById('progresso-texto');
+  var falha = document.getElementById('falha');
+
+  var ACEITAS = ['.ab1', '.abi', '.scf'];
+  // Do documento, e não do form: o grupo de modos fica ACIMA do <form> no
+  // HTML (é a decisão que precede o preenchimento), então buscá-lo pelo form
+  // devolvia zero elementos e o modo ficava preso em "par".
+  var modos = document.querySelectorAll('input[name=modo]');
+  var rotulo = document.getElementById('rot-arquivos');
+
+  function modoAtual() {
+    for (var i = 0; i < modos.length; i++) if (modos[i].checked) return modos[i].value;
+    return 'par';
+  }
+
+  /* O modo troca o SELETOR, não só o texto: em "corrida" o campo abre a escolha
+     de pasta (webkitdirectory), em "par" abre a de arquivos. Sem isto os dois
+     cartões eram enfeite — quem escolhesse "corrida inteira" continuava tendo
+     de selecionar arquivo por arquivo. */
+  function aplicarModo() {
+    var lote = modoAtual() === 'lote';
+    entrada.webkitdirectory = lote;
+    entrada.value = '';
+    resumo.textContent = '';
+    limparFalha();
+    rotulo.innerHTML = lote
+      ? '3 · A pasta da corrida'
+      : '3 · Os dois arquivos <code>.ab1</code> da amostra';
+    for (var i = 0; i < modos.length; i++) {
+      modos[i].closest('.modo').classList.toggle('destaque', modos[i].checked);
+    }
+    botao.textContent = lote ? 'Processar corrida' : 'Montar o par';
+  }
+  for (var m = 0; m < modos.length; m++) modos[m].addEventListener('change', aplicarModo);
+  aplicarModo();
+  var maxArquivos = parseInt(form.getAttribute('data-max-arquivos'), 10) || 0;
+  var maxBytes = parseInt(form.getAttribute('data-max-bytes'), 10) || 0;
+  var enviando = false;
+
+  function mb(n) { return (n / 1048576).toFixed(1).replace('.', ',') + ' MB'; }
+
+  function aceito(arquivo) {
+    var nome = (arquivo.name || '').toLowerCase();
+    for (var i = 0; i < ACEITAS.length; i++) {
+      if (nome.slice(-ACEITAS[i].length) === ACEITAS[i]) return true;
+    }
+    return false;
+  }
+
+  function selecao() {
+    var lista = entrada.files || [];
+    var n = 0, bytes = 0, ignorados = 0, subpastas = {}, nSub = 0;
+    for (var i = 0; i < lista.length; i++) {
+      if (!aceito(lista[i])) { ignorados++; continue; }
+      n++; bytes += lista[i].size;
+      // Escolher uma pasta VARRE as subpastas, em silencio. Em 2026-08-07 isso
+      // fez um teste de 81 arquivos virar 161: a subpasta `organizado/` foi
+      // junto, e o resultado pareceu "montou algumas" quando na verdade as 81
+      // do teste nao montaram NENHUMA -- as que montaram eram as de carona.
+      // O caminho relativo e a unica pista disso, e so existe aqui no navegador.
+      var rel = lista[i].webkitRelativePath || '';
+      var partes = rel.split('/');
+      if (partes.length > 2) {
+        var sub = partes.slice(1, -1).join('/');
+        if (!subpastas[sub]) { subpastas[sub] = 0; nSub++; }
+        subpastas[sub]++;
+      }
+    }
+    return { n: n, bytes: bytes, ignorados: ignorados,
+             subpastas: subpastas, nSub: nSub };
+  }
+
+  function mostrarFalha(msg) {
+    falha.textContent = msg;
+    falha.style.display = '';
+  }
+
+  function limparFalha() {
+    falha.textContent = '';
+    falha.style.display = 'none';
+  }
+
+  function destravar() {
+    enviando = false;
+    botao.disabled = false;
+    botao.textContent = modoAtual() === 'lote' ? 'Processar corrida' : 'Montar o par';
+    caixa.style.display = 'none';
+    window.onbeforeunload = null;
+  }
+
+  entrada.addEventListener('change', function () {
+    limparFalha();
+    var s = selecao();
+    if (!s.n) {
+      resumo.textContent = entrada.files && entrada.files.length
+        ? 'Nenhum arquivo .ab1/.abi/.scf na seleção.' : '';
+      return;
+    }
+    resumo.textContent = s.n + ' arquivo(s) · ' + mb(s.bytes)
+      + (s.ignorados ? ' · ' + s.ignorados + ' de outro tipo serão ignorados' : '');
+
+    var av = document.getElementById('aviso-subpasta');
+    if (av) {
+      if (s.nSub) {
+        var nomes = Object.keys(s.subpastas).slice(0, 3);
+        var quantos = 0;
+        for (var k in s.subpastas) { quantos += s.subpastas[k]; }
+        av.textContent = '⚠️ A seleção inclui ' + quantos + ' arquivo(s) de '
+          + s.nSub + ' subpasta(s) (' + nomes.join(', ')
+          + (s.nSub > nomes.length ? ', …' : '')
+          + '). Eles vão junto. Se você queria só a pasta de cima, escolha-a '
+          + 'sem as subpastas ou selecione os arquivos direto.';
+        av.style.display = '';
+      } else {
+        av.style.display = 'none';
+      }
+    }
+  });
+
+  form.addEventListener('submit', function (ev) {
+    if (enviando) { ev.preventDefault(); return; }
+    var s = selecao();
+    if (!s.n) {
+      ev.preventDefault();
+      mostrarFalha(modoAtual() === 'lote'
+        ? 'Nenhum arquivo .ab1/.abi/.scf nessa pasta.'
+        : 'Escolha os dois arquivos .ab1 da amostra.');
+      return;
+    }
+    // Em modo par o teto é 2, e não o do lote: mandar 30 arquivos aqui não é
+    // um par, e deixar passar produziria um lote com nome de amostra.
+    if (modoAtual() === 'par' && s.n !== 2) {
+      ev.preventDefault();
+      mostrarFalha('Um par são exatamente 2 arquivos, e a seleção tem ' + s.n
+        + '. Para mandar a corrida inteira, escolha "Uma corrida inteira" acima.');
+      return;
+    }
+    // Conferido aqui só para não fazer o usuário subir 26 MB até o servidor
+    // recusar; quem manda é o teto do servidor, que é conferido de novo lá.
+    if (maxArquivos && s.n > maxArquivos) {
+      ev.preventDefault();
+      mostrarFalha(s.n + ' arquivos selecionados; o teto por lote é ' + maxArquivos + '.');
+      return;
+    }
+    if (maxBytes && s.bytes > maxBytes) {
+      ev.preventDefault();
+      mostrarFalha('A seleção tem ' + mb(s.bytes) + '; o teto por lote é '
+                   + mb(maxBytes) + '.');
+      return;
+    }
+
+    ev.preventDefault();
+    limparFalha();
+    enviando = true;
+    botao.disabled = true;
+    botao.textContent = 'Enviando…';
+    caixa.style.display = '';
+    barra.style.width = '0%';
+    texto.textContent = 'Enviando ' + s.n + ' arquivo(s) · ' + mb(s.bytes) + '…';
+    // Fechar a aba agora aborta o envio: o lote fica pela metade no servidor.
+    window.onbeforeunload = function () {
+      return 'O envio ainda não terminou. Se sair agora, a corrida não será processada.';
+    };
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', form.getAttribute('action'), true);
+
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      var pct = Math.round(100 * e.loaded / e.total);
+      barra.style.width = pct + '%';
+      texto.textContent = mb(e.loaded) + ' de ' + mb(e.total) + ' (' + pct + '%)'
+        + (pct >= 100 ? ' · gravando no servidor…' : '');
+    };
+
+    xhr.onload = function () {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        // O servidor responde 303 para /lotes/{id}; o XHR já seguiu o
+        // redirecionamento, e responseURL é a página final do lote.
+        window.onbeforeunload = null;
+        location.assign(xhr.responseURL || '/');
+        return;
+      }
+      var detalhe = '';
+      try { detalhe = (JSON.parse(xhr.responseText) || {}).detail || ''; } catch (e) {}
+      destravar();
+      // 5xx é problema DO SERVIDOR: mandar "corrija a seleção" ali é conselho
+      // errado — não há nada errado com a seleção, e reenviar não resolve.
+      // Visto em 06/08 simulando disco cheio (507).
+      var doServidor = xhr.status >= 500;
+      mostrarFalha((doServidor ? 'O servidor não conseguiu receber: '
+                               : 'O lote não foi aceito: ')
+        + (detalhe || 'o servidor respondeu ' + xhr.status)
+        + (doServidor ? ' Nada foi processado.'
+                      : ' — nada foi processado. Corrija a seleção e envie de novo.'));
+    };
+
+    var interrompido = function () {
+      destravar();
+      // ⚠️ Esta mensagem já foi uma AFIRMAÇÃO ("esta corrida NÃO foi
+      // processada") e era falsa. Testando em 2026-08-05: cortada a conexão aos
+      // 35%, o servidor já tinha o corpo inteiro (o Starlette recebe tudo antes
+      // do handler rodar), processou as 40 amostras e publicou o lote como
+      // pronto — enquanto a tela dizia o contrário em vermelho.
+      //
+      // O navegador NÃO SABE o que o servidor fez: ele perdeu a resposta, não o
+      // envio. A única frase honesta aqui é a que manda conferir a lista — e
+      // conferir antes de reenviar evita a corrida duplicada com dois
+      // protocolos, que é o estrago prático deste caso.
+      mostrarFalha('A conexão caiu antes de o servidor confirmar. NÃO dá para '
+        + 'saber daqui se a corrida chegou inteira: ela pode ter sido aceita e '
+        + 'estar processando. Recarregue esta página e veja em "Suas corridas" '
+        + 'antes de enviar de novo — reenviar sem conferir cria duas corridas '
+        + 'iguais com protocolos diferentes.');
+    };
+    xhr.onerror = interrompido;
+    xhr.onabort = interrompido;
+
+    xhr.send(new FormData(form));
+  });
+})();
+</script>
+
+{% endblock %}

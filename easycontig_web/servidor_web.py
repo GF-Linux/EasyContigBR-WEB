@@ -1,11 +1,10 @@
-"""
-main.py — o servidor web. `uvicorn easycontig_web.main:app`
-
-Regra de ouro deste arquivo: ele NÃO processa nada. Recebe arquivo, grava em
-disco, enfileira e responde. Todo trabalho pesado é do `trabalhador.py`, em
-outro processo — é a diferença entre aguentar 100 pessoas e cair com 20
-(ADR 0050).
-"""
+#? SERVIDOR WEB — Decisão sobre não processar nada aqui 04/08/2026
+#!
+#! 1. Sobe assim: `uvicorn easycontig_web.servidor_web:app`
+#! 2. ⚠️ REGRA DE OURO: este arquivo NÃO processa nada. Recebe arquivo, grava em
+#!    disco, enfileira e responde.
+#! 3. Todo trabalho pesado é do trabalhador, em outro processo.
+#! 4. É a diferença entre aguentar 100 pessoas e cair com 20.
 from __future__ import annotations
 
 import errno
@@ -28,9 +27,18 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import amostras as mod_amostras
-from . import (auth, bancos, config, cotas, executor, fila, limites, pedidos,
-               perfil, retencao, traco)
+from .dados import leitura_de_amostras as mod_amostras
+from .contas import autenticacao as auth
+from .dados import bancos_de_referencia as bancos
+from . import configuracao as config
+from .contas import cota_de_espaco as cotas
+from .processamento import executor_de_lote as executor
+from .processamento import fila_de_lotes as fila
+from .contas import limite_de_requisicoes as limites
+from .dados import pedidos_entre_labs as pedidos
+from .contas import perfil_do_laboratorio as perfil
+from .dados import expurgo_por_retencao as retencao
+from .dados import cromatograma as traco
 
 cfg = config.carregar()
 

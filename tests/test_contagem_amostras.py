@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from easycontig_web import amostras
+from easycontig_web.dados import leitura_de_amostras as amostras
 
 
 @pytest.fixture(autouse=True)

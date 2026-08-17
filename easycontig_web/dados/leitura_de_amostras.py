@@ -1,15 +1,13 @@
-''' Amostras_re.py - leitura por amostra do 'relatório.json' já gravado
-
-#! 1. Nenhuma decisã científica mora aqui.
-#! 2. Os limiares são reescritos - Cada ressalva carrega o seu 'rule'
-#! 3. Ausência continua ausência.
-#! 4. 'Não achou' e 'não conseguiu procuar' são coisas diferentes.
-
-#* Autor: Gustavo Gonçalves Freitas - LHV
+#? LEITURA DE AMOSTRAS — Decisão sobre ler o relatório já gravado 05/08/2026
+#!
+#! 1. Lê, por amostra, o `relatorio.json` que já foi gravado.
+#! 2. ⚠️ Nenhuma decisão científica mora aqui.
+#! 3. Os limiares são reescritos — cada ressalva carrega o seu `rule`.
+#! 4. Ausência continua ausência.
+#! 5. "Não achou" e "não conseguiu procurar" são coisas diferentes.
+#!
+#* Autor: Gustavo Gonçalves Freitas — LHV
 #* Copyright (c) 2026 Gustavo Gonçalves Freitas. Todos os direitos reservados.
-
-
-'''
 
 
 from __future__ import annotations

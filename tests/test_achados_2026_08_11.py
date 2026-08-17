@@ -27,7 +27,7 @@ def app_teste(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     return main
 
@@ -152,7 +152,7 @@ def test_o_recado_do_app_aparece_uma_vez_e_some(app_teste, cliente):
     Sem o "de uma vez só", o recado reapareceria em todo recarregamento e a
     pessoa ficaria olhando um erro que já resolveu.
     """
-    from easycontig_web import perfil
+    from easycontig_web.contas import perfil_do_laboratorio as perfil
     perfil.salvar(app_teste.cfg.sqlite_path, "m.peckle@ufrrj.br", nome="Maristela",
                   especies="Anaplasma platys")
     chave = perfil.chave_de(app_teste.cfg.sqlite_path, "m.peckle@ufrrj.br")
@@ -197,7 +197,7 @@ def test_producao_recusa_proxies_confiaveis_em_branco(monkeypatch):
     login vinte vezes tranca a entrada do site. Não há conserto em código (atrás
     de um proxy que não se confia o servidor não distingue dois clientes), então
     o que se exige é a DECLARAÇÃO, como o `EASYCONTIG_DOMINIO` já faz com `*`."""
-    from easycontig_web import config
+    from easycontig_web import configuracao as config
     for k, v in {"EASYCONTIG_AUTH": "google", "EASYCONTIG_SECRET_KEY": "x",
                  "EASYCONTIG_HTTPS_ONLY": "1", "EASYCONTIG_DOMINIO": "ufrrj.br",
                  "EASYCONTIG_URL_BASE": "https://e.ufrrj.br"}.items():
@@ -215,7 +215,7 @@ def test_producao_recusa_proxies_confiaveis_em_branco(monkeypatch):
 
 def test_nenhum_e_o_mesmo_conjunto_vazio_de_sempre(monkeypatch):
     """`nenhum` muda o que a produção EXIGE, nunca o que o limitador FAZ."""
-    from easycontig_web import limites
+    from easycontig_web.contas import limite_de_requisicoes as limites
     monkeypatch.setenv("EASYCONTIG_PROXIES_CONFIAVEIS", "nenhum")
     assert limites.proxies_confiaveis() == set()
     monkeypatch.setenv("EASYCONTIG_PROXIES_CONFIAVEIS", "  NENHUM  ")

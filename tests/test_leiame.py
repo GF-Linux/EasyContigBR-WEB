@@ -17,7 +17,7 @@ def _texto():
 
 
 def test_a_rota_existe_e_exige_sessao(cliente_sem_sessao=None):
-    from easycontig_web.main import app
+    from easycontig_web.servidor_web import app
     rotas = {r.path for r in app.routes}
     assert "/leiame" in rotas
 

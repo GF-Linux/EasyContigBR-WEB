@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}EasyContig BR{% endblock %}</title>
+<link rel="icon" href="/estatico/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/estatico/favicon.svg">
+<style>
+/* ───────────────────────────────────────────────────────────────────────────
+   Paleta do design aprovado em 2026-08-05 (ADR 0052). Não foi escolhida aqui:
+   foi amostrada do desenho — #12131C é 42% dos pixels, #232532 é 30%, #161826
+   é 14%, e o acento é o violeta #9184D9. Verde/vermelho/âmbar são SEMÂNTICOS
+   (base, falha, pendência), nunca decoração — é o que faz "sem acerto" e "não
+   montou" se distinguirem de relance.
+   A tela é comprometida com o escuro: é a mesma sala do aplicativo desktop.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root{
+  --fundo:#12131C; --painel:#232532; --interno:#161826; --selecao:#2B2741;
+  --linha:#2c2f40; --linha-forte:#3a3e52;
+  --tinta:#E8EAF2; --apoio:#A9AEC4; --fraco:#6E7490;
+  --violeta:#9184D9; --violeta-claro:#A99EE6; --violeta-fundo:rgba(145,132,217,.13);
+  --verde:#3FB950; --vermelho:#F0524A; --ambar:#E3A34A; --azul:#58A6FF;
+  --sans:"Inter","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  --mono:"JetBrains Mono","Consolas","SFMono-Regular",ui-monospace,monospace;
+}
+*{ box-sizing:border-box }
+/* A PÁGINA NUNCA ROLA PARA O LADO. O que não couber rola DENTRO da própria
+   caixa (`overflow-x:auto` onde há tabela ou linha longa) — conteúdo largo não
+   pode empurrar a página inteira e deixar a lateral fora de alcance. */
+html,body{ max-width:100%; overflow-x:hidden }
+body{ margin:0; background:var(--fundo); color:var(--tinta);
+      font:15px/1.6 var(--sans); -webkit-font-smoothing:antialiased }
+/* Palavra sem espaço (accession, nome de arquivo, URL) não estoura a caixa. */
+h1,h2,p,td,th,li,.sub,.nm{ overflow-wrap:anywhere }
+a{ color:var(--violeta-claro); text-decoration:none }
+a:hover{ text-decoration:underline }
+:focus-visible{ outline:2px solid var(--violeta); outline-offset:2px; border-radius:4px }
+
+/* ── casca: lateral fixa + área de trabalho ──────────────────────────────── */
+.casca{ display:grid; grid-template-columns:212px minmax(0,1fr); min-height:100vh }
+.casca.sozinha{ grid-template-columns:1fr }
+@media(max-width:820px){ .casca{ grid-template-columns:1fr } }
+
+.lateral{ background:var(--painel); border-right:1px solid var(--linha);
+  display:flex; flex-direction:column; padding:14px 0 }
+@media(max-width:820px){ .lateral{ border-right:0; border-bottom:1px solid var(--linha) } }
+.lat-topo{ display:flex; align-items:center; gap:9px; padding:0 14px 13px;
+  color:inherit }
+.lat-topo:hover{ text-decoration:none }
+.lat-topo:hover b{ color:var(--violeta-claro) }
+.lat-topo .selo{ width:30px; height:30px; flex:none; border-radius:50%;
+  background:#F5F4F2; padding:3px; display:grid; place-items:center }
+.lat-topo .selo svg{ width:100%; height:100%; display:block }
+.lat-topo b{ font-size:13.5px; font-weight:700; letter-spacing:.01em }
+.lat-topo b span{ color:var(--apoio); font-weight:400 }
+
+/* ── caixa de quem entrou ────────────────────────────────────────────────────
+   Refeita em 2026-08-06 no mesmo desenho da caixa da marca acima: RETRATO à
+   ESQUERDA, nome ao lado, e as ações abaixo — cada uma na sua própria caixa.
+   Antes o nome flutuava acima do avatar e "perfil · sair" era um par de links
+   de 9px espremidos embaixo: não parecia botão, não casava com o resto da
+   lateral e não havia caminho de volta para o workspace.
+   O retrato mostra a FOTO quando existe; antes mostrava sempre a inicial, então
+   quem trocava a foto concluía que o envio tinha falhado. */
+/* Alinhada com o resto da lateral: o mesmo recuo de 8px de `.lat-acao` e das
+   corridas, para as ações não parecerem uma caixa flutuando dentro de outra —
+   era o que fazia o bloco parecer mal dimensionado. */
+.perfil{ padding:10px 8px 11px; border-top:1px solid var(--linha);
+  border-bottom:1px solid var(--linha) }
+/* Recuo de 6px (+8px da caixa = 14px) para o RETRATO cair exatamente sob o selo
+   da marca: são dois círculos de 30px empilhados, e 3px de diferença entre eles
+   é o que fazia a caixa parecer torta. */
+.perfil .ident{ display:flex; align-items:center; gap:9px; padding:0 6px 9px }
+.perfil .av{ width:30px; height:30px; border-radius:50%; flex:none; display:grid;
+  place-items:center; font-size:11px; font-weight:800; color:#14121f;
+  overflow:hidden; text-decoration:none;
+  background:linear-gradient(135deg,var(--violeta),#6f63b8) }
+.perfil .av img{ width:100%; height:100%; object-fit:cover; display:block }
+.perfil .quem{ min-width:0; flex:1 }
+/* Até DUAS linhas, em vez de uma linha cortada. "Gustavo Gonçalves Freittas"
+   pede 169px numa caixa de 144: numa linha só sobrava "Gustavo Gonçalves …", e
+   o sobrenome — que é o que distingue duas contas do mesmo laboratório — nunca
+   aparecia. Numa lateral de 212px nenhum ajuste de fonte resolve isso; duas
+   linhas resolvem, e a terceira ainda corta para a caixa não crescer sem fim. */
+.perfil .nm{ font-size:12.5px; font-weight:600; line-height:1.3; color:var(--tinta);
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+  overflow:hidden }
+.perfil .nm:hover{ color:var(--violeta-claro); text-decoration:none }
+
+/* As ações em caixa própria, como `.lat-acao`. O Workspace ocupa a linha
+   inteira porque é o caminho de volta ao trabalho — o que faltava. */
+.perfil .acoes{ display:grid; grid-template-columns:1fr 1fr; gap:4px }
+.perfil .acoes .larga{ grid-column:1 / -1 }
+/* `line-height:1.2` explícito: sem ele o botão herdava o 1.6 do corpo — texto
+   de 12px virava 19,2px de linha e cada botão saía com 37,2px em vez dos 32 que
+   o `min-height` declara. Eram 15% a mais de altura em três botões, e é o que
+   deixava o bloco desproporcional dentro de uma lateral de 212px. */
+.perfil .ac{ display:flex; align-items:center; justify-content:center; gap:5px;
+  padding:7px 8px; line-height:1.2; border-radius:7px; font-size:12px;
+  color:var(--apoio); border:1px solid var(--linha); background:var(--interno);
+  min-height:32px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.perfil .ac:hover{ color:var(--tinta); border-color:var(--linha-forte);
+  text-decoration:none }
+.perfil .ac.viva{ background:var(--selecao); border-color:var(--violeta);
+  color:var(--tinta); font-weight:600 }
+.perfil .ac.sair:hover{ color:var(--vermelho); border-color:rgba(240,82,74,.45) }
+/* O Sair virou <button> dentro de um <form method=post> (achado L2). Botão não
+   herda fonte do pai como <a> herda, e nasce com a fonte do sistema — sem isto
+   ele saía com outra letra que os três vizinhos. O `display:contents` do form é
+   o que mantém o botão como célula da grade `.acoes`, e não filho de uma caixa
+   nova que quebraria o par Sair|Labs. */
+.perfil .ac:is(button){ font-family:inherit; font-size:12px; cursor:pointer;
+  width:100%; -webkit-appearance:none; appearance:none }
+
+.sec{ font-family:var(--mono); font-size:9px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--fraco); padding:14px 14px 7px }
+.corridas{ display:flex; flex-direction:column; gap:1px; padding:0 8px;
+  max-height:46vh; overflow-y:auto }
+.cr-linha{ display:flex; align-items:stretch; gap:2px }
+.cr-linha .cr{ flex:1; min-width:0 }
+.cr-acao{ display:grid; place-items:center; width:26px; border-radius:7px;
+  color:var(--fraco); font-size:13px; flex:none }
+.cr-acao:hover{ background:var(--interno); color:var(--violeta-claro);
+  text-decoration:none }
+.cr{ display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:7px;
+  font-size:12.5px; color:var(--apoio); border:1px solid transparent }
+.cr:hover{ background:var(--interno); text-decoration:none; color:var(--tinta) }
+.cr.viva{ background:var(--selecao); border-color:var(--violeta); color:var(--tinta);
+  font-weight:600 }
+.cr .pt{ width:6px; height:6px; border-radius:50%; flex:none; background:var(--fraco) }
+.cr .pt.pronto{ background:var(--verde) } .cr .pt.falhou{ background:var(--vermelho) }
+.cr .pt.rodando,.cr .pt.na_fila,.cr .pt.recebendo{ background:var(--ambar) }
+.cr .nome{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.lat-acao{ margin:10px 8px 0; padding:7px 9px; border-radius:7px; font-size:12.5px;
+  color:var(--apoio); display:block }
+.lat-acao:hover{ background:var(--interno); color:var(--tinta); text-decoration:none }
+/* O contador de pedidos esperando resposta. Este app não manda e-mail — a
+   lateral é o ÚNICO lugar onde um pedido pode chamar atenção, então o número
+   ganha o violeta, que é o único acento da paleta, e o link inteiro clareia
+   quando há algo pendente. Sem pendência, o link é discreto como os vizinhos. */
+.lat-acao.tem{ color:var(--tinta) }
+.lat-acao .cont{ float:right; font-family:var(--mono); font-size:10.5px;
+  background:var(--violeta); color:#14121f; font-weight:700; border-radius:20px;
+  padding:.1rem .42rem; margin-left:.4rem }
+.lat-pe{ margin-top:auto; padding:12px 14px 0; border-top:1px solid var(--linha);
+  font-family:var(--mono); font-size:9.5px; color:var(--fraco) }
+
+/* A ÁREA DE TRABALHO ACOMPANHA A TELA.
+   Era `max-width:64rem` (1024px) fixo. No Deck cabia justo e parecia certo, mas
+   num monitor de 1920 sobravam **416px de vazio à direita** (medido) e as
+   caixas ficavam apertadas num canto com tela de sobra. O teto agora é generoso
+   e existe só para telas muito largas, onde uma linha atravessando 2500px
+   deixaria de ser legível.
+   A MEDIDA DE LEITURA passa a ser responsabilidade do TEXTO (`.leitura`), não
+   do contêiner: assim tabela, grade e cartão usam a largura toda e só o
+   parágrafo corrido se contém. */
+.trabalho{ padding:clamp(16px,1.6vw,28px) clamp(16px,1.8vw,32px) 40px; min-width:0 }
+.trabalho > .interno{ max-width:112rem }
+.leitura{ max-width:74ch }
+
+/* ── tipografia e blocos ─────────────────────────────────────────────────── */
+h1{ font-size:1.32rem; font-weight:800; letter-spacing:-.02em; margin:0 0 .2rem }
+h2{ font-size:.98rem; font-weight:700; margin:1.6rem 0 .55rem; letter-spacing:-.005em }
+.sub{ color:var(--apoio); font-size:.86rem }
+.fraco{ color:var(--fraco) }
+.cartao{ background:var(--painel); border:1px solid var(--linha); border-radius:10px;
+  padding:1.05rem 1.2rem; margin-bottom:.9rem }
+table{ border-collapse:collapse; width:100% }
+th,td{ text-align:left; padding:.45rem .55rem; border-bottom:1px solid var(--linha);
+  font-size:.87rem; vertical-align:top }
+th{ color:var(--fraco); font-weight:600; font-family:var(--mono); font-size:.72rem;
+  letter-spacing:.06em; text-transform:uppercase }
+td{ font-variant-numeric:tabular-nums }
+
+/* estados: cor semântica, sempre acompanhada de palavra — cor sozinha não informa */
+.rotulo{ display:inline-block; padding:.14rem .55rem; border-radius:99px;
+  font-family:var(--mono); font-size:.7rem; border:1px solid var(--linha-forte);
+  color:var(--apoio) }
+.recebendo,.na_fila{ color:var(--apoio) }
+.rodando{ color:var(--ambar); border-color:rgba(227,163,74,.4) }
+.pronto{ color:var(--verde); border-color:rgba(63,185,80,.4) }
+.falhou{ color:var(--vermelho); border-color:rgba(240,82,74,.4) }
+.erro{ color:var(--vermelho) }
+
+button,.botao{ font:inherit; font-size:.88rem; font-weight:600; padding:.5rem .95rem;
+  border-radius:8px; cursor:pointer; border:1px solid var(--violeta);
+  background:var(--violeta); color:#14121f; display:inline-block; text-decoration:none }
+button:hover,.botao:hover{ background:var(--violeta-claro); text-decoration:none }
+button[disabled]{ opacity:.45; cursor:not-allowed }
+.secundario{ background:transparent; color:var(--violeta-claro) }
+.secundario:hover{ background:var(--violeta-fundo) }
+input[type=text],input[type=email]{ font:inherit; font-size:.9rem; padding:.55rem .7rem;
+  width:100%; border:1px solid var(--linha-forte); border-radius:8px;
+  background:var(--interno); color:var(--tinta) }
+input[type=text]::placeholder,input[type=email]::placeholder{ color:var(--fraco) }
+input[type=file]{ font:inherit; font-size:.84rem; color:var(--apoio) }
+.campo{ margin-bottom:.85rem }
+.barra{ height:6px; background:var(--linha); border-radius:99px; overflow:hidden }
+.barra > i{ display:block; height:100%; background:var(--violeta) }
+code{ font-family:var(--mono); font-size:.85em; background:var(--interno);
+  padding:.1rem .32rem; border-radius:4px; color:var(--apoio) }
+pre{ font-family:var(--mono); font-size:.8rem }
+.rodape{ color:var(--fraco); font-size:.78rem; padding:1.8rem 0 0; margin-top:1.6rem;
+  border-top:1px solid var(--linha); max-width:74ch; line-height:1.6 }
+{% block estilo %}{% endblock %}
+</style>
+</head>
+<body>
+
+<div class="casca{% if not usuario %} sozinha{% endif %}">
+{% if usuario %}
+  <aside class="lateral">
+    {# A marca leva para o início — que É a página do workspace. Era só um
+       desenho: de dentro do perfil ou dos bancos não havia como voltar ao
+       trabalho a não ser por uma corrida já existente na lista abaixo, e quem
+       ainda não tinha mandado nada ficava sem caminho nenhum. #}
+    <a class="lat-topo" href="/" title="Início — enviar ou abrir uma sequência">
+      <span class="selo">{% include "_logo.html" %}</span>
+      <b>EasyContig <span>BR</span></b>
+    </a>
+
+    <div class="perfil">
+      <div class="ident">
+        <a href="/perfil" class="av" title="Seu perfil">
+          {%- if perfil_lateral and perfil_lateral.foto -%}
+            <img src="/perfil/foto" alt="">
+          {%- else -%}
+            {{ ((perfil_lateral.nome if perfil_lateral else '') or usuario.nome
+                or usuario.email)[:2]|upper }}
+          {%- endif -%}
+        </a>
+        <span class="quem">
+          <a class="nm" href="/perfil" title="{{ usuario.email }}"
+            >{{ (perfil_lateral.nome if perfil_lateral else '') or usuario.nome
+                or usuario.email }}</a>
+        </span>
+      </div>
+      <div class="acoes">
+        <a class="ac larga{% if pagina is defined and pagina == 'inicio' %} viva{% endif %}"
+           href="/" title="Workspace: enviar ou abrir uma sequência">◧ Workspace</a>
+        <a class="ac{% if pagina is defined and pagina == 'perfil' %} viva{% endif %}"
+           href="/perfil">Perfil</a>
+        <a class="ac{% if pagina is defined and pagina == 'leiame' %} viva{% endif %}"
+           href="/leiame" title="Como nomear os arquivos e como o motor decide F/R">Readme</a>
+        {# Sair e Labs na mesma linha, e Labs cai logo abaixo do Readme (mesma
+           coluna, uma linha adiante) porque a grade preenche da esquerda para a
+           direita: Workspace (linha cheia), Perfil|Readme, Sair|Labs. #}
+        {# Sair é POST: como GET, um <img src="/sair"> em página alheia derrubava
+           a sessão de quem abrisse (achado L2). O form não tem borda nem
+           espaçamento próprios para o botão ocupar a célula da grade igual aos
+           links vizinhos. #}
+        <form method="post" action="/sair" style="display:contents">
+          <button type="submit" class="ac sair">Sair</button>
+        </form>
+        <a class="ac{% if pagina is defined and pagina == 'labs' %} viva{% endif %}"
+           href="/labs" title="Laboratórios cadastrados no site">Labs</a>
+      </div>
+    </div>
+
+    {# WorkFolder, e não "Corridas": é o armazenamento do perfil — o lugar onde
+       a pessoa acha o que já mandou, abre o relatório e apaga. Fica logo abaixo
+       do nome porque pertence à conta, não à navegação (pedido do autor, 05/08).
+       O uso real é par a par (ADR 0051), então o que se acumula aqui é o
+       histórico. #}
+    <a class="lat-acao" href="/bancos" style="margin:8px 8px 0"
+      >▧ Bancos de referência</a>
+
+    {# A caixa de pedidos de amostra (ADR 0052). Fica na lateral, e não só numa
+       aba do Labs, porque o app NÃO MANDA E-MAIL: se o número não estiver à
+       vista em toda página, um pedido pode ficar meses sem ninguém saber que
+       chegou. O contador conta só o que espera resposta DESTA conta — o que eu
+       pedi e ainda não responderam não é tarefa minha. #}
+    <a class="lat-acao{% if pedidos_pendentes %} tem{% endif %}" href="/pedidos"
+       style="margin:2px 8px 0"
+       title="Pedidos de amostra entre laboratórios"
+      >✉ Pedidos de amostra{% if pedidos_pendentes
+        %}<span class="cont">{{ pedidos_pendentes }}</span>{% endif %}</a>
+
+    <div class="sec">WorkFolder</div>
+    <div class="corridas">
+      {% for l in (corridas or []) %}
+        {# Sem `?tela_do_lote=1` de propósito: uma corrida de UMA amostra — que é
+           o caso normal, o par F+R da ADR 0051 — precisa cair direto na página
+           da amostra. Pôr o parâmetro aqui anulava esse atalho em todo acesso
+           pela lateral, que é justamente por onde a pessoa volta. #}
+        <span class="cr-linha">
+          <a class="cr{% if lote is defined and lote and lote.id == l.id %} viva{% endif %}"
+             {# O `title` mostrava só o status — e quatro corridas com o mesmo
+                nome comprido ("F13719 #80649 27/07") ficavam IDÊNTICAS na
+                lateral, cortadas no mesmo ponto, sem nada que as separasse nem
+                ao passar o mouse. Medido em 06/08: 4 de 5 cortadas, 151 px de
+                texto numa caixa de 105. Agora o nome inteiro vem junto, e a
+                data desempata o que o nome não desempata. #}
+             href="/lotes/{{ l.id }}"
+             title="{{ l.nome or l.id }} — {{ l.status.replace('_', ' ') }}{%
+               if l.criado_em %} · {{ l.criado_em[:10] }}{% endif %}">
+            <i class="pt {{ l.status }}"></i>
+            <span class="nome">{{ l.nome or l.id }}</span>
+          </a>
+          {% if l.status == 'pronto' %}
+            {# Dois atalhos por corrida, porque clicar no nome abre a AMOSTRA (o
+               par vai direto para o cromatograma) e a página da corrida — onde
+               ficam relatório, CSV e o apagar — não tinha caminho próprio. #}
+            <a class="cr-acao" href="/lotes/{{ l.id }}/relatorio" target="_blank"
+               rel="noopener" title="Abrir o relatório desta corrida">▤</a>
+          {% endif %}
+          <a class="cr-acao" href="/lotes/{{ l.id }}?tela_do_lote=1"
+             title="Página da corrida: relatório, CSV e apagar">⚙</a>
+        </span>
+      {% else %}
+        <span class="lat-acao fraco" style="font-size:11.5px">Nenhuma ainda.</span>
+      {% endfor %}
+    </div>
+
+    <div class="lat-pe">{{ usuario.email }}</div>
+  </aside>
+{% endif %}
+
+  <main class="trabalho">
+    <div class="interno">
+      {% block conteudo %}{% endblock %}
+
+      <div class="rodape">
+        Motor de montagem: Tracy (Rausch et al., BMC Genomics 2020).
+        Identificação por BLAST contra banco local curado.
+        <strong>O relatório relata, não conclui</strong> — todo limiar vai impresso
+        nele. Uso em pesquisa.
+        {# Autoria no rodape, nao no cabecalho: quem abre o site vem buscar um
+           resultado, nao saber quem fez. Mas o credito precisa existir e ser
+           rastreavel -- e um trabalho academico, e o link e a procedencia. #}
+        <div style="margin-top:.7rem">
+          Idealizado e desenvolvido por
+          <a href="https://github.com/GF-Linux" rel="noopener"
+             target="_blank">Gustavo Gonçalves Freitas</a> ·
+          LHV — Laboratório de Hemoparasitos e Vetores, UFRRJ.
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script nonce="{{ request.state.nonce }}">
+/* A confirmação de "apagar" morava em `onsubmit="return confirm(…)"`, e
+   manipulador inline é justamente o que a CSP com nonce recusa — mantê-lo
+   obrigaria a `script-src 'unsafe-inline'`, que é o mesmo que não ter CSP para
+   o único risco que importa aqui (já tivemos um XSS armazenado em 06/08).
+   Um ouvinte delegado atende todos os formulários com `data-confirmar`, e um
+   formulário novo só precisa do atributo. */
+document.addEventListener("submit", function (ev) {
+  var f = ev.target.closest && ev.target.closest("form[data-confirmar]");
+  if (f && !confirm(f.getAttribute("data-confirmar"))) { ev.preventDefault(); }
+}, true);
+</script>
+</body>
+</html>

@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% block titulo %}Perfil — EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* Sem teto próprio: herda o da casca, que acompanha a tela (2026-08-06). O
+   `78rem` que estava aqui era mais um lugar prendendo a página num canto do
+   monitor, e o cabeçalho não cobria a largura disponível. */
+.cabeca{ display:flex; gap:1.4rem; align-items:flex-start; flex-wrap:wrap;
+  background:var(--painel); border:1px solid var(--linha); border-radius:11px;
+  padding:1.2rem 1.4rem; margin-bottom:12px }
+.retrato{ position:relative; width:96px; height:96px; flex:none }
+.retrato .foto{ width:96px; height:96px; border-radius:50%; display:grid;
+  place-items:center; font-size:28px; font-weight:800; color:#14121f; overflow:hidden;
+  background:linear-gradient(135deg,var(--violeta),#6f63b8);
+  border:2px solid var(--linha-forte) }
+.retrato .foto img{ width:100%; height:100%; object-fit:cover }
+/* `flex:1` com `min-width` alto: o texto ocupa a faixa entre o retrato e o
+   botão em vez de ficar espremido numa coluna estreita com vazio ao lado. */
+/* Prefixados por `.cabeca`: `quem` e `selo` também são nomes da LATERAL (o nome
+   de quem entrou e o selo da marca). Hoje `.perfil .quem` e `.lat-topo .selo`
+   ganham por especificidade, então não havia estrago — mas era a mesma armadilha
+   que `.acoes` armou na amostra.html e disparou em 2026-08-06, quando bastou
+   uma propriedade que a base não definia para a caixa do usuário sair de 195px
+   em x=8 para 123,6px em x=43,7. */
+.cabeca .quem{ flex:1 1 28rem; min-width:min(28rem,100%) }
+.cabeca .quem h1{ font-size:1.3rem; margin:0 }
+.cabeca .quem .lab{ color:var(--apoio); font-size:.9rem; margin:.15rem 0 0 }
+.cabeca .quem .mail{ font-family:var(--mono); font-size:.78rem; color:var(--fraco); margin:.3rem 0 0 }
+.selos{ display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.7rem }
+.selos .selo{ font-family:var(--mono); font-size:.66rem; color:var(--apoio);
+  border:1px solid var(--linha-forte); border-radius:20px; padding:.22rem .6rem }
+.selos .selo.esp{ font-style:italic; font-family:var(--sans); font-size:.74rem;
+  border-color:rgba(145,132,217,.45); color:var(--violeta-claro) }
+
+/* Endereços de rede: só o ícone, como pedido. O nome vai no `title` e no
+   `aria-label` — ícone sozinho não diz nada a quem usa leitor de tela.
+   Fica na COLUNA DA DIREITA do cabeçalho: era ali que sobrava o vazio, e o
+   texto ao lado deixa de ser uma tira estreita com meia tela em branco. */
+.lado{ margin-left:auto; display:flex; flex-direction:column; align-items:flex-end;
+  gap:.9rem; flex:0 0 auto }
+
+/* O TEXTO EM DUAS COLUNAS QUANDO HÁ TELA. Encher 1 800 px com uma linha só
+   daria ~200 caracteres por linha, que ninguém lê — e deixar em 74ch deixava
+   metade da caixa vazia, que foi a queixa. Duas colunas resolvem os dois: a
+   medida de leitura continua a mesma e o espaço é ocupado. Abaixo de 1 400 px
+   volta a ser uma coluna sozinha, porque aí não sobra espaço para dividir. */
+.cabeca .bio{ margin:.7rem 0 0; max-width:74ch }
+@media(min-width:1400px){
+  .cabeca .bio{ max-width:none; columns:2; column-gap:2.6rem;
+    column-rule:1px solid var(--linha) } }
+/* `auto-fit` com mínimo fixo: cresce em colunas conforme entram endereços, e
+   quebra sozinho quando a caixa aperta — sem número de colunas escrito à mão. */
+.redes{ display:grid; grid-template-columns:repeat(auto-fit,minmax(44px,44px));
+  gap:.5rem; justify-content:end; max-width:15rem }
+.rede{ width:44px; height:44px; display:grid; place-items:center; border-radius:10px;
+  border:1px solid var(--linha-forte); color:var(--apoio); background:var(--interno) }
+.rede:hover{ color:var(--violeta-claro); border-color:var(--violeta);
+  background:var(--selecao); text-decoration:none }
+.rede svg{ width:22px; height:22px; display:block; fill:currentColor }
+@media(max-width:760px){
+  .lado{ margin-left:0; align-items:flex-start; width:100% }
+  .redes{ justify-content:start } }
+
+.numeros{ display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-bottom:12px }
+@media(max-width:760px){ .numeros{ grid-template-columns:repeat(2,1fr) } }
+.num{ background:var(--painel); border:1px solid var(--linha); border-radius:10px;
+  padding:.75rem .9rem }
+.num b{ display:block; font-family:var(--mono); font-size:1.3rem; font-weight:700;
+  font-variant-numeric:tabular-nums; line-height:1.2 }
+.num s{ display:block; text-decoration:none; font-family:var(--mono); font-size:8.5px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--fraco); margin-top:3px }
+
+/* As duas colunas viram do MESMO tamanho e cada uma é uma pilha que se estica:
+   a de "Relatórios gerados" parava na altura do próprio conteúdo e deixava um
+   rasgo de vazio embaixo enquanto a coluna vizinha descia bem mais. */
+.colunas{ display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);
+  gap:12px; align-items:stretch }
+.colunas > *{ display:flex; flex-direction:column; min-width:0 }
+/* O último bloco de cada coluna cresce para encostar no pé da outra. */
+.colunas > * > .bloco:last-child{ flex:1 1 auto }
+@media(max-width:900px){ .colunas{ grid-template-columns:1fr }
+  .colunas > * > .bloco:last-child{ flex:0 0 auto } }
+.bloco{ background:var(--painel); border:1px solid var(--linha); border-radius:11px;
+  margin-bottom:12px }
+/* Nada empurra a página para os lados: o que não couber rola DENTRO da caixa. */
+.bloco .bl-corpo{ overflow-x:auto }
+.bloco table{ min-width:26rem }
+.bl-topo{ display:flex; align-items:center; gap:9px; padding:9px 13px;
+  border-bottom:1px solid var(--linha); flex-wrap:wrap }
+.bl-topo b{ font-size:12.5px }
+.bl-topo .aj{ font-size:10.5px; color:var(--fraco) }
+.bl-topo .dir{ margin-left:auto; font-size:11px }
+.bl-corpo{ padding:11px 13px }
+.vazio{ color:var(--fraco); font-size:12px; line-height:1.6; margin:0 }
+textarea{ width:100%; font:inherit; font-size:.88rem; font-family:var(--sans);
+  padding:.55rem .7rem; border:1px solid var(--linha-forte); border-radius:8px;
+  background:var(--interno); color:var(--tinta); resize:vertical }
+textarea::placeholder{ color:var(--fraco) }
+label.cmp{ display:block; font-family:var(--mono); font-size:.64rem; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--fraco); margin:.9rem 0 .3rem }
+label.cmp:first-of-type{ margin-top:0 }
+input[type=file]{ font-size:.82rem }
+{% endblock %}
+
+{% block conteudo %}
+
+<div class="cabeca">
+  <div class="retrato">
+    <div class="foto">
+      {% if perfil.foto %}<img src="/perfil/foto" alt="">{% else %}
+        {{ (perfil.nome or perfil.email)[:2]|upper }}{% endif %}
+    </div>
+  </div>
+  <div class="quem">
+    <h1>{{ perfil.nome or perfil.email.split('@')[0] }}</h1>
+    <p class="lab">{{ perfil.laboratorio or "laboratório não informado" }}{% if
+      perfil.instituicao %} · {{ perfil.instituicao }}{% endif %}</p>
+    <p class="mail">{{ perfil.email }}</p>
+    {# As espécies moram no bloco "Portfólio", não aqui: repetir a mesma lista
+       em dois lugares da mesma tela é ruído, e o cabeçalho é identidade. #}
+    {% if perfil.sobre %}
+    <p class="sub bio">{{ perfil.sobre }}</p>
+    {% endif %}
+  </div>
+
+  {# Coluna da direita do cabeçalho: é onde sobrava o vazio. O botão sobe e os
+     ícones descem, então o texto ao lado deixa de ser uma tira estreita com
+     meia caixa em branco. #}
+  <div class="lado">
+    {% if not editando %}
+    <a class="botao secundario" href="/perfil?editando=1">✎ Editar perfil</a>
+    {% endif %}
+    {% if perfil.links %}
+    <div class="redes">
+      {% for l in perfil.links %}
+        {# `rel=noopener noreferrer`: são endereços de terceiros, e a aba aberta
+           não pode receber referência à nossa janela. O esquema já foi limitado
+           a http/https em `perfil._limpar_links` — o Jinja escapa o texto, não
+           o esquema de uma URL. #}
+        <a class="rede" href="{{ l.url }}" target="_blank" rel="noopener noreferrer"
+           title="{{ l.nome }} — {{ l.url }}" aria-label="{{ l.nome }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="{{ l.icone }}"/></svg>
+        </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="numeros">
+  <div class="num"><b>{{ resumo.corridas }}</b><s>corridas</s></div>
+  <div class="num"><b>{{ resumo.amostras }}</b><s>amostras montadas</s></div>
+  <div class="num"><b>{{ perfil.especies|length }}</b><s>espécies no portfólio</s></div>
+  <div class="num"><b>{{ (cota.bytes_usados / 1048576) | round(1) | string
+    | replace('.', ',') }} MB</b><s>ocupados</s></div>
+</div>
+
+{% if editando %}
+<div class="bloco">
+  <div class="bl-topo"><b>Editar perfil</b>
+    <span class="aj">o e-mail vem do login e não se digita</span></div>
+  <div class="bl-corpo">
+    <form method="post" action="/perfil" enctype="multipart/form-data">
+      <label class="cmp" for="nome">Nome de exibição</label>
+      <input type="text" id="nome" name="nome" value="{{ perfil.nome }}">
+
+      <label class="cmp" for="laboratorio">Laboratório</label>
+      <input type="text" id="laboratorio" name="laboratorio"
+             value="{{ perfil.laboratorio }}" placeholder="Laboratório de Hemoparasitas e Vetores">
+
+      <label class="cmp" for="instituicao">Instituição</label>
+      <input type="text" id="instituicao" name="instituicao"
+             value="{{ perfil.instituicao }}" placeholder="UFRRJ">
+
+      <label class="cmp" for="sobre">Sobre o trabalho</label>
+      <textarea id="sobre" name="sobre" rows="3"
+        placeholder="Uma ou duas frases sobre a linha de pesquisa.">{{ perfil.sobre }}</textarea>
+
+      {# Declaração, não estatística: é o que o laboratório TRABALHA, e serve
+         para outro grupo achar com quem falar. Ver o aviso no bloco ao lado. #}
+      <label class="cmp" for="especies">Espécies que o laboratório trabalha</label>
+      <textarea id="especies" name="especies" rows="4"
+        placeholder="Uma por linha, ou separadas por vírgula.&#10;Babesia vogeli&#10;Hepatozoon canis&#10;Candidatus Anaplasma capybara"
+        >{{ perfil.especies | join('\n') }}</textarea>
+
+      <label class="cmp" for="marcadores">Marcadores e genes que vocês amplificam</label>
+      <textarea id="marcadores" name="marcadores" rows="2"
+        placeholder="18S rRNA, 16S rRNA, groEL, dsb, sodB"
+        >{{ perfil.marcadores | join('\n') }}</textarea>
+
+      <label class="cmp" for="links">Endereços de rede</label>
+      <textarea id="links" name="links" rows="3"
+        placeholder="Um por linha. GitHub, ORCID, Lattes, LinkedIn, ResearchGate, Instagram e outros ganham ícone próprio; o resto aparece como globo.&#10;github.com/seu-usuario&#10;orcid.org/0000-0000-0000-0000"
+        >{{ perfil.links | map(attribute='url') | join('\n') }}</textarea>
+      <p class="vazio" style="margin:.35rem 0 0">Só o ícone aparece no perfil,
+        até oito endereços.</p>
+
+      <label class="cmp" for="foto">Foto (opcional, até 2 MB)</label>
+      <input type="file" id="foto" name="foto" accept=".png,.jpg,.jpeg,.webp">
+
+      <p style="margin:1rem 0 0;display:flex;gap:.5rem">
+        <button type="submit">Salvar</button>
+        <a class="botao secundario" href="/perfil">Cancelar</a>
+      </p>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div class="colunas">
+  <div>
+    <div class="bloco">
+      <div class="bl-topo"><b>Relatórios gerados</b>
+        <span class="aj">o que você pode reabrir ou baixar</span>
+        <span class="dir sub">{{ relatorios|length }} corrida(s)</span></div>
+      <div class="bl-corpo" style="padding:0 13px 8px">
+        {% if relatorios %}
+        <table>
+          <tr><th>corrida</th><th>quando</th><th>amostras</th><th></th></tr>
+          {% for r in relatorios %}
+          <tr>
+            <td><a href="/lotes/{{ r.lote.id }}?tela_do_lote=1">{{ r.lote.nome or r.lote.id }}</a></td>
+            <td class="sub">{{ r.lote.criado_em.replace('T',' ')[:10] }}</td>
+            <td>{{ r.n }}</td>
+            <td><a href="/lotes/{{ r.lote.id }}/relatorio" target="_blank"
+                   rel="noopener">relatório</a> ·
+                <a href="/lotes/{{ r.lote.id }}/resultado.csv">CSV</a></td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <p class="vazio" style="padding:.6rem 0">Nenhuma corrida pronta ainda.</p>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  <div>
+    <div class="bloco">
+      <div class="bl-topo"><b>Portfólio</b>
+        <span class="aj">o que vocês trabalham</span></div>
+      <div class="bl-corpo">
+        {% if perfil.especies %}
+        <div class="selos" style="margin:0 0 .7rem">
+          {% for e in perfil.especies %}<span class="selo esp">{{ e }}</span>{% endfor %}
+        </div>
+        {% else %}
+        <p class="vazio">Nenhuma espécie declarada. Isto é uma
+        <strong style="color:var(--apoio)">descrição da linha de trabalho</strong>,
+        escrita por você — não é contagem do que o BLAST achou nas corridas.</p>
+        {% endif %}
+
+        {% if perfil.marcadores %}
+        <div style="border-top:1px solid var(--linha);padding-top:.7rem">
+          <div style="font-family:var(--mono);font-size:9px;letter-spacing:.12em;
+               text-transform:uppercase;color:var(--fraco);margin-bottom:.45rem"
+            >marcadores</div>
+          <div class="selos" style="margin:0">
+            {% for m in perfil.marcadores %}<span class="selo">{{ m }}</span>{% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {# O rumo declarado na ADR 0052: compartilhar por PEDIDO, com o dado só
+           se movendo quando o dono age. O portfólio é o que torna esse pedido
+           possível — alguém precisa conseguir achar quem trabalha com o quê. #}
+        <p class="vazio" style="margin-top:.9rem;border-top:1px solid var(--linha);
+           padding-top:.7rem">O portfólio é o que vai permitir, mais adiante, um
+        laboratório encontrar outro e <strong style="color:var(--apoio)">pedir uma
+        sequência</strong>. Nada aqui é publicado hoje: por enquanto só você vê.</p>
+      </div>
+    </div>
+
+    <div class="bloco">
+      <div class="bl-topo"><b>Esta conta</b></div>
+      <div class="bl-corpo">
+        <table>
+          <tr><td style="color:var(--fraco)">Espaço</td>
+              <td>{{ (cota.bytes_usados / 1048576) | round(1) | string | replace('.', ',') }} MB{%
+                if cota.max_bytes_conta %} de {{ (cota.max_bytes_conta / 1073741824)
+                | round(1) | string | replace('.', ',') }} GB{% endif %}</td></tr>
+          <tr><td style="color:var(--fraco)">Corridas ativas</td>
+              <td>{{ cota.lotes_ativos }}{% if cota.max_lotes_ativos %} de
+                {{ cota.max_lotes_ativos }}{% endif %}</td></tr>
+          <tr style="border:0"><td style="color:var(--fraco)">Perfil atualizado</td>
+              <td>{{ perfil.atualizado.replace('T',' ')[:16] or "—" }}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

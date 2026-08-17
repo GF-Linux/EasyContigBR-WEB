@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block titulo %}{{ codigo }} — EasyContig BR{% endblock %}
+{% block conteudo %}
+
+<div class="cartao">
+  <h2 style="margin-top:0">{{ codigo }}</h2>
+  <p>{{ detalhe }}</p>
+
+  {# 404 aqui também é a resposta para "lote de outro usuário": a checagem de
+     dono devolve 404 e não 403 de propósito, para o link colado no grupo errado
+     não confirmar sequer que aquele protocolo existe. A frase abaixo serve aos
+     dois casos sem revelar qual deles é. #}
+  {% if codigo == 404 %}
+    <p class="sub">Confira o endereço. Lotes apagados — pelo botão "Apagar agora"
+    ou pelo prazo de retenção — deixam de existir no servidor e não voltam.</p>
+  {% elif codigo == 409 %}
+    <p class="sub">Alguma coisa ainda está em andamento neste lote. Volte daqui
+    a pouco.</p>
+  {% elif codigo == 413 %}
+    <p class="sub">O envio passou de um dos tetos. Os limites por lote e por
+    conta aparecem na página inicial.</p>
+  {% endif %}
+
+  <p><a class="botao secundario" href="/">Voltar para as corridas</a></p>
+</div>
+
+{% endblock %}

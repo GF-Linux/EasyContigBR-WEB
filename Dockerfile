@@ -44,4 +44,4 @@ ENV EASYCONTIG_DATA_DIR=/dados \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000
-CMD ["uvicorn", "easycontig_web.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "easycontig_web.servidor_web:app", "--host", "0.0.0.0", "--port", "8000"]

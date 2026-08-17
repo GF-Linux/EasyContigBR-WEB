@@ -12,7 +12,7 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 
-from easycontig_web import perfil
+from easycontig_web.contas import perfil_do_laboratorio as perfil
 
 
 @pytest.fixture()
@@ -22,7 +22,7 @@ def cliente(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     c = TestClient(main.app)
     c.post("/entrar", data={"email": "gustavo@ufrrj.br"}, follow_redirects=False)
@@ -149,7 +149,7 @@ def test_botao_do_google_desligado_diz_o_motivo_sem_precisar_de_clique(tmp_path,
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "t")
     monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     html = TestClient(main.app).get("/entrar").text
 
@@ -216,8 +216,8 @@ def test_o_titulo_da_corrida_na_lateral_traz_nome_e_data(cliente):
     "F13719 #80649 27/07" apareciam idênticas na lateral — 151 px de texto numa
     caixa de 105, cortadas no mesmo ponto — e o `title` mostrava o STATUS, então
     nem passando o mouse dava para separá-las."""
-    from easycontig_web import fila
-    from easycontig_web import main as m
+    from easycontig_web.processamento import fila_de_lotes as fila
+    from easycontig_web import servidor_web as m
     for _ in range(2):
         lid = fila.novo_lote(m.cfg.sqlite_path, dono="gustavo@ufrrj.br",
                              nome="F13719 #80649 27/07 corrida bem comprida",

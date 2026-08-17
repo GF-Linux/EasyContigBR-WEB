@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from easycontig_web import fila
+from easycontig_web.processamento import fila_de_lotes as fila
 
 
 @pytest.fixture()
@@ -78,7 +78,7 @@ def cliente(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     c = TestClient(main.app)
     c.post("/entrar", data={"email": "gustavo@ufrrj.br"}, follow_redirects=False)

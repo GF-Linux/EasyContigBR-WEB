@@ -10,7 +10,7 @@ O defeito era a tela **calar**. Quem enviou viu 81 linhas sem explicação, e a
 leitura natural disso é "o programa falhou". Mesmo padrão da ADR 0039: recusa
 informada é resultado; silêncio parece defeito.
 """
-from easycontig_web import amostras
+from easycontig_web.dados import leitura_de_amostras as amostras
 
 
 def _rep(n_pares, n_avulsas):

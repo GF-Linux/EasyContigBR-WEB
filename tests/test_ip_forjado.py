@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import importlib
 
-from easycontig_web import limites
+from easycontig_web.contas import limite_de_requisicoes as limites
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,7 +28,7 @@ def montar(tmp_path, monkeypatch):
         monkeypatch.delenv("EASYCONTIG_PROXIES_CONFIAVEIS", raising=False)
         for k, v in env.items():
             monkeypatch.setenv(k, v)
-        from easycontig_web import main
+        from easycontig_web import servidor_web as main
         importlib.reload(main)
         return TestClient(main.app)
     return _montar
@@ -51,7 +51,7 @@ def test_forjar_x_forwarded_for_nao_escapa_do_teto(montar):
 
 
 def test_sem_proxy_declarado_o_cabecalho_e_ignorado(montar):
-    from easycontig_web import limites
+    from easycontig_web.contas import limite_de_requisicoes as limites
     montar()
 
     class Req:
@@ -75,7 +75,7 @@ def test_proxy_declarado_pode_dizer_o_ip_real(montar):
     O valor certo é o mais à direita que não seja um proxy nosso: é o último
     salto que uma máquina de confiança viu.
     """
-    from easycontig_web import limites
+    from easycontig_web.contas import limite_de_requisicoes as limites
     montar(EASYCONTIG_PROXIES_CONFIAVEIS="203.0.113.9, 10.1.1.1")
 
     class DoProxy:
@@ -94,7 +94,7 @@ def test_proxy_declarado_pode_dizer_o_ip_real(montar):
 
 
 def test_cliente_sem_endereco_nao_derruba(montar):
-    from easycontig_web import limites
+    from easycontig_web.contas import limite_de_requisicoes as limites
     montar()
 
     class Req:

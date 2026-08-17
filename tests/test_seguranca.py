@@ -39,7 +39,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     if BLAST:
         monkeypatch.setenv("EASYCONTIG_BLAST_BIN", BLAST)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     return main
 
@@ -125,7 +125,7 @@ def test_banco_do_usuario_nao_e_visivel_nem_removivel_por_outro(app):
     a.post("/bancos/meu", data={"apelido": "refs-do-a"},
            files={"fasta": ("r.fa", b">x\nACGTACGTACGTACGTACGT\n", "text/plain")})
 
-    from easycontig_web import bancos
+    from easycontig_web.dados import bancos_de_referencia as bancos
     meus = bancos.meus_bancos(app.cfg.data_dir, "a@ufrrj.br")
     assert len(meus) == 1
     banco_id = meus[0]["id"]
@@ -154,7 +154,7 @@ def test_id_de_lote_malicioso_nao_alcanca_o_disco(app, mau):
 @pytest.mark.parametrize("mau", MALICIOSOS)
 def test_apelido_de_banco_malicioso_e_recusado(app, mau):
     """`bancos.id_do_usuario` vira caminho em disco — o filtro é a fronteira."""
-    from easycontig_web import bancos
+    from easycontig_web.dados import bancos_de_referencia as bancos
     with pytest.raises(ValueError):
         bancos.id_do_usuario("a@ufrrj.br", mau)
 
@@ -252,7 +252,7 @@ def test_nome_da_corrida_nao_vira_html_nem_sql(app, mau):
         assert "7*7" in "".join(nomes), "o payload não chegou ao elemento"
         assert "49" not in "".join(nomes), "o Jinja reavaliou o nome da corrida"
     # e a tabela continua de pé depois do payload de SQL
-    from easycontig_web import fila
+    from easycontig_web.processamento import fila_de_lotes as fila
     assert isinstance(fila.listar(app.cfg.sqlite_path), list)
 
 
@@ -326,7 +326,7 @@ def test_restricao_de_dominio_vale(app, monkeypatch):
 def test_destino_do_login_nao_leva_para_fora(app):
     """`?proximo=` é entrada do usuário: sem filtro, a nossa página de login
     despejaria a pessoa noutro domínio logo depois de ela digitar o e-mail."""
-    from easycontig_web.main import _destino
+    from easycontig_web.servidor_web import _destino
     for fora in ["https://evil.example", "//evil.example", "http://x",
                  "javascript:alert(1)"]:
         assert _destino(fora) == "/"
@@ -398,7 +398,7 @@ def test_producao_recusa_subir_com_a_porta_aberta(monkeypatch):
     visitante anônimo no mesmo balde de limite, e o teto de login deixa de ser
     vinte tentativas por pessoa para ser vinte no mundo — uma pessoa errando o
     login tranca a entrada do site inteiro por dez minutos."""
-    from easycontig_web import config
+    from easycontig_web import configuracao as config
     monkeypatch.setenv("EASYCONTIG_AUTH", "dev")
     monkeypatch.delenv("EASYCONTIG_SECRET_KEY", raising=False)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "0")
@@ -416,7 +416,7 @@ def test_producao_recusa_subir_com_a_porta_aberta(monkeypatch):
 
 
 def test_producao_bem_configurada_nao_reclama(monkeypatch):
-    from easycontig_web import config
+    from easycontig_web import configuracao as config
     monkeypatch.setenv("EASYCONTIG_AUTH", "google")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "x" * 32)
     monkeypatch.setenv("EASYCONTIG_HTTPS_ONLY", "1")
@@ -459,7 +459,7 @@ def test_o_titulo_do_banco_sai_escapado_do_javascript():
 
 def test_cabecalho_de_fasta_hostil_nao_quebra_a_montagem_do_banco(app):
     """O payload pode entrar no banco — o que não pode é virar HTML depois."""
-    from easycontig_web import bancos
+    from easycontig_web.dados import bancos_de_referencia as bancos
     if not TEM_BLAST:
         pytest.skip("makeblastdb não está nesta máquina")
     bid = bancos.id_do_usuario("a@ufrrj.br", "hostil")
@@ -512,7 +512,7 @@ def test_post_de_outra_origem_e_recusado(app):
     assert r.status_code == 403, (
         "um POST forjado de um subdomínio same-site passou")
 
-    from easycontig_web import perfil
+    from easycontig_web.contas import perfil_do_laboratorio as perfil
     assert perfil.pegar(app.cfg.sqlite_path, "a@ufrrj.br")["nome"] != "Invasor"
 
 
@@ -526,7 +526,7 @@ def test_post_da_propria_origem_passa(app):
                follow_redirects=False)
     assert r.status_code in (200, 303), f"o próprio formulário levou {r.status_code}"
 
-    from easycontig_web import perfil
+    from easycontig_web.contas import perfil_do_laboratorio as perfil
     assert perfil.pegar(app.cfg.sqlite_path, "a@ufrrj.br")["nome"] == "Gustavo"
 
 

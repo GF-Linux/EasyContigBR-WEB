@@ -1,0 +1,358 @@
+{% extends "base.html" %}
+{% block titulo %}{{ amostra.key }} — EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* Workspace da amostra: alinhamento em cima, os dois cromatogramas embaixo,
+   painel de identificação à direita (design aprovado em 05/08, ADR 0052).
+   O traço chega por /api/.../traco depois que a página já abriu. */
+.trabalho{ padding:0 }
+.trabalho > .interno{ max-width:none }
+.trabalho > .interno > .rodape{ display:none }
+/* Altura FIXA da viewport, não mínima: assim as peças dividem exatamente o que
+   há e a página não rola. Com `min-height` os cromatogramas cresciam além da
+   tela e o segundo ficava cortado — troquei um vão vazio por conteúdo fora de
+   vista, que é pior. */
+.oficina{ display:grid; grid-template-columns:minmax(0,1fr) 300px; height:100vh;
+  overflow:hidden }
+@media(max-width:1150px){ .oficina{ grid-template-columns:1fr;
+  height:auto; overflow:visible } }
+.meio{ padding:13px; display:flex; flex-direction:column; gap:11px;
+  min-width:0; min-height:0; overflow:hidden }
+/* Os dois cromatogramas dividem a sobra vertical em vez de ficarem com altura
+   fixa: num monitor pequeno o traço saía espremido e sobrava um vão escuro
+   embaixo da barra de ações. Mínimo de 9rem para o pico não virar risco. */
+.meio > .bl-topo, .meio > section:first-of-type, .meio > .acoes{ flex:none }
+#cromatogramas{ display:flex; flex-direction:column; gap:11px; flex:1 1 auto;
+  min-height:0; overflow:hidden }
+#cromatogramas > .bloco{ flex:1 1 0; display:flex; flex-direction:column;
+  min-height:7.5rem; overflow:hidden }
+#cromatogramas .tela-tr{ flex:1 1 auto; display:flex; flex-direction:column;
+  min-height:0 }
+#cromatogramas .tela-tr canvas.tr-cv{ flex:1 1 auto; min-height:0; height:auto }
+
+.bloco{ background:var(--painel); border:1px solid var(--linha); border-radius:10px }
+.bl-topo{ display:flex; align-items:center; gap:10px; padding:8px 13px;
+  border-bottom:1px solid var(--linha); flex-wrap:wrap }
+.bl-topo b{ font-size:12.5px; font-weight:700 }
+.bl-topo .aj{ font-size:11px; color:var(--fraco) }
+.bl-topo .dir{ margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--apoio) }
+.bl-topo .dir em{ font-style:normal; color:var(--vermelho) }
+
+/* alinhamento */
+.aln{ padding:10px 13px; font-family:var(--mono); font-size:12px; line-height:1.75;
+  overflow-x:auto }
+.aln-l{ display:flex; gap:11px; white-space:nowrap; align-items:baseline }
+.aln-n{ width:11rem; flex:none; color:var(--apoio); font-size:11px; text-align:right;
+  overflow:hidden; text-overflow:ellipsis }
+.aln-n.forte{ color:var(--tinta); font-weight:700 }
+.b{ padding:0 .5px; border-radius:2px; cursor:pointer }
+.b:hover{ background:var(--linha-forte) }
+.bA{ color:var(--verde) } .bC{ color:var(--azul) } .bG{ color:#C6CBE0 }
+.bT{ color:var(--vermelho) } .bgap,.bN{ color:var(--fraco) }
+.b.mm{ background:rgba(240,82,74,.22); color:#ff8f88; font-weight:700 }
+.b.sel{ background:var(--violeta); color:#14121f; font-weight:700 }
+.b.morta{ opacity:.32; text-decoration:line-through }
+.regua{ color:var(--fraco) }
+
+/* cromatograma */
+.cr-topo{ display:flex; align-items:center; gap:11px; padding:7px 13px;
+  border-bottom:1px solid var(--linha); flex-wrap:wrap; font-size:11px }
+.cr-topo .nome{ font-family:var(--mono); color:var(--violeta-claro); font-weight:600 }
+.cr-topo .meta{ color:var(--fraco) }
+.leg{ display:flex; gap:9px; margin-left:auto; align-items:center; color:var(--fraco);
+  font-size:10px }
+.leg s{ text-decoration:none; display:flex; align-items:center; gap:4px }
+.leg i{ width:7px; height:7px; border-radius:50%; display:block }
+/* O traço é CANVAS, não SVG (2026-08-06). Em SVG cada mudança de janela
+   reescrevia quatro polilinhas por leitura e custava ~9 ms de trabalho síncrono
+   por clique no desktop — no Deck, o "parece 30 quadros por segundo" relatado.
+   As cores das quatro bases moram no JS (`COR`), porque canvas não lê CSS;
+   são as mesmas variáveis da paleta, copiadas com o nome ao lado. */
+/* `touch-action:pan-y`: no Deck o dedo arrastando NA HORIZONTAL é nosso (andar
+   pelo contig) e o arrasto vertical continua sendo rolagem da página. Com
+   `none` a página inteira travaria em cima do traço; sem nada, o navegador
+   engoliria o gesto antes de ele virar `pointermove`. */
+.tela-tr{ background:#0d0e16; position:relative; overflow:hidden;
+  touch-action:pan-y }
+/* A mão aberta é o convite ao gesto novo; clicar para marcar a base continua
+   valendo e está dito na barra do alinhamento. */
+.tela-tr canvas.tr-cv{ display:block; width:100%; height:112px; cursor:grab }
+.tela-tr.puxando canvas.tr-cv{ cursor:grabbing }
+.tela-tr.puxando .bl{ cursor:grabbing }
+/* Faixa das letras: fora do desenho, porque no traço o eixo x é esticado e a
+   letra viraria um risco. Em % o alinhamento com o pico continua exato. */
+.bases-lin{ position:relative; height:19px; border-top:1px solid var(--linha) }
+.bases-lin .bl{ position:absolute; top:2px; transform:translateX(-50%);
+  font-family:var(--mono); font-size:11px; cursor:pointer; padding:0 1px;
+  border-radius:2px }
+.bases-lin .bl:hover{ background:var(--linha-forte) }
+.bases-lin .bl.morta{ opacity:.4; text-decoration:line-through }
+/* Amplitude: dois botões e o fator entre eles, numa caixa só — o fator fica à
+   vista porque pico ampliado não pode ser lido como pico alto. */
+.amp{ display:inline-flex; align-items:stretch; border:1px solid var(--linha-forte);
+  border-radius:8px; overflow:hidden }
+.amp .ac{ border:0; border-radius:0; min-width:30px; font-size:14px; line-height:1 }
+.amp b{ display:grid; place-items:center; min-width:52px; padding:0 .35rem;
+  font-family:var(--mono); font-size:11.5px; color:var(--apoio);
+  border-left:1px solid var(--linha-forte); border-right:1px solid var(--linha-forte) }
+.vazio-tr{ padding:1.6rem 1rem; text-align:center; color:var(--fraco); font-size:12px }
+.fora{ position:absolute; inset:0; display:grid; place-items:center; color:var(--fraco);
+  font-size:11.5px; pointer-events:none; background:rgba(13,14,22,.6) }
+
+/* barra de ações */
+/* ⚠️ TODA regra daqui é PREFIXADA por `.oficina`, e não é preciosismo.
+   `.acoes` e `.ac` são nomes que a LATERAL (base.html) também usa, e este bloco
+   entra na mesma folha, depois dela. Sem o prefixo, a barra de ferramentas do
+   cromatograma pintava a caixa do usuário na lateral: medido em 2026-08-06,
+   ela ia de 195px em x=8 para 123,6px em x=43,7, com borda violeta, raio de
+   11px e sombra — virava um cartãozinho flutuante e fora de esquadro. Foi o
+   "dimensionamento incorreto da box perfil/workspace" que o autor apontou três
+   vezes; eu tinha reproduzido na página INICIAL, onde este bloco não existe, e
+   por isso não via. */
+.oficina .acoes{ margin:2px auto 0; display:flex; gap:6px;
+  align-items:center; background:var(--painel); border:1px solid var(--violeta);
+  border-radius:11px; padding:7px 9px; box-shadow:0 10px 30px rgba(0,0,0,.55);
+  width:max-content; max-width:100%; flex-wrap:wrap }
+.oficina .ac{ font-size:12px; font-weight:600; padding:6px 11px; border-radius:7px;
+  border:1px solid var(--linha-forte); background:var(--interno); color:var(--apoio);
+  display:inline-block; text-decoration:none; cursor:pointer }
+.oficina a.ac:hover{ text-decoration:none }
+.oficina .ac:hover:not(:disabled){ border-color:var(--violeta); color:var(--tinta);
+  background:var(--interno) }
+.oficina .ac:disabled{ opacity:.4; cursor:not-allowed }
+.oficina .ac.perigo:hover:not(:disabled){ border-color:var(--vermelho); color:#ff9a94 }
+.divisor{ width:1px; height:22px; background:var(--linha-forte); margin:0 2px }
+.dica-ac{ font-size:11px; color:var(--fraco); font-family:var(--mono) }
+
+/* painel direito */
+.lado{ background:var(--painel); border-left:1px solid var(--linha);
+  padding:14px 15px 22px; display:flex; flex-direction:column; gap:12px;
+  overflow-y:auto; min-height:0 }
+@media(max-width:1150px){ .lado{ border-left:0; border-top:1px solid var(--linha) } }
+.id-topo{ display:flex; align-items:center; gap:6px; font-family:var(--mono);
+  font-size:9.5px; letter-spacing:.13em; text-transform:uppercase }
+.especie{ font-size:1.38rem; font-weight:800; font-style:italic; line-height:1.1;
+  margin:5px 0 3px }
+.metricas{ display:grid; grid-template-columns:1fr 1fr; gap:8px }
+.mt{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
+  padding:9px 11px }
+.mt b{ display:block; font-family:var(--mono); font-size:1.12rem; font-weight:700;
+  font-variant-numeric:tabular-nums; line-height:1.2 }
+.mt.v b{ color:var(--verde) }
+.mt s{ display:block; text-decoration:none; font-family:var(--mono); font-size:8.5px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--fraco); margin-top:3px }
+.gb{ background:var(--interno); border:1px solid var(--linha); border-radius:9px;
+  padding:11px }
+.gb .rot{ font-family:var(--mono); font-size:8.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--fraco) }
+.gb .acc{ font-family:var(--mono); font-size:13px; font-weight:700; margin-top:3px }
+.qual .rot{ font-family:var(--mono); font-size:9px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--fraco); margin-bottom:6px }
+.lq{ display:flex; justify-content:space-between; gap:1rem; padding:5px 0;
+  font-size:12px; border-bottom:1px solid var(--linha) }
+.lq span:last-child{ font-family:var(--mono); font-variant-numeric:tabular-nums;
+  text-align:right }
+.exp{ background:var(--interno); border:1px solid var(--violeta); border-radius:9px;
+  padding:11px }
+.exp .rot{ font-family:var(--mono); font-size:9px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--violeta); margin-bottom:6px }
+.exp p{ margin:0 0 8px; font-size:11.5px; color:var(--apoio); line-height:1.5 }
+.exp .fila{ display:flex; gap:6px } .exp .fila .ac{ flex:1; text-align:center }
+.rascunho{ display:flex; gap:6px; font-size:10.5px; color:var(--ambar); margin-top:7px;
+  line-height:1.45 }
+.consulta{ background:var(--interno); border:1px solid var(--linha);
+  border-radius:9px; padding:11px }
+.consulta .rot{ font-family:var(--mono); font-size:9px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--fraco); margin-bottom:5px }
+.consulta select{ font:inherit; font-size:.82rem; padding:.4rem .5rem; width:100%;
+  border:1px solid var(--linha-forte); border-radius:7px; background:var(--painel);
+  color:var(--tinta) }
+#saida-consulta{ margin-top:.6rem; font-size:11px }
+#saida-consulta .hit{ padding:.35rem 0; border-bottom:1px solid var(--linha) }
+#saida-consulta .hit:last-child{ border:0 }
+#saida-consulta .org{ font-style:italic; color:var(--apoio); display:block;
+  line-height:1.4 }
+#saida-consulta .num{ font-family:var(--mono); color:var(--tinta) }
+#saida-consulta .acc{ font-family:var(--mono); color:var(--violeta-claro);
+  font-size:10px }
+.ressalva{ font-size:11.5px; color:var(--apoio); line-height:1.5; margin:0 0 .5rem }
+.ressalva .rg{ color:var(--fraco); font-family:var(--mono); font-size:10px }
+{% endblock %}
+
+{% block conteudo %}
+<div class="oficina"
+     data-traco="/api/lotes/{{ lote.id }}/amostras/{{ amostra.key|urlencode }}/traco">
+
+  <div class="meio">
+    {# Barra da amostra com os destinos à mão. Antes, ver o relatório de um par
+       exigia clicar em "voltar" para descobrir que a tela do lote existia — o
+       caminho não era descoberto, era adivinhado. #}
+    <div class="bl-topo" style="border:0;padding:2px 2px 0">
+      {# Leva à página da corrida — onde ficam relatório, CSV e o apagar. É o
+         caminho que faltava: dele só se chegava clicando em "voltar". #}
+      <a href="/lotes/{{ lote.id }}?tela_do_lote=1" class="ac"
+         title="Página da corrida: amostras, relatório e apagar"
+         >⚙ {{ lote.nome or lote.id }}</a>
+      <b style="margin-left:4px">{{ amostra.key }}</b>
+      <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <a class="ac" href="/lotes/{{ lote.id }}/relatorio" target="_blank"
+           rel="noopener">Relatório da corrida</a>
+        <a class="ac" href="/lotes/{{ lote.id }}/resultado.csv">CSV</a>
+        <a class="ac" href="/" title="Enviar uma corrida nova">+ Nova corrida</a>
+      </span>
+    </div>
+
+    {% if amostra.erro %}
+    <div class="bloco" style="border-color:rgba(240,82,74,.4)">
+      <div class="bl-topo"><b class="erro">Esta amostra não montou</b></div>
+      <pre class="sub" style="white-space:pre-wrap;padding:11px 13px;margin:0">{{ amostra.erro }}</pre>
+      <p class="sub" style="padding:0 13px 12px;margin:0">Sem consenso não há o que
+      procurar no banco — nada chegou a ser consultado.</p>
+    </div>
+    {% endif %}
+
+    <section class="bloco">
+      <div class="bl-topo">
+        <b>Alinhamento</b>
+        {# O arrasto vai dito aqui porque não tem barra nem seta que o anuncie:
+           o traço é canvas, e gesto sem affordance visível é gesto que não
+           existe para quem chega. #}
+        <span class="aj">clique numa base para marcá-la nos dois cromatogramas ·
+          arraste o traço para o lado para andar pelo contig</span>
+        <span class="dir"><span id="m-pb">{{ amostra.consenso_pb }}</span> pb ·
+          {{ amostra.cobertura_media|br or "—" }}× ·
+          <em><span id="m-mm">—</span> mismatch</em></span>
+      </div>
+      <div class="aln" id="aln">
+        <p class="sub" style="margin:0">Carregando o alinhamento…</p>
+      </div>
+    </section>
+
+    <div id="cromatogramas"></div>
+
+    <div class="acoes" id="acoes" style="display:none">
+      <button class="ac" id="b-erro" type="button">⚠ Próximo erro</button>
+      <span class="divisor"></span>
+      <span class="dica-ac">remover base</span>
+      <span id="botoes-remover" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+      <span class="divisor"></span>
+      <button class="ac" id="b-undo" type="button" disabled>↺ Desfazer</button>
+      <span class="divisor"></span>
+      {# Amplitude: a ponta da leitura tem sinal fraco de verdade e some no zoom
+         natural. Ampliar não muda o dado, muda a lente — o rótulo diz o fator
+         para ninguém ler pico ampliado como pico alto. #}
+      {# Dois sentidos. Era um botão só, ciclando 1→2→4→8 e voltando a 1: para
+         BAIXAR o pico era preciso dar a volta inteira, então na prática não
+         dava para diminuir — que é metade do que a bancada precisa. #}
+      <span class="amp" role="group" aria-label="Amplitude do traço">
+        <button class="ac" id="b-amp-menos" type="button"
+                title="Diminuir os picos — muda a lente, não o dado">−</button>
+        <b id="b-amp-valor" title="Fator de amplitude do desenho">1,0×</b>
+        <button class="ac" id="b-amp-mais" type="button"
+                title="Aumentar os picos — muda a lente, não o dado">+</button>
+      </span>
+    </div>
+  </div>
+
+  <aside class="lado">
+    <div>
+      <div class="id-topo {{ amostra.situacao_classe }}">✓ {{ amostra.situacao_texto }}</div>
+      {% if amostra.identificado %}
+        <div class="especie">{{ amostra.organismo }}</div>
+        <div class="sub" style="font-size:11px">{{ amostra.marcador }} ·
+          banco local · melhor acerto</div>
+      {% else %}
+        <p class="sub" style="margin:.5rem 0 0">{{ amostra.situacao_nota }}</p>
+      {% endif %}
+    </div>
+
+    {% if amostra.identificado %}
+    <div class="metricas">
+      <div class="mt v"><b>{{ amostra.identidade|br or "—" }}%</b><s>identidade</s></div>
+      <div class="mt"><b>{{ amostra.cobertura_query|br or "—" }}%</b><s>cobertura</s></div>
+      <div class="mt v"><b>{{ amostra.e_value or "—" }}</b><s>e-value</s></div>
+      <div class="mt"><b>{{ amostra.consenso_pb }}</b><s>consenso (pb)</s></div>
+    </div>
+
+    <div class="gb">
+      <div class="rot">acesso genbank</div>
+      <div class="acc">{{ amostra.accession or "—" }}</div>
+    </div>
+    {% if amostra.accession %}
+      {# Por BOTÃO, nunca automático: o NCBI limita a 3 requisições por segundo, e
+         o propósito é encurtar a ponte, não terceirizar a conclusão (ADR 0052). #}
+      <a class="botao secundario" style="text-align:center"
+         href="https://www.ncbi.nlm.nih.gov/nuccore/{{ amostra.accession }}"
+         target="_blank" rel="noopener">⧉ Validar no GenBank</a>
+    {% endif %}
+    {% endif %}
+
+    {# Consulta a OUTRO banco. Rotulada como consulta, e nunca substituindo o
+       veredito: quem identificou esta amostra foi o banco gravado na corrida
+       (ADR 0037). Por botão, nunca automático. #}
+    {% if consultaveis %}
+    <div class="consulta">
+      <div class="rot">comparar com outro banco</div>
+      <p class="sub" style="font-size:11px;margin:0 0 .5rem">Não muda o resultado
+      acima — é uma segunda opinião, e sai rotulada como tal.</p>
+      <select id="banco-consulta">
+        {% for r in consultaveis %}
+        <option value="{{ r.id }}">{{ r.nome }}</option>
+        {% endfor %}
+      </select>
+      <button class="ac" id="b-consultar" type="button"
+              style="width:100%;margin-top:.45rem">Consultar</button>
+      <div id="saida-consulta"></div>
+    </div>
+    {% endif %}
+
+    <div class="qual">
+      <div class="rot">qualidade do contig</div>
+      <div class="lq"><span>Cobertura média</span>
+        <span>{{ amostra.cobertura_media|br or "—" }}×</span></div>
+      <div class="lq"><span>Leituras</span><span>{{ amostra.n_leituras }}</span></div>
+      <div class="lq"><span>Uma leitura só</span>
+        <span>{{ amostra.n_cobertura_1 }}{% if amostra.pct_cobertura_1x %}
+          ({{ amostra.pct_cobertura_1x|br }}%){% endif %}</span></div>
+      <div class="lq"><span>Discordâncias</span><span>{{ amostra.discordancias }}</span></div>
+      {% for r in amostra.leituras %}
+      <div class="lq"><span>{{ r.primer or r.nome }}</span>
+        <span class="pronto">{{ r.q_rotulo }} ({{ r.q_medio }})</span></div>
+      {% endfor %}
+      <div class="lq"><span>Bases removidas</span><span id="q-ed">0</span></div>
+      <div class="lq"><span>Referência</span><span>{{ referencia_usada
+        if referencia_usada != "curado" else "curada" }}</span></div>
+    </div>
+
+    <div class="exp">
+      <div class="rot">exportar</div>
+      <p>O consenso só vira definitivo aqui. Até exportar, o que está na tela é
+      rascunho.</p>
+      <div class="fila">
+        <button class="ac" id="b-fasta" type="button">FASTA</button>
+        <button class="ac" id="b-txt" type="button">Texto</button>
+      </div>
+      <div class="rascunho" id="rascunho-antigo" style="display:none">
+        ↻ <span>Rascunho recuperado de <time></time> — as edições que você fez
+        antes de sair continuam aqui.</span></div>
+      <div class="rascunho" id="rascunho" style="display:none">
+        ⚠ <span>Há edições não exportadas. Sair desta página perde o que você
+        corrigiu.</span></div>
+    </div>
+
+    {% if amostra.ressalvas %}
+    <div>
+      <div class="rot" style="font-family:var(--mono);font-size:9px;letter-spacing:.12em;
+           text-transform:uppercase;color:var(--fraco);margin-bottom:7px">
+        ressalvas ({{ amostra.n_ressalvas }})</div>
+      {% for c in amostra.ressalvas %}
+      <p class="ressalva">{{ c.texto }}<br>
+        <span class="rg">[{{ c.codigo }}{% if c.regra %} · {{ c.regra }}{% endif %}]</span></p>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </aside>
+</div>
+
+<script src="/estatico/oficina.js" nonce="{{ request.state.nonce }}" defer></script>
+{% endblock %}

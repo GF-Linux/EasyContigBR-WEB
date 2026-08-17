@@ -12,7 +12,7 @@ import subprocess
 import pytest
 from fastapi.testclient import TestClient
 
-from easycontig_web import bancos
+from easycontig_web.dados import bancos_de_referencia as bancos
 
 
 @pytest.fixture()
@@ -26,7 +26,7 @@ def montar(tmp_path, monkeypatch):
         monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
         for k, v in env.items():
             monkeypatch.setenv(k, v)
-        from easycontig_web import main
+        from easycontig_web import servidor_web as main
         importlib.reload(main)
         return TestClient(main.app)
     return _montar
@@ -93,7 +93,7 @@ def test_meus_bancos_nao_lista_o_do_vizinho(tmp_path):
 ])
 def test_destino_externo_vira_raiz(montar, destino):
     montar()
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     assert main._destino(destino) == "/"
 
 
@@ -101,7 +101,7 @@ def test_destino_externo_vira_raiz(montar, destino):
                                      "/lotes/abc/amostras/F13719_am01"])
 def test_destino_interno_e_preservado(montar, destino):
     montar()
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     assert main._destino(destino) == destino
 
 
@@ -112,7 +112,7 @@ def test_docs_saem_do_ar_em_producao(montar):
 
     # Em produção o `conferir_producao` exige o resto da configuração; aqui
     # interessa só o efeito nas rotas de documentação.
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     assert main._DOCS == "/api/docs"
 
 
@@ -130,7 +130,7 @@ def test_em_producao_o_openapi_nao_e_montado(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_PRODUCAO", "1")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "id")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "segredo")
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     c = TestClient(main.app)
     for rota in ("/api/docs", "/openapi.json", "/redoc"):

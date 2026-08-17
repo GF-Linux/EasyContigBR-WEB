@@ -19,7 +19,10 @@ import socket
 import threading
 import time
 
-from . import config, executor, fila, retencao
+from .. import configuracao as config
+from ..processamento import executor_de_lote as executor
+from ..processamento import fila_de_lotes as fila
+from ..dados import expurgo_por_retencao as retencao
 
 log = logging.getLogger("easycontig.trabalhador")
 

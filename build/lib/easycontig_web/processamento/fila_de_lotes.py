@@ -117,7 +117,7 @@ def criar_esquema(caminho: Path) -> None:
         con.executescript(_ESQUEMA)
     # Importado aqui, e não no topo, porque `migracoes` importa `conectar` deste
     # módulo — no topo seria import circular.
-    from . import migracoes
+    from ..dados import esquema_e_migracoes as migracoes
     migracoes.aplicar(caminho)
 
 

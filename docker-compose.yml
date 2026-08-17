@@ -105,7 +105,7 @@ services:
   trabalhador:
     build: *build
     restart: unless-stopped
-    command: ["python", "-m", "easycontig_web.trabalhador"]
+    command: ["python", "-m", "easycontig_web.processamento.trabalhador_da_fila"]
     environment: *ambiente
     volumes: *volumes
     depends_on:

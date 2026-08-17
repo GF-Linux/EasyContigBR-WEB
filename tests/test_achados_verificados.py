@@ -24,7 +24,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     return main
 
@@ -119,7 +119,7 @@ def test_saude_responde_sem_cookie_e_o_codigo_segue_a_saude(app, monkeypatch):
     é 401/403), e o código ACOMPANHA a saúde, que é o que faz o monitor externo
     servir para alguma coisa.
     """
-    from easycontig_web import config
+    from easycontig_web import configuracao as config
     c = _cli(app)
     assert c.get("/saude").status_code in (200, 503), "a rota passou a exigir sessão"
 
@@ -142,7 +142,7 @@ def test_saude_responde_a_head_porque_e_o_que_o_monitor_fala(app):
     igual ao do GET — um HEAD que respondesse 200 fixo devolveria o defeito
     original (monitor cego) por outro caminho.
     """
-    from easycontig_web import config
+    from easycontig_web import configuracao as config
     c = _cli(app)
     r = c.head("/saude")
     assert r.status_code != 405, (
@@ -172,7 +172,8 @@ def test_login_dev_desligado_nao_consome_o_teto_compartilhado(tmp_path, monkeypa
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.setenv("EASYCONTIG_LIM_LOGIN", "5")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import limites, main
+    from easycontig_web.contas import limite_de_requisicoes as limites
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     limites.limpar()
     c = TestClient(main.app)

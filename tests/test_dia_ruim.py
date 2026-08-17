@@ -30,7 +30,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from easycontig_web import fila, retencao
+from easycontig_web.processamento import fila_de_lotes as fila
+from easycontig_web.dados import expurgo_por_retencao as retencao
 
 
 # ══════════════════════════════════════════ 1. disco cheio
@@ -42,7 +43,7 @@ def cliente(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.setenv("EASYCONTIG_LIM_ENVIO", "0")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     c = TestClient(main.app, raise_server_exceptions=False)
     c.post("/entrar", data={"email": "gustavo@ufrrj.br"}, follow_redirects=False)
@@ -123,7 +124,7 @@ def test_oito_envios_ao_mesmo_tempo_nao_furam_o_teto(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_MAX_LOTES_ATIVOS", "1")
     monkeypatch.setenv("EASYCONTIG_LIM_ENVIO", "0")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     c = TestClient(main.app, raise_server_exceptions=False)
     c.post("/entrar", data={"email": "gustavo@ufrrj.br"}, follow_redirects=False)

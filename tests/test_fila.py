@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from easycontig_web import fila
+from easycontig_web.processamento import fila_de_lotes as fila
 
 
 @pytest.fixture()
@@ -133,7 +133,7 @@ import multiprocessing as _mp
 
 
 def _sugar_a_fila(caminho, saida, largada=None):
-    from easycontig_web import fila as f
+    from easycontig_web.processamento import fila_de_lotes as f
     if largada is not None:
         largada.wait()          # todos começam a disputar no mesmo instante
     meus = []
@@ -355,5 +355,5 @@ def test_dois_trabalhadores_subindo_juntos_nao_reenfileiram_em_dobro(tmp_path):
 
 
 def _subir_e_reenfileirar(banco, eu, saida):
-    from easycontig_web import fila as f
+    from easycontig_web.processamento import fila_de_lotes as f
     saida.put(f.reenfileirar_orfaos(banco, eu=eu))

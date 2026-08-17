@@ -11,7 +11,8 @@ import sqlite3
 
 import pytest
 
-from easycontig_web import fila, migracoes
+from easycontig_web.processamento import fila_de_lotes as fila
+from easycontig_web.dados import esquema_e_migracoes as migracoes
 
 # O esquema como era ANTES da coluna `referencia` — copiado do que estava em
 # produção. Fica escrito aqui de propósito: se o `_ESQUEMA` de hoje mudar, este

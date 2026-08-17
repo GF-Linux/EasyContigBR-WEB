@@ -23,7 +23,15 @@ dependencies = [
 dev = ["pytest>=8", "httpx>=0.27"]
 
 [tool.setuptools]
-packages = ["easycontig_web"]
+# ⚠️ Listado um a um, e não `find_packages`: subpacote esquecido aqui some da
+# imagem do Docker e o erro só aparece DENTRO do contêiner — em desenvolvimento
+# o `pip install -e .` põe a pasta no caminho e mascara a falta.
+packages = [
+    "easycontig_web",
+    "easycontig_web.contas",
+    "easycontig_web.dados",
+    "easycontig_web.processamento",
+]
 
 [tool.setuptools.package-data]
 easycontig_web = ["templates/*.html", "estatico/*.js"]

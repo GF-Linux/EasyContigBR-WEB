@@ -1,21 +1,12 @@
-"""
-traco.py — o cromatograma de uma amostra, pronto para o navegador.
-
-Por que existe: a página da amostra mostrava só números. Editar base olhando o
-pico é o que faz a ferramenta servir para bancada — *"algumas bases podem estar
-ruins, principalmente nas pontas"* (ADR 0052).
-
-**Nada de ciência mora aqui.** Quem alinha o traço às colunas do consenso é
-`app.core.assembly.chromatogram_data_columns`, que já devolve o traço em
-coordenada de COLUNA — e é por isso que F e R saem acoplados de graça: as duas
-leituras passam a compartilhar o mesmo eixo x. Este módulo só remonta o objeto e
-serializa.
-
-⚠️ **Remontar custa ~0,3 s** (medido no Deck) porque o `tracy consensus` roda de
-novo. É feito sob demanda, ao abrir a amostra, e não guardado: o `.bc.json` de um
-par são ~760 KB em disco contra 108 KB no fio, e o que o lote guarda já é o
-suficiente para o relatório. Tempo é mais barato que volume aqui.
-"""
+#? CROMATOGRAMA — Decisão sobre mostrar o pico, não só o número 06/08/2026
+#!
+#! 1. Entrega o traço de uma amostra pronto para o navegador.
+#! 2. Existe porque a página da amostra mostrava só números, e editar base
+#!    olhando o pico é o que faz a ferramenta servir para bancada.
+#! 3. ⚠️ NADA de ciência mora aqui. Quem alinha o traço às colunas do consenso é
+#!    `app.core.assembly.chromatogram_data_columns`.
+#! 4. Ele devolve o traço já em coordenada de COLUNA — e é por isso que F e R
+#!    saem acoplados de graça.
 from __future__ import annotations
 
 import math
@@ -25,7 +16,7 @@ from app.core.assembly import (build_pair_assembly, chromatogram_data_columns,
                                parse_assembly)
 from app.core.tracy_engine import TracyEngine
 
-from .config import Config
+from ..configuracao import Config
 
 
 def _motor(cfg: Config) -> TracyEngine:

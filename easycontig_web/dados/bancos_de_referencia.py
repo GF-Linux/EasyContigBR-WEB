@@ -1,20 +1,10 @@
-'''
-
-bancos_re.py é o catálogo de bancos de referência montados sob demanda do NCBI
-
-1. Ideia - O laboratório trabalha com protozoarios ? utiliza essa ref, o objetivo é que a ref
-seja montada sob demanda.
-
-2. O motor foi curado para a RAIC -Reunião Anual de Iniciação Científica da UFRRJ - RAIC e RAIDTec 2026
-
-3. Identidade maior não é resultado melhor.
-
-4. O Genbank é dominio público, oq irá para o github é o critério.
-
-#* Autor: Gustavo Gonçalves Freitas - LHV
-#* Copyright (c) 2026 Gustavo Gonçalves Freitas. Todos os direitos reservados.
-
-'''
+#? BANCOS DE REFERÊNCIA — Decisão sobre montar sob demanda 05/08/2026
+#!
+#! 1. Catálogo de bancos de referência montados sob demanda a partir do NCBI.
+#! 2. O laboratório trabalha com protozoários? Usa essa referência. A ideia é que
+#!    a referência seja montada quando pedida, não guardada para sempre.
+#! 3. O motor foi curado para a RAIC/RAIDTec 2026 da UFRRJ.
+#! 4. ⚠️ Identidade maior NÃO é resultado melhor.
 
 from __future__ import annotations
 

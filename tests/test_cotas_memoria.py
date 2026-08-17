@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from easycontig_web import cotas, fila
+from easycontig_web.contas import cota_de_espaco as cotas
+from easycontig_web.processamento import fila_de_lotes as fila
 
 
 @pytest.fixture(autouse=True)

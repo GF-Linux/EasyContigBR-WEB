@@ -26,7 +26,8 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 
-from easycontig_web import pedidos, perfil
+from easycontig_web.dados import pedidos_entre_labs as pedidos
+from easycontig_web.contas import perfil_do_laboratorio as perfil
 
 # ⚠️ O local-part NÃO é o nome de exibição de propósito. Com `maristela@…` e o
 # cartão dizendo "Maristela Peckle", procurar a cadeia "maristela" no HTML acusa
@@ -46,7 +47,7 @@ def app_teste(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     return main
 
@@ -148,7 +149,7 @@ def test_chave_vazia_nao_casa_com_quem_ainda_nao_tem(app_teste, cliente):
     `chave=''` é estado normal durante uma atualização. Sem a guarda, um POST
     com o campo em branco escolheria a primeira dessas linhas como alvo."""
     con_path = app_teste.cfg.sqlite_path
-    from easycontig_web.fila import conectar
+    from easycontig_web.processamento.fila_de_lotes import conectar
     with conectar(con_path) as con:
         con.execute("INSERT INTO perfis (email, nome, chave) VALUES (?,?,'')",
                     ("fantasma@ufrrj.br", "Fantasma"))

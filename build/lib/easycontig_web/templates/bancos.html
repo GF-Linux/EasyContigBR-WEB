@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block titulo %}Bancos de referência — EasyContig BR{% endblock %}
+
+{% block estilo %}
+/* Sem teto próprio: herda o da casca, que acompanha a tela (2026-08-06). Os
+   cartões ficavam presos em ~1420px num monitor de 1920.
+   O `.aviso-motor` MANTÉM o `max-width:70ch` abaixo de propósito: é texto
+   corrido, e texto corrido tem medida de leitura. O que não podia acontecer era
+   a PÁGINA inteira herdar a largura do parágrafo mais estreito dela. */
+.aviso-motor{ background:var(--interno); border:1px solid var(--linha);
+  border-left:3px solid var(--violeta); border-radius:0 9px 9px 0;
+  padding:.85rem 1.1rem; margin:0 0 1.1rem; font-size:.9rem; color:var(--apoio);
+  max-width:70ch; line-height:1.6 }
+.aviso-motor b{ color:var(--tinta) }
+.grupo{ font-family:var(--mono); font-size:.7rem; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--fraco); margin:1.5rem 0 .55rem }
+.conj{ display:flex; align-items:center; gap:.9rem; flex-wrap:wrap;
+  background:var(--painel); border:1px solid var(--linha); border-radius:10px;
+  padding:.7rem .95rem; margin-bottom:6px }
+.conj.montado{ border-color:rgba(63,185,80,.35) }
+.conj .quem{ flex:1; min-width:15rem }
+.conj .nome{ font-size:.93rem; font-weight:600 }
+.conj .mk{ font-family:var(--mono); font-size:.68rem; color:var(--violeta-claro);
+  border:1px solid rgba(145,132,217,.4); border-radius:5px; padding:.08rem .4rem;
+  margin-left:.4rem }
+.conj .nota{ color:var(--fraco); font-size:.79rem; margin-top:.15rem; line-height:1.5 }
+.conj .tam{ font-family:var(--mono); font-size:.76rem; color:var(--apoio);
+  text-align:right; min-width:8.5rem }
+.conj .tam s{ display:block; text-decoration:none; font-size:.66rem; color:var(--fraco) }
+.conj form{ display:inline }
+.mini{ font-size:.78rem; padding:.35rem .7rem }
+.msg{ border-radius:9px; padding:.7rem 1rem; margin-bottom:1rem; font-size:.88rem }
+.msg.ok{ border:1px solid rgba(63,185,80,.4); color:var(--verde);
+  background:rgba(63,185,80,.08) }
+.msg.mal{ border:1px solid rgba(240,82,74,.4); color:var(--vermelho);
+  background:rgba(240,82,74,.08) }
+.meu{ background:var(--painel); border:1px solid var(--linha); border-radius:10px;
+  padding:1rem 1.15rem; margin-top:.6rem }
+.meu .campo{ margin-bottom:.7rem }
+{% endblock %}
+
+{% block conteudo %}
+
+<h1>Bancos de referência</h1>
+<p class="sub" style="max-width:66ch;margin:.2rem 0 1.1rem">Escolha o grupo com
+que você trabalha e monte o banco. Cada um é baixado do GenBank por uma consulta
+declarada, e fica nesta instalação.</p>
+
+{% if feito %}<div class="msg ok">Banco montado.</div>{% endif %}
+{% if erro %}<div class="msg mal">{{ erro }}</div>{% endif %}
+
+<div class="aviso-motor">
+  <b>Nada aqui muda o resultado do motor.</b> Quem identifica a amostra continua
+  sendo o banco curado do RAIC 2026 — dele saem a espécie, a árvore e o veredito.
+  Os bancos abaixo entram como <b>consulta paralela</b>, exibida à parte e
+  rotulada como tal.
+  <br><br>
+  ⚠️ E <b>identidade maior não quer dizer resultado melhor</b>: o mesmo consenso
+  de <i>Hepatozoon canis</i> dá 99,6 % contra as 16 referências curadas e 99,9 %
+  contra as 311 de Adeleorina. Mesma espécie — o número subiu só porque havia uma
+  referência mais próxima no banco.
+</div>
+
+{% for grupo, itens in grupos.items() %}
+<div class="grupo">{{ grupo }}</div>
+{% for it in itens %}
+<div class="conj{% if it.estado.montado %} montado{% endif %}">
+  <div class="quem">
+    <span class="nome">{{ it.c.nome }}</span><span class="mk">{{ it.c.marcador }}</span>
+    {% if it.c.nota %}<div class="nota">{{ it.c.nota }}</div>{% endif %}
+  </div>
+  <div class="tam">
+    {% if it.estado.montado %}
+      {{ it.estado.sequencias }} seqs
+      <s>{{ (it.estado.bytes / 1048576) | round(1) | string | replace('.', ',') }} MB ·
+        {{ it.estado.baixado_em[:10] }}</s>
+    {% else %}
+      ~{{ it.c.aprox }} seqs
+      <s>≈ {{ (it.c.aprox / 311 * 0.242) | round(1) | string | replace('.', ',') }} MB</s>
+    {% endif %}
+  </div>
+  <div>
+    {% if it.estado.montado %}
+      <span class="rotulo pronto">montado</span>
+      <form method="post" action="/bancos/{{ it.c.id }}/remover" data-confirmar="Remover este banco desta instalação? Dá para montar de novo depois.">
+        <button class="botao secundario mini" type="submit">remover</button></form>
+    {% else %}
+      <form method="post" action="/bancos/{{ it.c.id }}/montar">
+        <button class="botao mini" type="submit">Montar</button></form>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+{% endfor %}
+
+<div class="grupo">Meus bancos</div>
+<p class="sub" style="max-width:66ch;margin:0 0 .6rem">Suas próprias referências —
+sequências do grupo que ainda não foram publicadas, ou um recorte que você
+curou. Ficam só nesta conta.</p>
+
+{% for b in meus %}
+<div class="conj montado">
+  <div class="quem"><span class="nome">{{ b.apelido }}</span>
+    <div class="nota">enviado por você · {{ b.baixado_em[:10] }}</div></div>
+  <div class="tam">{{ b.sequencias }} seqs
+    <s>{{ (b.bytes / 1048576) | round(2) | string | replace('.', ',') }} MB</s></div>
+  <div>
+    <form method="post" action="/bancos/{{ b.id }}/remover" data-confirmar="Remover este banco? O FASTA original no seu computador não é tocado.">
+      <button class="botao secundario mini" type="submit">remover</button></form>
+  </div>
+</div>
+{% endfor %}
+
+<div class="meu">
+  <form method="post" action="/bancos/meu" enctype="multipart/form-data">
+    <div class="campo">
+      <label class="sub" for="apelido">Nome do banco</label>
+      <input type="text" id="apelido" name="apelido" required
+             placeholder="refs-do-lab" pattern="[A-Za-z0-9_-]{1,40}">
+    </div>
+    <div class="campo">
+      <label class="sub" for="fasta">Arquivo FASTA (até 20 MB)</label><br>
+      <input type="file" id="fasta" name="fasta" accept=".fa,.fasta,.fna,.txt"
+             required style="margin-top:.4rem">
+    </div>
+    <button type="submit">Montar meu banco</button>
+    <p class="sub" style="margin:.6rem 0 0">Os cabeçalhos do FASTA são o que
+    aparece no resultado — vale usar accession e nome de organismo.</p>
+  </form>
+</div>
+
+{% endblock %}

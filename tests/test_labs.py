@@ -22,7 +22,7 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 
-from easycontig_web import perfil
+from easycontig_web.contas import perfil_do_laboratorio as perfil
 
 
 @pytest.fixture()
@@ -32,7 +32,7 @@ def cliente(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     c = TestClient(main.app)
     c.post("/entrar", data={"email": "gustavo@ufrrj.br"}, follow_redirects=False)
@@ -45,7 +45,7 @@ def _sem_sessao(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
     monkeypatch.delenv("EASYCONTIG_PRODUCAO", raising=False)
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     return TestClient(main.app)
 
@@ -91,7 +91,7 @@ def test_cadastro_automatico_nao_grava_o_local_part_do_email(cliente):
     inofensivo na lateral (é o endereço de quem lê), fatal no diretório. Quem
     grava é `garantir_registro`, e ele só aceita nome que o PROVEDOR declarou.
     """
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     guardado = perfil.listar_perfis(m.cfg.sqlite_path)[0]
     assert guardado["nome"] == "", (
         f"gravou {guardado['nome']!r} no cadastro automático")
@@ -112,7 +112,7 @@ def test_nome_declarado_pelo_provedor_entra_no_cadastro(cliente):
     """O caminho do Google: a pessoa não digitou nada, mas a conta dela declara
     um nome — e é esse que o diretório mostra. É o que faz a orientadora
     aparecer como ela mesma sem preencher formulário nenhum."""
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     perfil.garantir_registro(m.cfg.sqlite_path, "maristela@ufrrj.br",
                              "Maristela Peckle")
     html = cliente.get("/labs").text
@@ -123,7 +123,7 @@ def test_nome_declarado_pelo_provedor_entra_no_cadastro(cliente):
 def test_cadastro_automatico_nao_pisa_no_que_a_pessoa_declarou(cliente):
     """Entrar de novo não pode apagar o perfil de quem editou — por isso o
     UPDATE do conflito é condicionado a `perfis.nome=''`."""
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     cliente.post("/perfil", data={"nome": "Gustavo Freitas", "laboratorio": "LHV"},
                  follow_redirects=False)
     perfil.garantir_registro(m.cfg.sqlite_path, "gustavo@ufrrj.br", "Outro Nome")
@@ -151,8 +151,8 @@ def test_perfil_salvo_aparece_com_o_que_foi_declarado(cliente):
 
 def test_labs_nao_expoe_corridas_nem_email_de_terceiro_por_engano(cliente):
     """A lista é declaração, não atividade: não deve vazar nomes de corrida."""
-    from easycontig_web import fila
-    from easycontig_web import main as m
+    from easycontig_web.processamento import fila_de_lotes as fila
+    from easycontig_web import servidor_web as m
     lid = fila.novo_lote(m.cfg.sqlite_path, dono="gustavo@ufrrj.br",
                          nome="F13719 sequencia sigilosa", n_arquivos=2)
     fila.liberar_para_fila(m.cfg.sqlite_path, lid, 2)
@@ -166,7 +166,7 @@ def test_labs_nao_expoe_corridas_nem_email_de_terceiro_por_engano(cliente):
 
 # ───────────────────────────────── o helper em si
 def test_listar_perfis_ordena_e_so_traz_declaracao(cliente):
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     perfil.salvar(m.cfg.sqlite_path, "zulmira@ufrrj.br", nome="Zulmira")
     perfil.salvar(m.cfg.sqlite_path, "ana@ufrrj.br", nome="Ana",
                   especies="Babesia vogeli")
@@ -195,7 +195,7 @@ def test_quem_nao_digitou_nome_nao_vira_o_local_part_do_email(cliente):
     conta autenticada reconstruía o e-mail institucional dos demais. O endereço
     completo nunca chegou ao HTML; ele era remontado, que dá no mesmo.
     """
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     perfil.salvar(m.cfg.sqlite_path, "joao.silva@ufrrj.br", laboratorio="LHV")
 
     guardado = perfil.listar_perfis(m.cfg.sqlite_path)[0]
@@ -214,7 +214,7 @@ def _com_foto(c, nome="Gustavo"):
     c.post("/perfil", data={"nome": nome},
            files={"foto": ("minha.png", png, "image/png")},
            follow_redirects=False)
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     return perfil.pegar(m.cfg.sqlite_path, "gustavo@ufrrj.br")["foto"]
 
 
@@ -230,7 +230,7 @@ def test_o_cartao_do_labs_usa_a_foto_do_perfil(cliente):
 
 def test_a_foto_do_diretorio_nao_sai_sem_sessao(cliente, tmp_path, monkeypatch):
     arquivo = _com_foto(cliente)
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     anonimo = TestClient(m.app)
     r = anonimo.get(f"/labs/foto/{arquivo}", headers={"accept": "application/json"})
     assert r.status_code == 401
@@ -239,7 +239,7 @@ def test_a_foto_do_diretorio_nao_sai_sem_sessao(cliente, tmp_path, monkeypatch):
 def test_a_rota_de_foto_so_entrega_foto_de_perfil(cliente):
     """A trava que impede a rota de virar leitor da pasta: sai só o que está na
     coluna `foto` de algum perfil, não qualquer arquivo que caia no volume."""
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     _com_foto(cliente)
     intruso = m.cfg.data_dir / "fotos" / "naoehperfil.png"
     intruso.write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -260,7 +260,7 @@ def test_o_nome_do_provedor_preenche_cadastro_que_estava_vazio(cliente):
     provedor — não escreveria, e a pessoa ficaria "perfil sem nome" para
     sempre. O UPDATE condicional preenche o vazio e só o vazio.
     """
-    from easycontig_web import main as m
+    from easycontig_web import servidor_web as m
     perfil.garantir_registro(m.cfg.sqlite_path, "zulmira@ufrrj.br")        # sem nome
     assert perfil.pegar(m.cfg.sqlite_path, "zulmira@ufrrj.br")["nome"] == ""
 

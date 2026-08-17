@@ -23,7 +23,7 @@ def cliente(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_AUTH", "dev")
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)                 # o módulo lê a config na importação
     return TestClient(main.app)
 
@@ -59,7 +59,7 @@ def test_dominio_restrito_recusa_conta_de_fora(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_AUTH", "dev")
     monkeypatch.setenv("EASYCONTIG_DOMINIO", "ufrrj.br")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     c = TestClient(main.app)
     r = c.post("/entrar", data={"email": "alguem@gmail.com"}, follow_redirects=False)
@@ -74,7 +74,7 @@ def test_login_dev_recusado_quando_desligado(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_DATA_DIR", str(tmp_path / "d"))
     monkeypatch.setenv("EASYCONTIG_AUTH", "google")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     r = TestClient(main.app).post("/entrar", data={"email": "x@ufrrj.br"})
     assert r.status_code == 403
@@ -82,7 +82,8 @@ def test_login_dev_recusado_quando_desligado(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------------- lotes
 def test_lote_criado_fica_recebendo_e_depois_na_fila(cliente):
-    from easycontig_web import fila, main
+    from easycontig_web.processamento import fila_de_lotes as fila
+    from easycontig_web import servidor_web as main
     _entrar(cliente)
     r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1",
                                              "amostra12_R_BTR2.ab1"]),
@@ -104,7 +105,8 @@ def test_arquivo_que_nao_e_trace_e_recusado(cliente):
 
 
 def test_extensao_estranha_e_ignorada_mas_o_ab1_passa(cliente):
-    from easycontig_web import fila, main
+    from easycontig_web.processamento import fila_de_lotes as fila
+    from easycontig_web import servidor_web as main
     _entrar(cliente)
     envio = _envio(["amostra12_F_BTF2.ab1", "amostra12_R_BTR2.ab1"])
     envio.append(("arquivos", ("leia-me.txt", b"nada", "text/plain")))
@@ -118,7 +120,7 @@ def test_teto_de_arquivos(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYCONTIG_AUTH", "dev")
     monkeypatch.setenv("EASYCONTIG_MAX_ARQUIVOS", "1")
     monkeypatch.setenv("EASYCONTIG_SECRET_KEY", "teste")
-    from easycontig_web import main
+    from easycontig_web import servidor_web as main
     importlib.reload(main)
     c = _entrar(TestClient(main.app))
     r = c.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1", "amostra12_R_BTR2.ab1"]), data=REF)
@@ -127,7 +129,8 @@ def test_teto_de_arquivos(tmp_path, monkeypatch):
 
 def test_nome_com_travessia_de_caminho_vira_so_o_nome(cliente):
     """O navegador manda 'pasta/sub/arquivo.ab1' quando se escolhe uma pasta."""
-    from easycontig_web import executor, main
+    from easycontig_web.processamento import executor_de_lote as executor
+    from easycontig_web import servidor_web as main
     _entrar(cliente)
     dados = (AB1 / "amostra12_F_BTF2.ab1").read_bytes()
     envio = [("arquivos", ("../../../fora.ab1", dados, "application/octet-stream")),
@@ -225,7 +228,8 @@ def test_referencia_nao_montada_e_recusada(cliente):
 
 def test_a_referencia_escolhida_fica_gravada_no_lote(cliente):
     """Sem isto o relatório não sabe dizer contra o que comparou."""
-    from easycontig_web import fila, main
+    from easycontig_web.processamento import fila_de_lotes as fila
+    from easycontig_web import servidor_web as main
     _entrar(cliente)
     r = cliente.post("/lotes", files=_envio(["amostra12_F_BTF2.ab1"]),
                      data=REF, follow_redirects=False)

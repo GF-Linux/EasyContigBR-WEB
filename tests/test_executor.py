@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from easycontig_web import config, executor
+from easycontig_web import configuracao as config
+from easycontig_web.processamento import executor_de_lote as executor
 
 AB1 = Path("/home/deck/Desktop/EasyContig-BR-Demo-Deck/ab1_por_especie/Babesia_vogeli")
 PAR = ["amostra28_F_BTF2.ab1", "amostra28_R_BTR2.ab1"]

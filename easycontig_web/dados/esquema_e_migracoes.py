@@ -1,28 +1,12 @@
-"""
-migracoes.py — como o esquema do banco muda entre versões, e como voltar atrás.
-
-Por que existe (2026-08-06): até aqui o esquema nascia de `CREATE TABLE IF NOT
-EXISTS` mais um `if` avulso que conferia `PRAGMA table_info` para descobrir se a
-coluna `referencia` já existia. Aquilo funcionou para UMA coluna. O problema não
-é elegância — são três coisas concretas que faltavam:
-
-  1. **Não havia como saber se uma mudança já foi aplicada.** Cada alteração
-     futura precisaria do seu próprio `if` inspecionando o banco, e a chance de
-     dois deles se contradizerem cresce com o número.
-  2. **Não havia como voltar atrás.** Se uma atualização corromper o banco, a
-     única saída era o backup que ninguém tinha feito.
-  3. **Não havia ordem declarada.** Migração que depende de outra não tinha como
-     dizer isso.
-
-O mecanismo é o `PRAGMA user_version` do próprio SQLite: um inteiro guardado no
-cabeçalho do arquivo, sem tabela extra e sem dependência nova. O banco diz em
-que versão está; aplicamos só o que falta, em ordem, dentro de uma transação.
-
-**Compatível com o que já existe em produção.** Um banco criado antes disto tem
-`user_version = 0` e já pode ter a coluna `referencia` (pelo `if` antigo) ou
-não. Por isso a migração 1 é escrita para ser idempotente: ela confere antes de
-alterar. Rodar num banco novo e num banco antigo dá o mesmo resultado.
-"""
+#? ESQUEMA E MIGRAÇÕES — Decisão sobre versionar o banco 06/08/2026
+#!
+#! 1. Como o esquema do banco muda entre versões, e como voltar atrás.
+#! 2. Antes o esquema nascia de `CREATE TABLE IF NOT EXISTS` mais um `if` avulso
+#!    olhando `PRAGMA table_info`. Funcionou para UMA coluna.
+#! 3. O que faltava: saber se uma mudança já foi aplicada, sem cada alteração
+#!    futura precisar do próprio `if` inspecionando o banco.
+#! 4. ⚠️ Migração que falha NÃO deixa o banco no meio do caminho: ou aplica
+#!    inteira, ou o banco continua na versão anterior.
 from __future__ import annotations
 
 import logging
@@ -32,7 +16,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .fila import conectar
+from ..processamento.fila_de_lotes import conectar
 
 log = logging.getLogger("easycontig.migracoes")
 

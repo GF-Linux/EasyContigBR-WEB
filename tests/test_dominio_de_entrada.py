@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from easycontig_web.auth import dominio_ok
+from easycontig_web.contas.autenticacao import dominio_ok
 
 
 # ── sem configuração: porta aberta, e é de propósito ─────────────────────────
@@ -95,7 +95,7 @@ def test_um_tld_na_lista_abre_o_pais_inteiro():
 # `401 invalid_client — The OAuth client was not found`, depois de ele já ter
 # escolhido a conta. Nada no nosso lado protestou: `google_configurado()` aceita
 # qualquer texto não vazio, inclusive as reticências da receita do `docs/`.
-from easycontig_web.auth import queixa_do_client_id
+from easycontig_web.contas.autenticacao import queixa_do_client_id
 
 
 def test_id_bem_formado_nao_gera_queixa():
@@ -141,7 +141,7 @@ import urllib.error
 import pytest as _pytest
 from fastapi import HTTPException
 
-from easycontig_web import auth as _auth
+from easycontig_web.contas import autenticacao as _auth
 
 
 class _RequestFalso:
@@ -211,7 +211,7 @@ def test_estado_invalido_continua_sendo_400_e_nao_502(monkeypatch):
 # A trava de usuário de teste do Google vale para escopos SENSÍVEIS, e
 # `openid email profile` não são. O Google prova a identidade e não restringe
 # nada: quem restringe é o EASYCONTIG_DOMINIO, e só ele.
-from easycontig_web import config as _config
+from easycontig_web import configuracao as _config
 
 
 def test_asterisco_abre_por_escrito():

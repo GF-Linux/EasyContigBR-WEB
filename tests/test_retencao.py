@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from easycontig_web import fila, retencao
+from easycontig_web.processamento import fila_de_lotes as fila
+from easycontig_web.dados import expurgo_por_retencao as retencao
 
 AGORA = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
 
