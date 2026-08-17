@@ -3,7 +3,7 @@
 #! 1. Roda UM lote. É a única ponte entre a web e o núcleo científico.
 #! 2. Este arquivo NÃO decide nada sobre montagem, identidade ou limiar: copia
 #!    parâmetro, chama `run_batch` e grava os três artefatos que o usuário baixa.
-#! 3. ⚠️ Mudou o que o relatório afirma? O lugar é `app/core/report.py`, nunca
+#! 3. Mudou o que o relatório afirma? O lugar é `app/core/report.py`, nunca
 #!    aqui — é o que mantém web e desktop dizendo a mesma coisa da mesma amostra.
 from __future__ import annotations
 

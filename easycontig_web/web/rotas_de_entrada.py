@@ -7,7 +7,7 @@
 #? SERVIDOR WEB — Decisão sobre não processar nada aqui 04/08/2026
 #!
 #! 1. Sobe assim: `uvicorn easycontig_web.servidor_web:app`
-#! 2. ⚠️ REGRA DE OURO: este arquivo NÃO processa nada. Recebe arquivo, grava em
+#! 2. REGRA DE OURO: este arquivo NÃO processa nada. Recebe arquivo, grava em
 #!    disco, enfileira e responde.
 #! 3. Todo trabalho pesado é do trabalhador, em outro processo.
 #! 4. É a diferença entre aguentar 100 pessoas e cair com 20.

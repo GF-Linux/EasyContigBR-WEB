@@ -2,7 +2,7 @@
 #!
 #! 1. Tudo que muda entre a máquina do autor, a VPS e o contêiner vem daqui, por
 #!    variável de ambiente.
-#! 2. ⚠️ Nada de caminho absoluto no código: o mesmo pacote roda no Deck (bancos
+#! 2. Nada de caminho absoluto no código: o mesmo pacote roda no Deck (bancos
 #!    e tracy dentro do repo) e na VPS (bancos num volume) só trocando o `.env`.
 from __future__ import annotations
 

@@ -3,7 +3,7 @@
 #! 1. Mede quanto UMA CONTA ocupa, não quanto cabe em um lote.
 #! 2. Os tetos por lote (400 arquivos, 300 MB) seguram o envio único absurdo e
 #!    mais nada: 50 lotes legítimos enchem o disco sem cruzar teto nenhum.
-#! 3. ⚠️ Disco cheio no meio de um upload é o defeito de sempre — metade dos
+#! 3. Disco cheio no meio de um upload é o defeito de sempre — metade dos
 #!    arquivos gravados e relatório com menos amostras do que a corrida tem.
 #! 4. Este módulo NÃO levanta exceção e NÃO decide status HTTP. Responde "como
 #!    está esta conta agora" e deixa o servidor traduzir em 413.

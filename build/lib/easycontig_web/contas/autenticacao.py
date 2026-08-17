@@ -7,7 +7,7 @@
 #! 4. `EASYCONTIG_DOMINIO=ufrrj.br` restringe a entrada ao domínio institucional.
 #! 5. É isso que permite usar conta Google comum e ainda ser serviço da
 #!    universidade: o Google prova QUEM é, o domínio decide SE entra.
-#! 6. ⚠️ O caminho `google` NUNCA foi exercitado com credencial real — depende de
+#! 6. O caminho `google` NUNCA foi exercitado com credencial real — depende de
 #!    CLIENT_ID/SECRET que só o autor cria no console. O fluxo está inteiro
 #!    (ida, volta, troca do código por token, leitura do e-mail), mas até alguém
 #!    rodar com credencial de verdade, considere NÃO TESTADO.

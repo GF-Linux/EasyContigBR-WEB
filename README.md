@@ -4,7 +4,7 @@ Fachada web do EasyContig BR. Sobe um par F+R — ou a pasta inteira de uma
 corrida — e devolve o alinhamento, os dois cromatogramas acoplados, a
 identificação, o relatório e o CSV.
 
-⚠️ Este parágrafo dizia até 2026-08-06 que a web **não** tinha cromatograma
+**ATENÇÃO** — este parágrafo dizia até 2026-08-06 que a web **não** tinha cromatograma
 interativo nem edição de base. Deixou de ser verdade em 05/08, quando a Fase 2
 saiu do papel: o workspace da amostra desenha o traço em canvas, arrasta para os
 lados, ajusta amplitude e edita base — e o consenso só vira definitivo na
@@ -18,15 +18,15 @@ laboratório pediu na prática duas vezes.
 
 ```
    navegador                     este repo                    EasyContig BR
-  ┌──────────┐   .ab1     ┌───────────────────┐            ┌────────────────┐
-  │  upload  │ ─────────▶ │  main.py (FastAPI)│            │   app/core/    │
-  └──────────┘            │  grava e ENFILEIRA│            │  (biblioteca)  │
-       ▲                  └─────────┬─────────┘            │  tracy · blast │
+  ┌──────────┐   .ab1     ┌────────────────────┐           ┌────────────────┐
+  │  upload  │ ─────────▶ │  servidor_web.py   │           │   app/core/    │
+  └──────────┘            │  grava e ENFILEIRA │           │  (biblioteca)  │
+       ▲                  └─────────┬──────────┘           │  tracy · blast │
        │  relatório                 │ SQLite               │  árvore · lote │
-       │                  ┌─────────▼─────────┐  importa   │                │
-       └───────────────── │  trabalhador.py   │ ──────────▶│                │
-                          │  (outro processo) │            └────────────────┘
-                          └───────────────────┘
+       │                  ┌─────────▼──────────┐  importa  │                │
+       └───────────────── │ processamento/     │ ─────────▶│                │
+                          │ trabalhador_da_fila│           └────────────────┘
+                          └────────────────────┘
 ```
 
 O servidor web **não processa nada**. Ele grava os arquivos, põe o lote na fila
@@ -38,6 +38,45 @@ mesma máquina que aguentaria 20.
 Nenhuma decisão científica mora aqui. Montagem, identidade, limiares e o texto
 do relatório são todos de `app/core/`, o mesmo código que o desktop usa — o que
 mantém as duas fachadas dizendo a mesma coisa sobre a mesma amostra.
+
+## Onde cada coisa mora
+
+Os arquivos são separados por assunto, e o nome diz a função. Quem procura algo
+abre a pasta, não o arquivo.
+
+```
+easycontig_web/
+├── servidor_web.py          o app, os middlewares e os tratadores de erro
+├── configuracao.py          tudo que muda entre máquinas, por variável de ambiente
+├── web/                     as rotas, uma pasta por assunto
+│   ├── comum.py             o que TODA rota usa: templates, sessão, casca
+│   ├── rotas_de_entrada.py           raiz, login, saída
+│   ├── rotas_de_envio_de_lote.py     recebe, grava e enfileira
+│   ├── rotas_de_consulta_de_lote.py  olhar um lote pronto
+│   ├── rotas_de_perfil.py            leia-me, perfil e fotos
+│   ├── rotas_de_labs_e_pedidos.py    diretório e pedidos entre labs
+│   └── rotas_de_bancos.py            montar, remover, enviar o seu
+├── contas/                  quem entra e quanto pode
+│   ├── autenticacao.py               o Google prova quem é, o domínio decide se entra
+│   ├── perfil_do_laboratorio.py      identidade e portfólio declarado
+│   ├── limite_de_requisicoes.py      quantas requisições por janela
+│   └── cota_de_espaco.py             quanto UMA CONTA ocupa
+├── processamento/           o que roda fora da requisição
+│   ├── fila_de_lotes.py              a fila, em SQLite
+│   ├── trabalhador_da_fila.py        o processo que a esvazia
+│   └── executor_de_lote.py           a única ponte com a ciência
+└── dados/                   o que se lê e se guarda
+    ├── esquema_e_migracoes.py        como o banco muda de versão
+    ├── bancos_de_referencia.py       referências montadas sob demanda
+    ├── leitura_de_amostras.py        lê o relatorio.json por amostra
+    ├── cromatograma.py               o traço pronto para o navegador
+    ├── expurgo_por_retencao.py       quando o .ab1 deixa de existir aqui
+    └── pedidos_entre_labs.py         um lab pede uma amostra a outro
+```
+
+A configuração é lida NA HORA DO USO, e não guardada no import. Custa 15,9 µs por
+chamada, medido, e é o que deixa cada teste ter a sua própria pasta sem o módulo
+precisar ser recarregado.
 
 ## Rodar em desenvolvimento
 
@@ -73,7 +112,7 @@ tracy/blastn/bancos não estão configurados.
 
 ```bash
 ./tools/preparar_nucleo.sh                  # copia SÓ o pacote para ./nucleo
-# ⚠️ não use `ln -s`: link para fora do contexto de build não é seguido
+# NÃO use `ln -s`: link para fora do contexto de build não é seguido
 #    (nem docker nem podman), e copiar o repo inteiro levaria os .ab1
 #    reais e não publicados para dentro de uma camada da imagem.
 mkdir bancos && cp ../EasyContig-BR-Demo-Deck/db/referencias_18S.* bancos/
@@ -134,7 +173,7 @@ uso não cabe dentro da licença:
   guardado, por quanto tempo, onde mora, o que sai do servidor e o que aparece
   para as outras pessoas.
 
-⚠️ Os dois são **minuta** até a revisão do NIT/UFRRJ. A licença cobre software
+Os dois são **minuta** até a revisão do NIT/UFRRJ. A licença cobre software
 distribuído; **serviço em rede é superfície que ela cobre pior** — daí o segundo
 documento, e daí a conversa com o NIT antes de abrir para fora da UFRRJ.
 

@@ -5,7 +5,7 @@
 #!    do login.
 #! 3. PORTFÓLIO — as espécies e marcadores que o laboratório DECLARA trabalhar.
 #!    É texto do dono, não estatística.
-#! 4. ⚠️ O portfólio NÃO é contagem do que o BLAST devolveu. A primeira versão
+#! 4. O portfólio NÃO é contagem do que o BLAST devolveu. A primeira versão
 #!    mostrava ranking das espécies encontradas, e isso convida a ler
 #!    prevalência onde não há: contava amostras, não animais.
 from __future__ import annotations

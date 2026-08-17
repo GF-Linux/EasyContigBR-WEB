@@ -4,14 +4,14 @@
 #!    página e a leitura do lote.
 #! 2. Existe para as rotas poderem morar em arquivos por assunto. Sem isto elas
 #!    importariam do servidor, e o servidor importa elas — ciclo de importação.
-#! 3. ⚠️ A configuração é lida A CADA USO (`cfg()`), e não guardada no import.
+#! 3. A configuração é lida A CADA USO (`cfg()`), e não guardada no import.
 #!    Motivo medido: a suíte tem 28 pontos de `importlib.reload(main)` para dar
 #!    a cada teste uma pasta própria. Recarregar o servidor NÃO recarrega este
 #!    módulo — um `cfg` guardado aqui ficaria preso na pasta do primeiro teste, e
 #!    as falhas apareceriam dependendo da ORDEM dos testes.
 #! 4. Custo medido da leitura fresca: 15,9 µs por chamada, ou 1,6 ms de CPU por
 #!    segundo a 100 req/s. Desprezível diante do que evita.
-#! 5. ⚠️ Este módulo NÃO conhece rota nenhuma. Quem importa daqui é rota.
+#! 5. Este módulo NÃO conhece rota nenhuma. Quem importa daqui é rota.
 
 from __future__ import annotations
 

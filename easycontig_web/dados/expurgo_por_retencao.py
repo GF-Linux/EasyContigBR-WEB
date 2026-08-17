@@ -6,7 +6,7 @@
 #! 3. São corridas Sanger NÃO publicadas: volume que só cresce é risco (dado de
 #!    terceiro sem prazo) e conta de disco (~26 MB por corrida de 40).
 #! 4. Este módulo NÃO decide a política. Quem tem o dado é quem define o prazo.
-#! 5. ⚠️ Se todos os lotes vencem de uma vez, a faxina TRAVA e não apaga nada —
+#! 5. Se todos os lotes vencem de uma vez, a faxina TRAVA e não apaga nada —
 #!    isso não é passagem do tempo, é relógio errado ou prazo mal posto.
 from __future__ import annotations
 

@@ -5,7 +5,7 @@
 #!    era abrir o relatório inteiro e procurar com Ctrl+F.
 #! 3. Aqui não se monta nem se identifica nada: o arquivo já está em disco,
 #!    escrito por `app/core/report.py`. Este módulo só formata para a tela.
-#! 4. ⚠️ Nenhuma decisão científica mora aqui.
+#! 4. Nenhuma decisão científica mora aqui.
 #! 5. Os limiares NÃO são reescritos: cada ressalva carrega o seu em `rule`, e é
 #!    esse texto que a tela imprime. Repetir o número aqui criaria uma segunda
 #!    fonte para o mesmo dado.

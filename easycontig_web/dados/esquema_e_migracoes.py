@@ -5,7 +5,7 @@
 #!    olhando `PRAGMA table_info`. Funcionou para UMA coluna.
 #! 3. O que faltava: saber se uma mudança já foi aplicada, sem cada alteração
 #!    futura precisar do próprio `if` inspecionando o banco.
-#! 4. ⚠️ Migração que falha NÃO deixa o banco no meio do caminho: ou aplica
+#! 4. Migração que falha NÃO deixa o banco no meio do caminho: ou aplica
 #!    inteira, ou o banco continua na versão anterior.
 from __future__ import annotations
 

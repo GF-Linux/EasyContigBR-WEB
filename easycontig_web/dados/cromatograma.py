@@ -3,7 +3,7 @@
 #! 1. Entrega o traço de uma amostra pronto para o navegador.
 #! 2. Existe porque a página da amostra mostrava só números, e editar base
 #!    olhando o pico é o que faz a ferramenta servir para bancada.
-#! 3. ⚠️ NADA de ciência mora aqui. Quem alinha o traço às colunas do consenso é
+#! 3. NADA de ciência mora aqui. Quem alinha o traço às colunas do consenso é
 #!    `app.core.assembly.chromatogram_data_columns`.
 #! 4. Ele devolve o traço já em coordenada de COLUNA — e é por isso que F e R
 #!    saem acoplados de graça.

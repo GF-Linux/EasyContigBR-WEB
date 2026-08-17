@@ -3,7 +3,7 @@
 #! 1. Um laboratório pede uma amostra a outro, e o outro aceita ou recusa.
 #! 2. É o par do portfólio do perfil: o `/labs` mostra QUEM trabalha com o quê,
 #!    isto é o PEDIR.
-#! 3. ⚠️ NÃO É CONVERSA, e a diferença é de desenho, não de acabamento: um
+#! 3. NÃO É CONVERSA, e a diferença é de desenho, não de acabamento: um
 #!    pedido tem exatamente um ciclo, e acaba.
 from __future__ import annotations
 
