@@ -15,7 +15,10 @@ import pytest
 from easycontig_web import configuracao as config
 from easycontig_web.processamento import executor_de_lote as executor
 
-AB1 = Path("/home/deck/Desktop/EasyContig-BR-Demo-Deck/ab1_por_especie/Babesia_vogeli")
+#! Os .ab1 são FABRICADOS, não lidos de um caminho da máquina do autor.
+#!   Ver `tests/amostras_sinteticas.py` — o caminho antigo derrubava 23 testes
+#!   fora daquele computador.
+from amostras_sinteticas import PASTA as AB1
 PAR = ["amostra28_F_BTF2.ab1", "amostra28_R_BTR2.ab1"]
 
 

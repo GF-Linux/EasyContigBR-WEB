@@ -20,7 +20,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-AB1 = Path("/home/deck/Desktop/EasyContig-BR-Demo-Deck/ab1_por_especie/Babesia_vogeli")
+#! Os .ab1 são FABRICADOS, não lidos de um caminho da máquina do autor.
+#!   Ver `tests/amostras_sinteticas.py` — o caminho antigo derrubava 23 testes
+#!   fora daquele computador.
+from amostras_sinteticas import PASTA as AB1
 REF = {"referencia": "curado"}
 
 # `makeblastdb` só existe onde o BLAST está instalado. O que depende dele se
