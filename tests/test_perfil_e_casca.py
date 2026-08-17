@@ -105,7 +105,7 @@ def test_endereco_sem_esquema_ganha_https():
 
 def test_os_enderecos_sobrevivem_a_ida_e_volta(cliente, tmp_path):
     cliente.post("/perfil", data={
-        "nome": "G", "links": "github.com/juaredbr-cpu\norcid.org/0000-0002-1825-0097",
+        "nome": "G", "links": "github.com/GF-Linux\norcid.org/0000-0002-1825-0097",
     }, follow_redirects=False)
     html = cliente.get("/perfil").text
     assert html.count('class="rede"') == 2
