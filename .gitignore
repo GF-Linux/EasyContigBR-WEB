@@ -54,3 +54,6 @@ REESCRITA.md
 
 # Testes de seguranca do proprio servidor — NUNCA publicar (repo publico)
 Teste-Seguranca-GustavoFreitas/
+
+# o exemplo trazia caminhos pessoais da máquina do autor
+.env.example
