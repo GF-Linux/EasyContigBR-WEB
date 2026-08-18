@@ -78,6 +78,9 @@ CATALOGO: tuple[Conjunto, ...] = (
     Conjunto("anaplasmataceae_dsb", "Anaplasmataceae", "Bactérias", "dsb",
              "txid942[Organism:exp] AND dsb[Title]", 256,
              "gene codificante — primer específico de Ehrlichia"),
+    Conjunto("anaplasmataceae_sodb", "Anaplasmataceae", "Bactérias", "sodB",
+             "txid942[Organism:exp] AND sodB[Title]", 160,
+             "gene codificante — superóxido dismutase; ⚠️ mesmo corte da groEL (ADR 0046)"),
 
     Conjunto("cestoda_18s", "Cestoda", "Helmintos", "18S rRNA",
              "txid6199[Organism:exp] AND 18S ribosomal RNA[Title] AND 1000:2500[SLEN]",

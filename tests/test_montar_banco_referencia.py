@@ -44,3 +44,31 @@ def test_catalogo_devolve_o_conjunto_e_nao_explode(tmp_path: Path, monkeypatch):
 def test_todo_id_do_catalogo_e_consultavel():
     for c in bancos.CATALOGO:
         assert bancos.POR_ID.get(c.id) is c
+
+
+# --------------------------------------------------------------- catálogo
+# A corrida F13719 (capivaras, julho/2026) usou QUATRO primers: 16S, groEL,
+# dsb e sodB. As 19 amostras de gene codificante não identificavam porque o
+# banco curado só tem rRNA — e o `sodB` nem banco no catálogo tinha, o que
+# deixava 2 amostras sem caminho nenhum. Este teste é o que impede o conjunto
+# de sumir de novo numa reorganização do catálogo.
+MARCADORES_ANAPLASMATACEAE = {"16S rRNA", "groEL", "dsb", "sodB"}
+
+
+def test_anaplasmataceae_cobre_os_quatro_marcadores_da_placa():
+    marcadores = {c.marcador for c in bancos.CATALOGO
+                  if c.nome == "Anaplasmataceae"}
+    assert MARCADORES_ANAPLASMATACEAE <= marcadores, (
+        "faltou marcador de Anaplasmataceae no catálogo: "
+        f"{MARCADORES_ANAPLASMATACEAE - marcadores}")
+
+
+def test_sodb_esta_no_catalogo_e_aponta_para_o_locus_certo():
+    c = bancos.POR_ID.get("anaplasmataceae_sodb")
+    assert c is not None, "o conjunto sodB sumiu do catálogo"
+    assert c.marcador == "sodB"
+    assert c.grupo == "Bactérias"
+    # o termo tem de restringir ao táxon E ao locus — sem um dos dois o banco
+    # vira outra coisa (o táxon inteiro, ou sodB de qualquer bactéria)
+    assert "txid942" in c.termo
+    assert "sodB" in c.termo
