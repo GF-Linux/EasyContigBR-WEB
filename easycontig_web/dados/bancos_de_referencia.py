@@ -171,7 +171,7 @@ def montar(data_dir: Path, banco_id: str, blast_bin: Path | None = None, teto: i
     #? aqui é a função principal que monta o banco de referência, chamando as funções auxiliares para baixar os dados do NCBI, criar o arquivo fasta e montar o banco com makeblastdb
 
 
-    c = POR_ID(banco_id)
+    c = POR_ID.get(banco_id)
 
     if not c:
         raise KeyError(banco_id)
