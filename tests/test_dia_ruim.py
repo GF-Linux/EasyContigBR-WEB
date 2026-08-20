@@ -114,6 +114,33 @@ def test_erro_nao_previsto_sai_com_casca_e_sem_vazar_o_traceback(cliente, monkey
     assert "/caminho/secreto" not in r.text, "o traceback vazou para a tela"
 
 
+def test_a_falha_da_propria_pagina_de_erro_ainda_leva_os_cabecalhos(cliente, monkeypatch):
+    """A falha DA falha: `_casca` (leituras no SQLite) quebra ao montar a própria
+    página de 500. Sem cerca, a exceção sai do manipulador e o Starlette devolve
+    um 500 cru SEM CSP/nosniff/noindex/no-store. A resposta mínima de emergência
+    tem de sair com os cabeçalhos mesmo assim — e sem vazar nada."""
+    from easycontig_web.contas import perfil_do_laboratorio as perfil
+
+    def explodir(*a, **k):
+        raise RuntimeError("/caminho/secreto do banco caiu ao montar a casca")
+
+    # `perfil.pegar` é lido DENTRO de `_casca`. Quebrá-lo derruba tanto a rota
+    # `/labs` (que dispara o 500) quanto o `_casca` que o próprio manipulador de
+    # erro monta para desenhar a página — exercitando exatamente a falha da
+    # falha que a cerca cobre.
+    monkeypatch.setattr(perfil, "pegar", explodir)
+    r = cliente.get("/labs", headers={"accept": "text/html"})
+
+    assert r.status_code == 500
+    h = r.headers
+    assert "noindex" in h.get("x-robots-tag", "")
+    assert h.get("x-content-type-options") == "nosniff"
+    assert h.get("x-frame-options") == "DENY"
+    assert "default-src 'none'" in h.get("content-security-policy", "")
+    assert "no-store" in h.get("cache-control", "")
+    assert "/caminho/secreto" not in r.text, "o detalhe da exceção vazou para a tela"
+
+
 # ══════════════════════════════════════════ 2. envios simultâneos
 def test_oito_envios_ao_mesmo_tempo_nao_furam_o_teto(tmp_path, monkeypatch):
     """A conferência da cota mora DENTRO da transação que cria o lote."""

@@ -228,6 +228,33 @@ async def _limite_de_leitura(request: Request, call_next):
                                         status_code=303)
             return JSONResponse({"detail": "entre para continuar"}, status_code=401)
 
+    # ⚠️ Teto de corpo para POST em `chunked`/streamed — SÓ AQUI, depois de a
+    # origem (403) E a sessão (401) já terem passado. `_corpo_grande_demais`
+    # confere o `Content-Length`, mas um POST `Transfer-Encoding: chunked` não
+    # declara tamanho: passava batido pelo fast-path e o `MultiPartParser`
+    # spoolava cada parte de arquivo em /tmp antes de a rota rodar (o mesmo H1,
+    # pela porta sem cabeçalho). Lê-se o corpo em pedaços com teto e PARA no
+    # primeiro byte que passa de MAX_CORPO — antes do spool. A posição importa:
+    # só chega aqui quem vai mesmo alcançar o parser (autenticado, ou os
+    # POST_SEM_SESSAO como /entrar). Um POST sem sessão a rota protegida já
+    # levou 401 acima, com ZERO byte lido — o buraco de memória pré-auth que o
+    # 401-primeiro fechou continua fechado. Só se aplica sem `Content-Length`:
+    # com ele o fast-path já decidiu e não se re-lê o corpo.
+    if request.method == "POST" and not request.headers.get("content-length"):
+        corpo = bytearray()
+        async for pedaco in request.stream():
+            corpo.extend(pedaco)
+            if len(corpo) > MAX_CORPO:
+                return JSONResponse(
+                    {"detail": (f"o envio passa do teto de "
+                                f"{MAX_CORPO // (1024 * 1024)} MB por "
+                                "requisição; mande em lotes menores")},
+                    status_code=413)
+        # Sob o teto: devolve o corpo já lido ao pipeline. `_CachedRequest` do
+        # BaseHTTPMiddleware entrega `_body` ao parser lá dentro, então a rota
+        # ainda recebe o multipart inteiro — nada foi perdido ao conferir.
+        request._body = bytes(corpo)
+
     # ⚠️ HEAD conta junto com GET. HEAD é leitura — o servidor resolve a rota,
     # monta a resposta inteira e só descarta o corpo — e enquanto isto dizia
     # apenas `== "GET"` havia um método que não gastava orçamento NENHUM: bastava
@@ -383,14 +410,37 @@ def _erro_nao_previsto(request: Request, exc: Exception):
         resposta = JSONResponse({"detail": "erro interno do servidor"},
                                 status_code=500)
     else:
-        u = _u(request)
-        resposta = TEMPLATES.TemplateResponse(request, "erro.html", {
-            **(_casca(u) if u else {"usuario": None}),
-            "codigo": 500,
-            "detalhe": ("Algo quebrou do lado do servidor, e não foi por causa "
-                        "do que você mandou. O registro do erro ficou no log do "
-                        "servidor — avise quem cuida dele."),
-        }, status_code=500)
+        try:
+            # A falha DA falha: `_casca` faz leituras no SQLite (perfil, fila,
+            # pedidos) e é justamente o que quebra num disco cheio ou banco fora
+            # do ar — o cenário que este manipulador existe para servir. Se
+            # `_casca` ou o render explodir aqui, a exceção sai do manipulador e
+            # o `ServerErrorMiddleware` do Starlette devolve um "Internal Server
+            # Error" cru, SEM os cabeçalhos que `_marcar_resposta` põe. Por isso
+            # a montagem fica cercada: em qualquer falha, cai-se numa resposta
+            # mínima e ESTÁTICA que ainda passa por `_marcar_resposta`.
+            u = _u(request)
+            resposta = TEMPLATES.TemplateResponse(request, "erro.html", {
+                **(_casca(u) if u else {"usuario": None}),
+                "codigo": 500,
+                "detalhe": ("Algo quebrou do lado do servidor, e não foi por "
+                            "causa do que você mandou. O registro do erro ficou "
+                            "no log do servidor — avise quem cuida dele."),
+            }, status_code=500)
+        except Exception as exc2:
+            print("  ⚠️  a própria página de erro falhou ao montar: "
+                  f"{type(exc2).__name__}: {exc2}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            # Corpo estático e genérico: nenhum dado de usuário, nenhum detalhe
+            # da exceção. O que importa é sair com os cabeçalhos de segurança.
+            resposta = HTMLResponse(
+                "<!doctype html><html lang=pt-br><head><meta charset=utf-8>"
+                "<title>Erro interno</title></head><body>"
+                "<h1>Erro interno do servidor</h1>"
+                "<p>Algo quebrou do lado do servidor, e não foi por causa do "
+                "que você mandou. O registro do erro ficou no log do servidor "
+                "— avise quem cuida dele.</p></body></html>",
+                status_code=500)
     _marcar_resposta(resposta, nonce)
     resposta.headers["Cache-Control"] = "no-store, must-revalidate"
     resposta.headers["Pragma"] = "no-cache"

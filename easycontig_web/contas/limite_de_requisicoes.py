@@ -13,7 +13,8 @@
 
 from __future__ import annotations
 
-import os 
+import os
+import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -55,8 +56,42 @@ def regras() -> dict[str, Regra]:
         
         
 _registro: dict[str, deque] = defaultdict(deque)
-        
-        
+
+#! Sem eviction o registro guardaria uma chave PARA SEMPRE por identidade que já
+#! fez UMA requisição (as chaves não são forjáveis, mas acumulam), e a memória do
+#! processo cresceria sem teto. `_LOCK` serializa quem mexe no registro para que a
+#! varredura não apague uma chave no meio de uma inserção (a corrida entre checar
+#! e inserir). A varredura roda no máximo a cada `_INTERVALO_VARREDURA` s e só
+#! descarta chaves cujos instantes já venceram TODOS — exatamente o que `conferir`
+#! faria na próxima visita àquela chave, então não muda quem é barrado.
+_LOCK = threading.Lock()
+_INTERVALO_VARREDURA: float = 60.0  # segundos
+_ULTIMA_VARREDURA: float = 0.0
+
+
+def _janela_de(k: str) -> float:
+    #? A janela mora no prefixo da chave (`nome|...`); os nomes de regra não têm '|'.
+    r = regras().get(k.split('|', 1)[0])
+    return r.janela if r else 0.0
+
+
+def _talvez_varrer(agora: float) -> None:
+    #? Chamado SEMPRE sob `_LOCK`. Poda cada balde pela janela da sua regra e
+    #? descarta os que ficaram sem nenhum instante dentro dela.
+    global _ULTIMA_VARREDURA
+    if agora - _ULTIMA_VARREDURA <= _INTERVALO_VARREDURA:
+        return
+    _ULTIMA_VARREDURA = agora
+    for k in list(_registro.keys()):
+        d = _registro[k]
+        janela = _janela_de(k)
+        while d and agora - d[0] > janela:
+            d.popleft()
+        if not d:
+            del _registro[k]
+
+
+
 def proxies_confiaveis() -> set[str]:
 
     ''' Quem tem permissão para dizer, de que IP veio a requisição. 
@@ -108,21 +143,27 @@ def conferir(nome: str, request: Request, quem: str | None = None, agora: float 
 
     k = nome + '|' + chave(request, quem)
 
-    d = _registro[k]
+    with _LOCK:
+        _talvez_varrer(agora)
 
-    while d and agora - d[0] > r.janela:
-        d.popleft()
+        d = _registro[k]
 
-    if len(d) >= r.quantas:
-        espera = int(r.janela - (agora - d[0])) + 1
-        raise HTTPException(
-            status_code=429,
-            detail=f'limite de {r} atingido; tente de novo em {espera}s',
-            headers={'Retry-After': str(espera)})
+        while d and agora - d[0] > r.janela:
+            d.popleft()
 
-    d.append(agora)
+        if len(d) >= r.quantas:
+            espera = int(r.janela - (agora - d[0])) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f'limite de {r} atingido; tente de novo em {espera}s',
+                headers={'Retry-After': str(espera)})
+
+        d.append(agora)
 
 
 def limpar() -> None:
     ''' Só para os testes: o registro é global e vaza entre casos.'''
-    _registro.clear()
+    global _ULTIMA_VARREDURA
+    with _LOCK:
+        _registro.clear()
+        _ULTIMA_VARREDURA = 0.0

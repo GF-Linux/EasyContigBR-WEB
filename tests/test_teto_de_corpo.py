@@ -58,6 +58,60 @@ def test_a_recusa_vem_do_middleware_antes_da_sessao(app):
     assert r.status_code == 413, f"veio {r.status_code}: o teto não é o primeiro"
 
 
+def test_corpo_chunked_sem_content_length_leva_413(app):
+    """A porta sem cabeçalho: um POST `chunked` não declara `Content-Length`, e
+    o fast-path não tinha o que conferir — o parser spoolava as partes em /tmp
+    antes da rota. O teto de corpo tem de valer também aqui.
+
+    (O TestClient entrega o corpo do gerador num único `http.request`, então
+    não dá para observar por aqui a PARADA no teto — isso depende do uvicorn
+    fatiar o `chunked` em vários `receive()`. O que se afirma é o 413.)"""
+
+    def corpo():
+        for _ in range(64):
+            yield b"x" * 4096                      # 262144 bytes, sem length
+
+    c = _entrar(TestClient(app.app))
+    r = c.post("/perfil", content=corpo(),
+               headers={"content-type": "application/x-www-form-urlencoded",
+                        "accept": "application/json"})
+    assert r.status_code == 413
+    assert "teto" in r.json()["detail"]
+
+
+def test_corpo_chunked_sob_o_teto_chega_a_rota(app):
+    """Ler o corpo no middleware para conferir não pode PERDÊ-LO: um `chunked`
+    sob o teto ainda tem de chegar inteiro ao parser da rota."""
+
+    def corpo():
+        yield b"nome=Gustavo"
+
+    c = _entrar(TestClient(app.app))
+    r = c.post("/perfil", content=corpo(), follow_redirects=False,
+               headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r.status_code in (200, 303)
+
+
+def test_chunked_sem_sessao_recusa_sem_ler_o_corpo(app):
+    """O teto de corpo em `chunked` mora DEPOIS do 401: um POST sem sessão a
+    rota protegida ainda é recusado com zero byte lido, sem passar pela leitura
+    do corpo (o buraco de memória pré-auth continua fechado)."""
+    lido = {"bytes": 0}
+
+    def corpo():
+        for _ in range(64):
+            pedaco = b"x" * 4096
+            lido["bytes"] += len(pedaco)
+            yield pedaco
+
+    c = TestClient(app.app)                         # sem entrar
+    r = c.post("/lotes", content=corpo(), follow_redirects=False,
+               headers={"content-type": "multipart/form-data; boundary=z",
+                        "accept": "application/json"})
+    assert r.status_code == 401, f"veio {r.status_code}"
+    assert lido["bytes"] == 0, f"leu {lido['bytes']} bytes de quem não tem sessão"
+
+
 def test_content_length_invalido_e_recusado(app):
     c = _entrar(TestClient(app.app))
     r = c.post("/perfil", content=b"abc",

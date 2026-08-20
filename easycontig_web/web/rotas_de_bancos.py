@@ -110,7 +110,14 @@ def montar_banco(request: Request, banco_id: str):
     try:
         bancos.montar(cfg().data_dir, banco_id, blast_bin=cfg().blast_bin)
     except Exception as e:                      # noqa: BLE001
-        _por_recado(request, str(e)[:200])
+        # ⚠️ O `str(e)` das operações de banco (makeblastdb/blastn/E/S) carrega
+        # caminho absoluto do servidor e stderr da ferramenta — detalhe interno
+        # que não vai para a tela. Genérico para quem vê, completo no log.
+        print(f"  ⚠️  falha ao montar o banco {banco_id}: "
+              f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        _por_recado(request, "não foi possível montar o banco; tente de novo. "
+                             "O motivo completo está no log.")
         return RedirectResponse("/bancos", status_code=303)
     return RedirectResponse(f"/bancos?feito={quote(banco_id)}", status_code=303)
 
@@ -215,7 +222,14 @@ async def enviar_banco(request: Request, apelido: str = Form(...),
         # veria que ela agiu.
         raise
     except Exception as e:                      # noqa: BLE001
-        _por_recado(request, str(e)[:200])
+        # ⚠️ Mesmo cuidado do `montar_banco`: o `str(e)` do makeblastdb/E-S traz
+        # caminho do servidor e stderr da ferramenta — genérico na tela, o
+        # diagnóstico completo fica no log do servidor.
+        print(f"  ⚠️  falha ao montar o banco do usuário: "
+              f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        _por_recado(request, "não foi possível montar o seu banco; tente de novo. "
+                             "O motivo completo está no log.")
         return RedirectResponse("/bancos", status_code=303)
     return RedirectResponse("/bancos?feito=meu", status_code=303)
 

@@ -115,7 +115,16 @@ def api_consultar(request: Request, lote_id: str, chave: str, banco: str):
                                     bancos.prefixo(cfg().data_dir, banco),
                                     blast_bin=cfg().blast_bin)
         except Exception as e:                  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=str(e)[:200])
+            # ⚠️ O `str(e)` do blastn/E-S carrega caminho absoluto do servidor e
+            # stderr da ferramenta — detalhe interno que não vai no 500. Genérico
+            # para quem chama, completo no log do servidor.
+            print(f"  ⚠️  falha ao consultar o banco {banco}: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            raise HTTPException(
+                status_code=500,
+                detail="não foi possível consultar o banco; tente de novo. "
+                       "O motivo completo está no log.")
     return JSONResponse({"banco": banco, "hits": hits, "consulta": True})
 
 
