@@ -161,12 +161,51 @@ def _v5_pedidos_de_amostra(con: sqlite3.Connection) -> None:
                 "ON pedidos(de_email, estado)")
 
 
+def _v6_arvores_do_lote(con: sqlite3.Connection) -> None:
+    """A fila das árvores filogenéticas pedidas sobre um lote já pronto.
+
+    Tabela PRÓPRIA, e não colunas em `lotes`, por três motivos que só ficaram
+    claros com o fluxo na mão:
+
+    * a árvore é **pedida depois**, sobre um lote que já terminou — o lote volta
+      a ter trabalho pendente sem voltar a `rodando`, e mexer no `status` dele
+      confundiria a página, a cota e o `reenfileirar_orfaos`;
+    * a mesma corrida rende **mais de uma árvore** (a F13719 deu três: 16S,
+      groEL e dsb), e um lote não tem lugar para três resultados;
+    * pedir de novo com outro parâmetro é um pedido NOVO, e o anterior continua
+      valendo — histórico que uma coluna sobrescrita perderia.
+
+    `resumo` guarda o JSON com o que saiu por marcador (taxa, colunas aparadas,
+    identidade, ASDSF, avisos). Fica no banco porque é o que a tela mostra sem
+    abrir arquivo nenhum, e porque sobrevive ao expurgo dos `.ab1`.
+    """
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS arvores (
+            id           TEXT PRIMARY KEY,
+            lote_id      TEXT NOT NULL,
+            dono         TEXT NOT NULL DEFAULT '',
+            status       TEXT NOT NULL,
+            etapa        TEXT NOT NULL DEFAULT '',
+            erro         TEXT NOT NULL DEFAULT '',
+            resumo       TEXT NOT NULL DEFAULT '[]',
+            trabalhador  TEXT NOT NULL DEFAULT '',
+            criado_em    TEXT NOT NULL,
+            iniciado_em  TEXT,
+            terminado_em TEXT
+        )""")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_arvores_lote "
+                "ON arvores(lote_id, criado_em)")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_arvores_status "
+                "ON arvores(status, criado_em)")
+
+
 MIGRACOES: list[tuple[int, str, object]] = [
     (1, "referencia gravada no lote", _v1_referencia_no_lote),
     (2, "endereços de rede no perfil", _v2_links_do_perfil),
     (3, "qual trabalhador reivindicou o lote", _v3_quem_reivindicou_o_lote),
     (4, "bytes previstos do lote, para a cota reservar", _v4_bytes_previstos_do_lote),
     (5, "pedidos de amostra entre laboratórios", _v5_pedidos_de_amostra),
+    (6, "fila das árvores filogenéticas do lote", _v6_arvores_do_lote),
 ]
 
 VERSAO_ALVO = max(n for n, _d, _f in MIGRACOES) if MIGRACOES else 0

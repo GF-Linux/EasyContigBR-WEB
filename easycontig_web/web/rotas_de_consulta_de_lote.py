@@ -37,7 +37,9 @@ from ..contas import autenticacao as auth
 from ..dados import bancos_de_referencia as bancos
 from .. import configuracao as config
 from ..contas import cota_de_espaco as cotas
+from ..processamento import executor_de_arvore as executor_arvore
 from ..processamento import executor_de_lote as executor
+from ..processamento import fila_de_arvores as fila_arvores
 from ..processamento import fila_de_lotes as fila
 from ..contas import limite_de_requisicoes as limites
 from ..dados import pedidos_entre_labs as pedidos
@@ -222,6 +224,76 @@ def pagina_amostra(request: Request, lote_id: str, chave: str):
 def api_lote(request: Request, lote_id: str):
     u = _exigir(request)
     return JSONResponse(_lote_do_usuario(lote_id, u))
+
+
+# ── árvore filogenética do lote ──────────────────────────────────────────────
+# O botão fica na página do lote pronto. A rota só ENFILEIRA — montar é MCMC,
+# de segundos a minutos, e é a mesma razão que tirou o lote da requisição.
+
+@router.post("/lotes/{lote_id}/arvore")
+def pedir_arvore(request: Request, lote_id: str):
+    u = _exigir(request)
+    lote = _lote_do_usuario(lote_id, u)
+    if lote["status"] != fila.PRONTO:
+        raise HTTPException(status_code=409,
+                            detail="a árvore só pode ser montada depois que o "
+                                   "lote terminar")
+    fila_arvores.novo_pedido(cfg().sqlite_path, lote_id=lote_id, dono=u.email)
+    return RedirectResponse(f"/lotes/{lote_id}/arvore", status_code=303)
+
+
+def _pedido_do_usuario(lote_id: str, u: auth.Usuario) -> dict:
+    _lote_do_usuario(lote_id, u)     # confere o dono pelo LOTE, como o resto
+    pedido = fila_arvores.do_lote(cfg().sqlite_path, lote_id)
+    if not pedido:
+        raise HTTPException(status_code=404, detail="nenhuma árvore pedida "
+                                                    "para este lote")
+    return pedido
+
+
+@router.get("/lotes/{lote_id}/arvore", response_class=HTMLResponse)
+def pagina_arvore(request: Request, lote_id: str):
+    u = _exigir(request)
+    lote = _lote_do_usuario(lote_id, u)
+    pedido = fila_arvores.do_lote(cfg().sqlite_path, lote_id)
+    return TEMPLATES.TemplateResponse(request, "arvore.html", {
+        **_casca(u), "lote": lote, "pedido": pedido,
+        "resumo": fila_arvores.resumo_lido(pedido) if pedido else [],
+        "recarregar": bool(pedido and pedido["status"] in fila_arvores.ATIVOS),
+        # Mesma honestidade da tela do lote: só se promete que alguém vai pegar
+        # quando há trabalhador vivo para cumprir.
+        "fila_atendida": (fila.fila_atendida(cfg().sqlite_path)
+                          if pedido and pedido["status"] == fila_arvores.NA_FILA
+                          else True),
+    })
+
+
+@router.get("/api/lotes/{lote_id}/arvore")
+def api_arvore(request: Request, lote_id: str):
+    u = _exigir(request)
+    return JSONResponse(_pedido_do_usuario(lote_id, u))
+
+
+@router.get("/lotes/{lote_id}/arvore/{pasta}/{arquivo}")
+def arquivo_da_arvore(request: Request, lote_id: str, pasta: str, arquivo: str):
+    """A figura ou o Newick de um marcador.
+
+    O Newick sai como download porque o destino dele é outro programa — FigTree,
+    iTOL, MEGA. Quem publica não vai usar o PNG do EasyContig na figura final, e
+    fingir o contrário seria prender o usuário numa saída pior que a dele.
+    """
+    u = _exigir(request)
+    _lote_do_usuario(lote_id, u)
+    try:
+        caminho = executor_arvore.caminho_de_saida(cfg(), lote_id, pasta, arquivo)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="arquivo não encontrado")
+    if not caminho.exists():
+        raise HTTPException(status_code=404, detail="arquivo não gerado")
+    if caminho.suffix == ".png":
+        return FileResponse(caminho, media_type="image/png")
+    return FileResponse(caminho, media_type="text/plain",
+                        filename=f"{pasta}_{lote_id}{caminho.suffix}")
 
 
 @router.post("/lotes/{lote_id}/apagar")

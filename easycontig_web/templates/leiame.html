@@ -107,6 +107,14 @@ Sequenciamento_F13719_#80649-27072026_B09.ab1</pre>
 
   <p><strong>WorkFolder</strong> — o que você já mandou. É de onde se reabre um
   relatório e de onde se apaga.</p>
+
+  <p><strong>Árvore filogenética</strong> — no lote pronto, monta a árvore
+  Bayesiana (MrBayes) das amostras da corrida <em>entre si</em>, com
+  <strong>probabilidade posterior</strong> em cada ramo. É outra pergunta que a
+  identificação: aquela diz de que espécie é cada amostra; esta diz como elas se
+  agrupam, e o quanto se pode confiar no agrupamento. Sai uma árvore
+  <strong>por marcador</strong> e um <code>.newick</code> para abrir no FigTree,
+  no iTOL ou no MEGA.</p>
 </div>
 
 <div class="cartao">
@@ -128,6 +136,18 @@ Sequenciamento_F13719_#80649-27072026_B09.ab1</pre>
   mais próxima ou um corte de pontas mais agressivo aumentam o número e podem
   piorar a ciência. O que vale conferir é se a identificação é coerente com o
   marcador que você amplificou.</p>
+
+  <p><strong>Árvore "em leque"</strong> — muitas amostras saindo do mesmo ponto,
+  sem ramos separando — quase sempre significa que as sequências são
+  <em>quase idênticas</em>, e não que a análise falhou. Quando não há variação
+  suficiente, o método <strong>não inventa</strong> agrupamento: o leque é a
+  resposta honesta. A tela mostra a identidade mediana justamente para isso ser
+  legível. Pelo mesmo motivo, só aparece número no ramo a partir de 0,90 —
+  imprimir os fracos daria ao olho uma estrutura que o método não sustentou.</p>
+
+  <p><strong>Um marcador ficar de fora</strong> não é erro: com menos de quatro
+  amostras não existe topologia sobre a qual discordar, então a árvore não
+  afirmaria nada. A tela diz qual ficou e por quê, em vez de omitir.</p>
 </div>
 
 <div class="cartao sub">

@@ -17,7 +17,9 @@ import threading
 import time
 
 from .. import configuracao as config
+from ..processamento import executor_de_arvore as executor_arvore
 from ..processamento import executor_de_lote as executor
+from ..processamento import fila_de_arvores as fila_arvores
 from ..processamento import fila_de_lotes as fila
 from ..dados import expurgo_por_retencao as retencao
 
@@ -94,6 +96,38 @@ def rodar_um(cfg: config.Config, eu: str = "") -> bool:
     return True
 
 
+def rodar_uma_arvore(cfg: config.Config, eu: str = "") -> bool:
+    """Pega um pedido de árvore e monta. True se havia trabalho.
+
+    Gêmeo de `rodar_um`, e de propósito: mesmo tratamento de erro (um pedido
+    ruim não derruba o trabalhador), mesma conferência de dono no desfecho (não
+    carimbar por cima de quem está com o pedido agora).
+    """
+    pedido = fila_arvores.reivindicar(cfg.sqlite_path, eu)
+    if not pedido:
+        return False
+
+    pedido_id, lote_id = pedido["id"], pedido["lote_id"]
+    log.info("árvore %s: iniciando (lote %s)", pedido_id, lote_id)
+    t0 = time.perf_counter()
+    try:
+        lote = fila.pegar(cfg.sqlite_path, lote_id) or {}
+        resumo = executor_arvore.executar(
+            cfg, lote_id, referencia=lote.get("referencia") or "",
+            etapa=lambda texto: fila_arvores.etapa(cfg.sqlite_path, pedido_id,
+                                                   texto, eu))
+        if fila_arvores.concluir(cfg.sqlite_path, pedido_id, resumo, eu):
+            arvores = sum(1 for r in resumo if not r.get("recusado"))
+            log.info("árvore %s: pronta em %.1f s (%d marcador(es))",
+                     pedido_id, time.perf_counter() - t0, arvores)
+        else:
+            log.warning("árvore %s: terminei mas não sou mais o dono", pedido_id)
+    except Exception as e:                      # noqa: BLE001
+        log.exception("árvore %s: falhou", pedido_id)
+        fila_arvores.falhar(cfg.sqlite_path, pedido_id, f"{type(e).__name__}: {e}", eu)
+    return True
+
+
 def main() -> None:
     logging.basicConfig(
         level=os.environ.get("EASYCONTIG_LOG", "INFO"),
@@ -112,6 +146,13 @@ def main() -> None:
     orfaos = fila.reenfileirar_orfaos(cfg.sqlite_path, eu)
     if orfaos:
         log.warning("%d lote(s) sem dono vivo voltaram para a fila", orfaos)
+
+    # As árvores também. A tabela de pulso é a mesma — é o mesmo processo que
+    # atende as duas filas —, então quem está vivo se pergunta uma vez só.
+    orfas = fila_arvores.reenfileirar_orfaos(
+        cfg.sqlite_path, fila.trabalhadores_vivos(cfg.sqlite_path), eu)
+    if orfas:
+        log.warning("%d árvore(s) sem dono vivo voltaram para a fila", orfas)
 
     for item, ok, det in config.diagnostico(cfg):
         log.info("%-10s %s  %s", item, "OK " if ok else "FALTA", det)
@@ -157,7 +198,11 @@ def main() -> None:
                 except Exception:               # noqa: BLE001
                     log.exception("faxina falhou; segue processando a fila")
 
-            if not rodar_um(cfg, eu):
+            # Lote primeiro, árvore depois: quem espera o resultado da corrida
+            # tem prioridade sobre quem pediu uma análise extra sobre corrida
+            # que já terminou. O `or` curto-circuita — havendo lote na fila,
+            # nem se pergunta pelas árvores.
+            if not (rodar_um(cfg, eu) or rodar_uma_arvore(cfg, eu)):
                 time.sleep(ocioso)
         except Exception:                       # noqa: BLE001
             log.exception("erro no laço do trabalhador")

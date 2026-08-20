@@ -29,6 +29,28 @@ laboratório pediu na prática duas vezes.
                           └────────────────────┘
 ```
 
+## Árvore filogenética do lote (19/08/2026)
+
+No lote pronto há um botão **Árvore filogenética**: ele enfileira uma inferência
+Bayesiana (**MrBayes**) das amostras da corrida entre si, com probabilidade
+posterior nos ramos. É pergunta diferente da identificação — aquela responde "de
+que espécie é esta amostra" (NJ contra referências, sem suporte); esta responde
+"como as amostras se agrupam, e o quanto isso se sustenta".
+
+Sai **uma árvore por marcador**, e isso é uma trava, não uma preferência: 16S e
+groEL não são homólogos, e uma árvore com os dois misturados sairia bonita e
+falsa. O marcador vem do **nome da amostra** (a corrida F13719 tinha os quatro
+numa pasta só), com o banco do lote como reserva.
+
+Três defesas que o MrBayes sozinho não dá, e que são o motivo de isto morar aqui:
+apara as colunas que só existem em consenso parcial, avisa quando as amostras são
+quase idênticas (o "leque" é resultado honesto, não falha), e traduz a
+convergência do MCMC em uma frase em vez do ASDSF cru.
+
+A ciência é de `app/core/phylogeny.py`; este repo só junta os consensos, descobre
+o marcador e desenha. Precisa do `mb` no PATH (ou `EASYCONTIG_MRBAYES_BIN`) — o
+MrBayes não vem de `pip` nem de repositório de distribuição.
+
 O servidor web **não processa nada**. Ele grava os arquivos, põe o lote na fila
 e responde — 116 ms para um envio de 26 MB, medido. Os ~14 s de montagem e
 identificação acontecem no trabalhador, onde ninguém está com uma conexão

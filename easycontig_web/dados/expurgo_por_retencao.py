@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -162,6 +163,28 @@ def tamanho_em_bytes(pasta: Path) -> int:
     return total
 
 
+def _montando_arvore(con, lote_id: str) -> bool:
+    """Há uma árvore sendo montada a partir da pasta deste lote agora?
+
+    Tolera a tabela não existir: é o estado de um banco anterior à migração 6,
+    que só dura entre subir o código novo e reiniciar o processo. Ali a resposta
+    certa é "não há árvore nenhuma", e não derrubar a faxina inteira.
+    """
+    try:
+        return bool(con.execute(
+            "SELECT 1 FROM arvores WHERE lote_id=? AND status=?",
+            (lote_id, "rodando")).fetchone())
+    except sqlite3.Error:
+        return False
+
+
+def _apagar_arvores(con, lote_id: str) -> None:
+    try:
+        con.execute("DELETE FROM arvores WHERE lote_id=?", (lote_id,))
+    except sqlite3.Error:
+        pass
+
+
 def apagar_lote(sqlite_path: Path, lotes_dir: Path, lote_id: str) -> bool:
     """Apaga a pasta do lote E a linha da fila. False se não havia nada.
 
@@ -189,12 +212,33 @@ def apagar_lote(sqlite_path: Path, lotes_dir: Path, lote_id: str) -> bool:
     # impedir.
     marcas = ",".join("?" * len(INTOCAVEIS))
     with conectar(sqlite_path) as con:
+        # ⚠️ UMA ÁRVORE EM MONTAGEM TAMBÉM SEGURA O LOTE. O estado do lote não
+        # basta para saber se alguém está lendo aquela pasta: montar a árvore
+        # acontece com o lote em `pronto` — que é justamente o estado que a
+        # faxina considera livre — e o trabalhador está lendo
+        # `trabalho/*.cons.fa` o tempo todo. Sem esta conferência, o expurgo
+        # apagaria a pasta debaixo de um MCMC em curso; o pedido morreria com um
+        # erro de arquivo sumido, e a explicação estaria em outro processo.
+        # Mesmo motivo dos `INTOCAVEIS`, uma camada acima.
+        if _montando_arvore(con, lote_id):
+            log.info("lote %s tem árvore em montagem; não foi apagado", lote_id)
+            return False
+
         linhas = con.execute(
             f"DELETE FROM lotes WHERE id=? AND status NOT IN ({marcas})",
             (lote_id, *INTOCAVEIS),
         ).rowcount
         ocupado = bool(linhas == 0 and con.execute(
             "SELECT 1 FROM lotes WHERE id=?", (lote_id,)).fetchone())
+
+        # Os pedidos de árvore vão junto com o lote. Sem isto ficariam linhas
+        # apontando para um lote que não existe mais — o mesmo defeito que o
+        # parágrafo acima descreve ("linha sem pasta faz a página prometer o que
+        # não existe"), só que uma tabela adiante. Um pedido ainda `na_fila`
+        # morre com o assunto dele: montar a árvore de um lote apagado não é
+        # trabalho pendente, é trabalho sem sentido.
+        if linhas:
+            _apagar_arvores(con, lote_id)
 
     if ocupado:
         # Nem a faxina nem um "apagar agora" da tela tiram o chão de um upload em

@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block titulo %}Árvore — {{ lote.nome or lote.id }} — EasyContig BR{% endblock %}
+{% block estilo %}
+.trabalho > .interno{ max-width:none }
+.cartao{ padding:1rem 1.15rem }
+.arvore-fig{ max-width:100%; height:auto; display:block; margin:.6rem 0 }
+.numeros{ display:flex; flex-wrap:wrap; gap:1.2rem; margin:.4rem 0 .8rem }
+.numeros div{ font-size:.9em }
+.numeros b{ display:block; font-size:1.15em }
+{% endblock %}
+
+{% block conteudo %}
+
+{% if recarregar %}
+  <noscript><meta http-equiv="refresh" content="4"></noscript>
+  <script nonce="{{ request.state.nonce }}">
+  (function () {
+    // Mesmo padrão da tela do lote, com passo maior: MCMC não termina em 300 ms,
+    // e perguntar a cada instante só gasta a bateria de quem espera.
+    var espera = 1000, TETO = 5000, parado = false;
+    function perguntar() {
+      if (parado) { return; }
+      fetch('/api/lotes/{{ lote.id }}/arvore', { headers: { 'accept': 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (p) {
+          if (!p) { return agendar(); }
+          if (p.status === 'pronto' || p.status === 'falhou') {
+            parado = true; location.reload(); return;
+          }
+          var t = document.getElementById('etapa');
+          if (t && p.etapa) { t.textContent = 'montando ' + p.etapa; }
+          agendar();
+        })
+        .catch(agendar);
+    }
+    function agendar() {
+      setTimeout(perguntar, espera);
+      espera = Math.min(Math.round(espera * 1.3), TETO);
+    }
+    setTimeout(perguntar, espera);
+  })();
+  </script>
+{% endif %}
+
+<p class="sub"><a href="/lotes/{{ lote.id }}?tela_do_lote=1">← voltar para a corrida</a></p>
+
+<div class="cartao">
+  <h2 style="margin-top:0">Árvore filogenética — {{ lote.nome or 'lote' }}</h2>
+
+  {% if not pedido %}
+    <p class="sub">Nenhuma árvore foi pedida para esta corrida ainda.</p>
+    <form method="post" action="/lotes/{{ lote.id }}/arvore">
+      <button type="submit">Montar árvore</button>
+    </form>
+
+  {% elif pedido.status == 'na_fila' %}
+    {% if fila_atendida %}
+      <p class="sub">Na fila. Esta página se atualiza sozinha — pode fechar e
+      voltar depois.</p>
+    {% else %}
+      <p class="erro"><b>Nada está atendendo a fila.</b></p>
+      <p class="sub">O pedido está guardado, mas o processo que monta não está de
+      pé. <strong>Avise quem cuida do servidor:</strong> falta subir o trabalhador
+      (<code>python -m easycontig_web.processamento.trabalhador_da_fila</code>).</p>
+    {% endif %}
+
+  {% elif pedido.status == 'rodando' %}
+    <p class="sub" id="etapa">{% if pedido.etapa %}montando {{ pedido.etapa }}
+      {% else %}montando{% endif %}</p>
+    <p class="sub">A inferência Bayesiana roda duas corridas independentes e para
+    quando as duas concordam. Leva de alguns segundos a alguns minutos, conforme
+    o número de amostras.</p>
+
+  {% elif pedido.status == 'falhou' %}
+    <p class="erro">A árvore não foi montada.</p>
+    <pre class="sub" style="white-space:pre-wrap">{{ pedido.erro }}</pre>
+
+  {% elif pedido.status == 'pronto' %}
+    <p class="sub">Uma árvore <strong>por marcador</strong>. Genes diferentes não
+    se alinham entre si — juntá-los numa árvore só daria um resultado bonito e
+    falso, então o EasyContig separa antes.</p>
+    <form method="post" action="/lotes/{{ lote.id }}/arvore">
+      <button type="submit" class="secundario">Montar de novo</button>
+    </form>
+  {% endif %}
+</div>
+
+{% for r in resumo %}
+  <div class="cartao">
+    <h3 style="margin-top:0">{{ r.marcador }}</h3>
+
+    {% if r.recusado %}
+      <p class="sub">{{ r.recusado }}</p>
+      <p class="sub">Não é falha: com menos de quatro amostras não existe
+      topologia sobre a qual discordar, então uma árvore aqui não afirmaria
+      nada.</p>
+
+    {% else %}
+      <div class="numeros">
+        <div><b>{{ r.n }}</b> amostras</div>
+        <div><b>{{ r.colunas }} pb</b> alinhados{% if r.colunas_antes != r.colunas %}
+             <span class="sub">(de {{ r.colunas_antes }})</span>{% endif %}</div>
+        <div><b>{{ r.identidade }}%</b> identidade mediana</div>
+        <div><b>{% if r.convergiu %}✓{% else %}⚠{% endif %}</b>
+             <span class="sub">{{ r.veredito }}</span></div>
+      </div>
+
+      {% for aviso in r.avisos %}
+        <p class="sub">⚠️ {{ aviso }}</p>
+      {% endfor %}
+
+      {% if r.figura %}
+        <img class="arvore-fig" alt="Árvore Bayesiana de {{ r.marcador }}"
+             src="/lotes/{{ lote.id }}/arvore/{{ r.pasta }}/{{ r.figura }}">
+        <p class="sub">Os números nos ramos são <strong>probabilidade
+        posterior</strong> — só aparecem a partir de 0,90. Ramo sem número não é
+        ramo fraco: é agrupamento que o método não sustentou, e mostrar o valor
+        daria ao olho uma estrutura que não existe.</p>
+      {% endif %}
+
+      {% if r.newick %}
+        <p><a class="botao secundario"
+              href="/lotes/{{ lote.id }}/arvore/{{ r.pasta }}/{{ r.newick }}">Baixar
+              Newick</a></p>
+        <p class="sub" style="margin-bottom:0">O Newick abre no FigTree, no iTOL
+        ou no MEGA — a figura acima é para conferir aqui, não para publicar.</p>
+      {% endif %}
+    {% endif %}
+  </div>
+{% endfor %}
+
+{% endblock %}

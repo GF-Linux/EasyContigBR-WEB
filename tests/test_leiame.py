@@ -39,3 +39,21 @@ def test_diz_que_a_identidade_vem_do_nome():
 def test_o_botao_esta_na_lateral():
     base = re.sub(r"\s+", " ", Path("easycontig_web/templates/base.html").read_text())
     assert "/leiame" in base and "Readme" in base
+
+
+def test_explica_que_a_arvore_e_por_marcador():
+    """A trava anti-Frankenstein é decisão científica, não detalhe de
+    implementação: se a ajuda não a explicar, o usuário lê "não montou tudo
+    junto" como limitação do programa, e não como o que é."""
+    t = _texto()
+    assert "árvore filogenética" in t
+    assert "por marcador" in t
+    assert "probabilidade posterior" in t
+
+
+def test_avisa_que_leque_nao_e_falha():
+    """O resultado que mais parece defeito sem ser: 21 amostras saindo do mesmo
+    ponto. Sem esta linha, o laboratório conclui que a análise falhou."""
+    t = _texto()
+    assert "leque" in t
+    assert "não inventa" in t
