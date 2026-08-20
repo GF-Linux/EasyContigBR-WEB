@@ -67,14 +67,28 @@ def _ler_fasta(caminho: Path) -> list[tuple[str, str]]:
     return saida
 
 
+# ⚠️ OS TRÊS NOMES DO TRACY, E A ARMADILHA QUE CUSTOU UMA IMPLANTAÇÃO.
+# O consenso de um PAR F+R — o uso normal — sai como `<amostra>.fa`.
+# `<amostra>.cons.fa` é o consenso da leitura AVULSA (`assemble` e `consensus`
+# são métodos diferentes do `tracy_engine`, e cada um nomeia do seu jeito).
+# E `<amostra>.align.fa` NÃO é consenso: é o alinhamento das duas leituras,
+# dois registros com gaps.
+#
+# Isto nasceu procurando só `*.cons.fa`, e passou em tudo: os testes usavam esse
+# nome e o teste de contêiner semeou arquivos com esse nome. Na primeira corrida
+# REAL — 40 pares, o caso principal do produto — a busca achou ZERO consensos, e
+# a árvore teria falhado com "nenhum consenso encontrado" para todo mundo.
+SUFIXOS_DE_CONSENSO = (".cons.fa", ".fa")   # ordem importa: `.cons.fa` primeiro
+SUFIXO_DE_ALINHAMENTO = ".align.fa"
+
+
 def consensos_do_lote(cfg: Config, lote_id: str, referencia: str = ""
                       ) -> list[filo.Consensus]:
     """Junta os consensos que o lote já montou, cada um com seu marcador.
 
-    Lê os `<amostra>.cons.fa` que o tracy deixou em `trabalho/` — os mesmos
-    arquivos que o laboratório hoje copia à mão para o MEGA. A amostra dá o
-    nome ao táxon (e não o cabeçalho de dentro do FASTA, que é `>consenso`
-    para todas).
+    Lê o que o tracy deixou em `trabalho/` — os mesmos arquivos que o
+    laboratório hoje copia à mão para o MEGA. A amostra dá o nome ao táxon (e
+    não o cabeçalho de dentro do FASTA, que é `>Consensus` para todas).
     """
     p = pastas_do_lote(cfg, lote_id)
     rotulo = ""
@@ -82,9 +96,21 @@ def consensos_do_lote(cfg: Config, lote_id: str, referencia: str = ""
     if ficha:
         rotulo = ficha.marcador
 
+    por_amostra: dict[str, Path] = {}
+    for arquivo in sorted(p["trabalho"].glob("*.fa")):
+        nome = arquivo.name
+        if nome.endswith(SUFIXO_DE_ALINHAMENTO):
+            continue
+        for sufixo in SUFIXOS_DE_CONSENSO:
+            if nome.endswith(sufixo):
+                # `setdefault` porque `.cons.fa` vem primeiro na tupla e na
+                # ordenação: se um dia os dois existirem para a mesma amostra,
+                # ganha o que se chama de consenso, e não o genérico.
+                por_amostra.setdefault(nome[: -len(sufixo)], arquivo)
+                break
+
     saida: list[filo.Consensus] = []
-    for arquivo in sorted(p["trabalho"].glob("*.cons.fa")):
-        amostra = arquivo.name[:-len(".cons.fa")]
+    for amostra, arquivo in sorted(por_amostra.items()):
         registros = _ler_fasta(arquivo)
         if not registros:
             continue

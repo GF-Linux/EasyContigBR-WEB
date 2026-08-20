@@ -147,6 +147,53 @@ def test_consensos_saem_dos_cons_fa_que_o_lote_ja_montou(tmp_path, monkeypatch):
     assert por_nome["F13719_am24_CAP08_groEL_E08-F08"].marker == "groEL"
 
 
+def test_o_consenso_de_um_par_e_o_arquivo_ponto_fa(tmp_path, monkeypatch):
+    """⚠️ REGRESSÃO DE IMPLANTAÇÃO. O tracy dá três nomes, e só o do meio é o
+    que a intuição sugere:
+
+        <amostra>.fa          consenso do PAR F+R      <- o uso NORMAL
+        <amostra>.cons.fa     consenso da leitura AVULSA
+        <amostra>.align.fa    o ALINHAMENTO das duas leituras (2 registros)
+
+    Isto nasceu procurando só `*.cons.fa` e passou em tudo — inclusive no teste
+    de contêiner, que semeou arquivos com esse nome. Na primeira corrida REAL
+    (40 pares) a busca achou ZERO, e a árvore teria falhado para todo mundo com
+    "nenhum consenso encontrado".
+    """
+    from easycontig_web import configuracao as config
+    monkeypatch.setenv("EASYCONTIG_DATA_DIR", str(tmp_path / "dados"))
+    cfg = config.carregar()
+    trabalho = cfg.lotes_dir / "L2" / "trabalho"
+    trabalho.mkdir(parents=True)
+
+    par = "F13719_am01_CAP08_16S_A09-B09"
+    (trabalho / f"{par}.fa").write_text(">Consensus\nGAACGCTGGCGGCAAGCTTAA\n")
+    (trabalho / f"{par}.align.fa").write_text(
+        f">{par}_F\nGAACGCTGGCGG--------\n>{par}_R\n--------CAAGCTTAA\n")
+    avulsa = "Sequenciamento_F13055_64712_16S"
+    (trabalho / f"{avulsa}.cons.fa").write_text(">Consensus\nCGCGGTAGTGGCAGCTGAAT\n")
+
+    cons = {c.name: c for c in executor_arvore.consensos_do_lote(cfg, "L2")}
+    assert set(cons) == {par, avulsa}, \
+        "o par entra pelo .fa, a avulsa pelo .cons.fa, e o .align.fa fica FORA"
+    assert cons[par].sequence == "GAACGCTGGCGGCAAGCTTAA"
+    assert "-" not in cons[avulsa].sequence
+
+
+def test_o_alinhamento_nunca_entra_como_se_fosse_consenso(tmp_path, monkeypatch):
+    """`.align.fa` tem DOIS registros e gaps. Entrando como táxon, o lote viraria
+    uma árvore das leituras — não das amostras — e ninguém perceberia."""
+    from easycontig_web import configuracao as config
+    monkeypatch.setenv("EASYCONTIG_DATA_DIR", str(tmp_path / "dados"))
+    cfg = config.carregar()
+    trabalho = cfg.lotes_dir / "L3" / "trabalho"
+    trabalho.mkdir(parents=True)
+    (trabalho / "am01_16S.align.fa").write_text(
+        ">am01_16S_F\nACGT----\n>am01_16S_R\n----ACGT\n")
+
+    assert executor_arvore.consensos_do_lote(cfg, "L3") == []
+
+
 def test_caminho_de_saida_recusa_sair_da_pasta_do_lote(tmp_path, monkeypatch):
     """`pasta` e `arquivo` vêm da URL. Mesma regra do `pastas_do_lote`: quem
     decide onde se lê não confia em o chamador ter validado antes."""
