@@ -132,10 +132,24 @@ def pagina_entrar(request: Request, proximo: str = ""):
     return TEMPLATES.TemplateResponse(request, "entrar.html", {
         "modo": auth.modo(),
         "google_ok": auth.google_configurado(),
-        "dominio": cfg().dominio_permitido,
+        # Só os domínios, nunca os endereços nomeados: esta página é pública
+        # (ver `auth.dominios_publicos`).
+        "dominio": auth.dominios_publicos(cfg().dominio_permitido),
         "erro": _pegar_recado(request),
         "proximo": _destino(proximo),
     })
+
+
+def _fora_do_dominio() -> str:
+    """A mensagem de recusa, sem vazar os endereços nomeados.
+
+    Ela volta para QUEM TENTOU entrar — no modo dev, qualquer anônimo — então
+    reflete só os domínios públicos, pela mesma razão da página `/entrar`. Lista
+    só de pessoas vira uma frase genérica em vez de um recado com o domínio em
+    branco.
+    """
+    pub = auth.dominios_publicos(cfg().dominio_permitido)
+    return f"conta fora do domínio {pub}" if pub else "conta não autorizada"
 
 
 @router.post("/entrar")
@@ -161,7 +175,7 @@ def entrar_dev(request: Request, email: str = Form(...), proximo: str = Form("")
     if not auth.dominio_ok(email, cfg().dominio_permitido):
         # A mensagem nomeia o domínio a partir da CONFIGURAÇÃO do servidor, e
         # nunca de nada que tenha vindo na requisição.
-        _por_recado(request, f"conta fora do domínio {cfg().dominio_permitido}")
+        _por_recado(request, _fora_do_dominio())
         return RedirectResponse(f"/entrar{volta}", status_code=303)
     auth.entrar_na_sessao(request, auth.Usuario(email=email, nome=email.split("@")[0]))
     # Cadastra no diretório como o Google faz — mas SEM nome: aqui não há
@@ -202,7 +216,7 @@ def volta_google(request: Request, code: str = "", state: str = "", error: str =
     u = auth.usuario_da_volta(request, code, state, _redirect_uri(request))
     if not auth.dominio_ok(u.email, cfg().dominio_permitido):
         # O Google prova QUEM é; o domínio decide SE entra (ADR 0050).
-        _por_recado(request, f"conta fora do domínio {cfg().dominio_permitido}")
+        _por_recado(request, _fora_do_dominio())
         return RedirectResponse("/entrar", status_code=303)
     auth.entrar_na_sessao(request, u)
     # Entrar cadastra no diretório, com o nome que o Google declarou (ver

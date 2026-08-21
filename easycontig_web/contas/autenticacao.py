@@ -136,6 +136,40 @@ def dominio_ok(email: str, dominio_permitido: str) -> bool:
     return False
 
 
+def _e_pessoa_nomeada(bruto: str) -> bool:
+    """Um item da allowlist identifica UMA pessoa (tem `@` no meio)?
+
+    Espelha exatamente a regra de `dominio_ok`: tira o `@` da frente — que ali
+    ainda é domínio (`@ufrrj.br`) — e, se sobrar um `@`, é endereço nomeado.
+    Mora ao lado de `dominio_ok` de propósito: a definição de "isto é uma
+    pessoa" existe UMA vez, senão o filtro público e a checagem de acesso
+    divergem no dia em que alguém mudar a sintaxe.
+    """
+    d = bruto.strip().lower()
+    if d.startswith("@"):
+        d = d[1:]
+    return "@" in d
+
+
+def dominios_publicos(dominio_permitido: str) -> str:
+    """A allowlist SEM os endereços nomeados — o que pode ser mostrado a quem
+    ainda não entrou.
+
+    A página `/entrar` é pública (o repositório é público e a rota não exige
+    sessão), e `EASYCONTIG_DOMINIO` guarda, além do domínio institucional,
+    endereços pessoais liberados um a um (ver `dominio_ok`). Renderizar a lista
+    crua entrega a qualquer visitante anônimo o e-mail exato de cada pessoa
+    autorizada — dado pessoal de um lado, mapa de alvos de phishing do outro.
+
+    O domínio institucional CONTINUA aparecendo: ele orienta quem vai entrar
+    ("é com a conta da universidade") e não identifica ninguém. Só os nomes
+    saem. Uma lista que fosse só de pessoas devolve vazio, e a tela então não
+    promete restrição alguma em vez de listar gente.
+    """
+    itens = [b.strip() for b in dominio_permitido.split(",")]
+    return ", ".join(b for b in itens if b and not _e_pessoa_nomeada(b))
+
+
 AUTORIZA = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN = "https://oauth2.googleapis.com/token"
 PERFIL = "https://openidconnect.googleapis.com/v1/userinfo"
