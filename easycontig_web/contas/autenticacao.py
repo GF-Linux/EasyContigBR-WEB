@@ -170,6 +170,32 @@ def dominios_publicos(dominio_permitido: str) -> str:
     return ", ".join(b for b in itens if b and not _e_pessoa_nomeada(b))
 
 
+# As frases de erro do retorno do OAuth, ESCRITAS PELO SERVIDOR. O `error` que o
+# provedor devolve na query é texto controlável por quem monta o link, e ecoá-lo
+# na página de login (que é a nossa, com o nosso domínio e o nosso cadeado)
+# deixa um atacante escolher a mensagem que a vítima lê como se fosse do site —
+# a falsificação de conteúdo do achado F3. Códigos são os do RFC 6749 §4.1.2.1
+# mais os do Google; qualquer outro cai na frase genérica, e o valor cru vai
+# para o log, nunca para a tela.
+_ERRO_OAUTH = {
+    "access_denied": "entrada cancelada",
+    "admin_policy_enforced": "a política da sua organização não permitiu a entrada",
+    "invalid_request": "não foi possível entrar pelo Google; tente de novo",
+    "unauthorized_client": "não foi possível entrar pelo Google; tente de novo",
+    "unsupported_response_type": "não foi possível entrar pelo Google; tente de novo",
+    "invalid_scope": "não foi possível entrar pelo Google; tente de novo",
+    "server_error": "o Google recusou a entrada agora; tente de novo em instantes",
+    "temporarily_unavailable": "o Google recusou a entrada agora; tente de novo em instantes",
+}
+
+
+def mensagem_de_erro_oauth(codigo: str) -> str:
+    """Traduz o `error` do provedor para uma frase do servidor. NUNCA devolve o
+    texto recebido: código desconhecido vira a genérica."""
+    return _ERRO_OAUTH.get((codigo or "").strip().lower(),
+                           "não foi possível entrar pelo Google")
+
+
 AUTORIZA = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN = "https://oauth2.googleapis.com/token"
 PERFIL = "https://openidconnect.googleapis.com/v1/userinfo"

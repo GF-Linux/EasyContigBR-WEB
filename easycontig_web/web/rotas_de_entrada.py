@@ -210,7 +210,19 @@ def volta_google(request: Request, code: str = "", state: str = "", error: str =
     if auth.modo() != "google" or not auth.google_configurado():
         raise HTTPException(status_code=404, detail="login pelo Google não configurado")
     if error or not code:
-        _por_recado(request, error or "entrada cancelada")
+        # ⚠️ O `error` NUNCA vai para a tela. Ele é parâmetro de query de uma
+        # rota pública, ou seja, texto escolhido por quem monta o link — e a
+        # página de login é NOSSA, com o nosso domínio e o nosso cadeado. Ecoar
+        # deixava um atacante redigir a frase que a vítima lê acima do campo de
+        # e-mail ("sua sessão expirou, reenvie suas credenciais em ..."). O
+        # Jinja escapa o texto, então não era XSS — era falsificação de conteúdo
+        # carregada pelo site verdadeiro, que é o achado F3. Traduz-se para uma
+        # frase do servidor; o valor cru vai para o log.
+        if error:
+            print(f"  ⚠️  retorno do OAuth com error={error!r}",
+                  file=sys.stderr, flush=True)
+        _por_recado(request, auth.mensagem_de_erro_oauth(error) if error
+                    else "entrada cancelada")
         return RedirectResponse("/entrar",
                                 status_code=303)
     u = auth.usuario_da_volta(request, code, state, _redirect_uri(request))
