@@ -20,6 +20,7 @@ import traceback
 import secrets
 import shutil
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -99,6 +100,44 @@ def pagina_bancos(request: Request, feito: str = ""):
     })
 
 
+@contextmanager
+def _so_uma_montagem(banco_id: str):
+    """Impede duas montagens do MESMO banco ao mesmo tempo.
+
+    Sem isto, dois cliques simultâneos — ou dois processos, que é o normal em
+    produção (`replicas` no compose) — rodam `makeblastdb -out <mesmo prefixo>`
+    em paralelo e intercalam escritas nos mesmos arquivos de índice. O resultado
+    não é um erro: é um banco corrompido que só aparece como "sem acerto" na
+    amostra de alguém, dias depois.
+
+    Arquivo de trava com `O_EXCL`, e não um lock em memória, porque a disputa é
+    ENTRE PROCESSOS. Trava órfã (processo morto no meio) é limpa por idade: uma
+    montagem real leva segundos, então o que passa de meia hora é entulho.
+    """
+    alvo = bancos.prefixo(cfg().data_dir, banco_id)
+    alvo.parent.mkdir(parents=True, exist_ok=True)
+    trava = alvo.with_suffix(".montando.lock")
+    if trava.exists():
+        try:
+            velha = (time.time() - trava.stat().st_mtime) > 1800
+        except OSError:
+            velha = False
+        if velha:
+            trava.unlink(missing_ok=True)
+    try:
+        fd = os.open(trava, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        raise HTTPException(
+            status_code=409,
+            detail="este banco já está sendo montado agora; espere terminar")
+    try:
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        yield
+    finally:
+        trava.unlink(missing_ok=True)
+
+
 @router.post("/bancos/{banco_id}/montar")
 def montar_banco(request: Request, banco_id: str):
     """Baixa do NCBI e monta. Síncrono de propósito: são segundos para os
@@ -107,8 +146,28 @@ def montar_banco(request: Request, banco_id: str):
     limites.conferir("banco", request, u.email)
     if banco_id not in bancos.POR_ID:
         raise HTTPException(status_code=404, detail="banco desconhecido")
+    # ⚠️ REMONTAR NÃO É MONTAR. A regra ao lado (`remover_banco`) diz que montar
+    # segue liberado por ser ADITIVO — e é, enquanto o banco não existe. Quando
+    # ele já existe, `makeblastdb -out <prefixo>` reescreve os `.nhr/.nin/.nsq`
+    # NO LUGAR: é a mesma destruição que a remoção faz, pela porta que ficou
+    # aberta justamente porque se chamava "montar". Enquanto reescreve, o
+    # `blastn` do trabalhador e o de `/api/.../consultar` leem um banco em pleno
+    # vôo, e o desfecho é o defeito da ADR 0039 — falha de instalação chegando
+    # como "sem acerto" na amostra de outra pessoa.
+    #
+    # Então: criar, qualquer conta; SOBRESCREVER o que é de todo mundo, só quem
+    # administra. Bancos `meu_` não passam por aqui (são do próprio dono).
+    if bancos.existe(cfg().data_dir, banco_id) and not _e_administrador(u):
+        raise HTTPException(
+            status_code=403,
+            detail="este banco compartilhado já está montado; remontá-lo "
+                   "sobrescreve a referência que todo o laboratório usa e é "
+                   "ação de quem administra o servidor")
     try:
-        bancos.montar(cfg().data_dir, banco_id, blast_bin=cfg().blast_bin)
+        with _so_uma_montagem(banco_id):
+            bancos.montar(cfg().data_dir, banco_id, blast_bin=cfg().blast_bin)
+    except HTTPException:
+        raise                                   # 409 da trava sobe como está
     except Exception as e:                      # noqa: BLE001
         # ⚠️ O `str(e)` das operações de banco (makeblastdb/blastn/E/S) carrega
         # caminho absoluto do servidor e stderr da ferramenta — detalhe interno
