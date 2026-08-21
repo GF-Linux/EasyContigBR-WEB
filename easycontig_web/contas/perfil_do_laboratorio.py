@@ -185,13 +185,22 @@ def _limpar_links(texto: str) -> list[dict]:
                 continue
         else:
             bruto = "https://" + bruto
+        # ⚠️ TRUNCAR ANTES DE VALIDAR. O corte em 300 caracteres tem de vir antes
+        # do `urlparse`, senão valida-se um endereço e grava-se OUTRO. O corte
+        # pode cair no meio de um `[` de IPv6, e o valor gravado (`https://...@[`)
+        # é justamente o que faz o `urlparse` da LEITURA (`_links`) levantar
+        # `ValueError: Invalid IPv6 URL` e derrubar com 500 TODA página da conta —
+        # `_casca` lê o perfil em cada render. Validando o que de fato será
+        # gravado, um corte que estraga o endereço é rejeitado aqui, e não vira
+        # uma linha venenosa no banco.
+        bruto = bruto[:300]
         try:
             partes = urlparse(bruto)
         except ValueError:
             continue
         if partes.scheme not in ("http", "https") or not partes.hostname:
             continue
-        url = bruto[:300]
+        url = bruto
         if url.lower() in vistos:
             continue
         vistos.add(url.lower())
@@ -212,7 +221,17 @@ def _links(bruto: str) -> list[dict]:
     saida = []
     for item in v[:MAX_LINKS]:
         url = (item or {}).get("url", "") if isinstance(item, dict) else ""
-        if not isinstance(url, str) or urlparse(url).scheme not in ("http", "https"):
+        if not isinstance(url, str):
+            continue
+        # ⚠️ `urlparse` LEVANTA em endereço com `[` de IPv6 desbalanceado, e uma
+        # linha assim já pode estar no banco (gravada antes do conserto no
+        # escritor). Sem este try/except a leitura estoura e derruba toda página
+        # da conta — a mesma guarda que `_rede_de` já usa. Linha ruim vira "sem
+        # link", não 500.
+        try:
+            if urlparse(url).scheme not in ("http", "https"):
+                continue
+        except ValueError:
             continue
         nome, icone = _rede_de(url)
         saida.append({"url": url, "nome": nome, "icone": icone})
