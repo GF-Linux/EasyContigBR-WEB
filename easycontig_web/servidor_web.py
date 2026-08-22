@@ -135,6 +135,33 @@ _FOLGA_MULTIPART = 16 * 1024 * 1024
 MAX_CORPO = int(os.environ.get("EASYCONTIG_MAX_CORPO",
                                str(cfg.max_bytes + _FOLGA_MULTIPART)))
 
+# Teto de corpo para quem AINDA NÃO TEM SESSÃO. O de cima é dimensionado para o
+# envio de lote — 400 arquivos `.ab1`, 316 MB — e aplicá-lo também a `/entrar`
+# era dar a um anônimo o mesmo orçamento de memória que a um laboratório
+# enviando uma corrida inteira. O formulário de login manda um e-mail e um
+# campo `proximo`: algumas centenas de bytes. 64 KB é folga de duas ordens de
+# grandeza sobre o que a rota realmente usa, e ainda assim recusa o corpo antes
+# de o `MultiPartParser` existir.
+#
+# Achado F1 da varredura de 2026-08-21: `/entrar` é o único POST isento do 401
+# (POST_SEM_SESSAO), então era o único caminho em que um cliente sem cookie
+# nenhum decidia quantos bytes o processo segurava — e o FastAPI chama
+# `request.form()` ANTES da função da rota, de modo que nem o 403 do modo nem o
+# teto de login impediam a alocação.
+MAX_CORPO_SEM_SESSAO = int(os.environ.get("EASYCONTIG_MAX_CORPO_SEM_SESSAO",
+                                          str(64 * 1024)))
+
+
+def _teto_do_caminho(caminho: str) -> int:
+    """O teto de corpo que vale para esta rota.
+
+    Rota aberta a quem não tem sessão paga o teto pequeno; o resto segue no
+    teto de envio. Fica numa função só para que o fast-path do `Content-Length`
+    e o caminho `chunked` não possam divergir — foi divergência assim que
+    deixou o buraco aberto pela porta sem cabeçalho da última vez.
+    """
+    return MAX_CORPO_SEM_SESSAO if caminho in POST_SEM_SESSAO else MAX_CORPO
+
 
 def _corpo_grande_demais(request: Request) -> str:
     """Recusa pelo `Content-Length`, antes de o corpo existir (achado H1).
@@ -165,8 +192,12 @@ def _corpo_grande_demais(request: Request) -> str:
         n = int(bruto)
     except ValueError:
         return "content-length inválido"
-    if n > MAX_CORPO:
-        return (f"o envio passa do teto de {MAX_CORPO // (1024 * 1024)} MB por "
+    teto = _teto_do_caminho(request.url.path)
+    if n > teto:
+        if teto < 1024 * 1024:
+            return (f"o envio passa do teto de {teto // 1024} KB para esta "
+                    "requisição")
+        return (f"o envio passa do teto de {teto // (1024 * 1024)} MB por "
                 "requisição; mande em lotes menores")
     return ""
 
@@ -217,6 +248,17 @@ async def _limite_de_leitura(request: Request, call_next):
         if grande:
             return JSONResponse({"detail": grande}, status_code=413)
 
+    # ⚠️ NÃO acrescente aqui um `limites.conferir("login", ...)` para os
+    # POST_SEM_SESSAO. O relatório F1 sugeria isso, e seria trocar um buraco
+    # por outro que já foi fechado: o teto de login vivia antes da checagem de
+    # modo e foi movido para DEPOIS dela em 2026-08-06, porque em produção
+    # (`EASYCONTIG_AUTH=google`) `/entrar` sempre devolve 403 e cada batida
+    # queimava o orçamento de login — que atrás do nginx é COMPARTILHADO por
+    # todo visitante anônimo. Uma rota desligada trancava o login de quem usa.
+    # Conferir no middleware é conferir antes do 403, ou seja, é reabrir aquilo.
+    # O que o F1 pede de fato — não deixar um anônimo escolher quanta memória o
+    # processo segura — está resolvido pelo teto de corpo acima, que recusa em
+    # 64 KB antes de o `MultiPartParser` existir.
     if request.method == "POST" and caminho not in POST_SEM_SESSAO:
         try:
             tem_sessao = auth.usuario_da_sessao(request) is not None
@@ -241,15 +283,21 @@ async def _limite_de_leitura(request: Request, call_next):
     # 401-primeiro fechou continua fechado. Só se aplica sem `Content-Length`:
     # com ele o fast-path já decidiu e não se re-lê o corpo.
     if request.method == "POST" and not request.headers.get("content-length"):
+        # O mesmo teto do fast-path, pela função única: rota sem sessão paga o
+        # teto pequeno também aqui. Sem isto, `chunked` continuaria sendo a
+        # porta larga de `/entrar` — exatamente o padrão que já tinha aberto o
+        # buraco uma vez.
+        teto = _teto_do_caminho(caminho)
+        if teto < 1024 * 1024:
+            recado = f"o envio passa do teto de {teto // 1024} KB para esta requisição"
+        else:
+            recado = (f"o envio passa do teto de {teto // (1024 * 1024)} MB por "
+                      "requisição; mande em lotes menores")
         corpo = bytearray()
         async for pedaco in request.stream():
             corpo.extend(pedaco)
-            if len(corpo) > MAX_CORPO:
-                return JSONResponse(
-                    {"detail": (f"o envio passa do teto de "
-                                f"{MAX_CORPO // (1024 * 1024)} MB por "
-                                "requisição; mande em lotes menores")},
-                    status_code=413)
+            if len(corpo) > teto:
+                return JSONResponse({"detail": recado}, status_code=413)
         # Sob o teto: devolve o corpo já lido ao pipeline. `_CachedRequest` do
         # BaseHTTPMiddleware entrega `_body` ao parser lá dentro, então a rota
         # ainda recebe o multipart inteiro — nada foi perdido ao conferir.
