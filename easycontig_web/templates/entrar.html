@@ -157,24 +157,52 @@
    não é hipótese aqui — é o cenário que o `auth.py` cita para justificar o
    `select_account` no login.
 
-   Só apaga quando a saída foi DELIBERADA (`?saiu=1`, posto pela rota `/sair`).
-   Apagar em toda visita a esta página destruiria o rascunho vivo de quem só
-   abriu a tela de entrada noutra aba, ou de quem teve a sessão expirada no meio
-   de uma edição — perder trabalho em silêncio é o defeito que a ADR 0052 manda
-   evitar. ⚠️ A contrapartida fica dita: sessão que expira sozinha numa máquina
-   compartilhada ainda deixa o rascunho para trás. Fechar isso pede um prazo de
-   validade no próprio rascunho, e é outra tarefa. #}
+   Na saída DELIBERADA (`?saiu=1`, posto pela rota `/sair`) apaga tudo. Em
+   visita comum apaga só o que VENCEU, porque apagar o resto destruiria o
+   rascunho vivo de quem só abriu a tela de entrada noutra aba, ou de quem teve
+   a sessão expirada no meio de uma edição — perder trabalho em silêncio é o
+   defeito que a ADR 0052 manda evitar.
+
+   A contrapartida que estava dita aqui — "sessão que expira sozinha numa
+   máquina compartilhada ainda deixa o rascunho para trás; fechar isso pede um
+   prazo de validade no próprio rascunho, e é outra tarefa" — deixou de valer em
+   2026-08-21 (achado F3). O prazo existe: 12 h, conferido tanto na leitura, no
+   `oficina.js`, quanto nesta varredura. E o rascunho mudou de casa: mora no
+   `sessionStorage`, que fecha junto com a aba. O `localStorage` continua sendo
+   varrido aqui só para recolher o que ficou gravado ANTES da correção. #}
 <script nonce="{{ request.state.nonce }}">
-if (new URLSearchParams(location.search).get("saiu") === "1") {
-  try {
-    for (var i = localStorage.length - 1; i >= 0; i--) {
-      var k = localStorage.key(i);
-      /* De trás para frente: remover encolhe a lista e um laço crescente
-         pularia a chave seguinte a cada remoção. */
-      if (k && k.indexOf("easycontig:rascunho:") === 0) localStorage.removeItem(k);
-    }
-  } catch (e) { /* modo anônimo: não havia o que apagar */ }
-}
+(function () {
+  var PREFIXO = "easycontig:rascunho:";
+  var saiu = new URLSearchParams(location.search).get("saiu") === "1";
+
+  function varrer(guarda, tudo) {
+    try {
+      for (var i = guarda.length - 1; i >= 0; i--) {
+        var k = guarda.key(i);
+        /* De trás para frente: remover encolhe a lista e um laço crescente
+           pularia a chave seguinte a cada remoção. */
+        if (!k || k.indexOf(PREFIXO) !== 0) continue;
+        if (tudo) { guarda.removeItem(k); continue; }
+        /* Visita comum: só o que VENCEU. Preserva o rascunho vivo de quem
+           abriu esta tela noutra aba ou teve a sessão expirada no meio de uma
+           edição, que é o cuidado que a ADR 0052 manda ter. */
+        var t = 0;
+        try { t = Date.parse((JSON.parse(guarda.getItem(k)) || {}).quando || ""); }
+        catch (e) { t = 0; }
+        if (!t || (Date.now() - t) > 12 * 60 * 60 * 1000) guarda.removeItem(k);
+      }
+    } catch (e) { /* modo anônimo: não havia o que apagar */ }
+  }
+
+  /* ⚠️ O `localStorage` entra aqui mesmo o rascunho tendo passado a morar no
+     `sessionStorage` (achado F3, 2026-08-21): quem editou ANTES da correção tem
+     a sequência não publicada gravada em disco no perfil do navegador, e ela não
+     sai sozinha. Esta varredura é o que recolhe esse resto — e por isso ela
+     apaga o legado por inteiro em qualquer visita, vencido ou não: aquele
+     armazenamento não é mais usado por ninguém, então nada vivo se perde. */
+  varrer(window.sessionStorage, saiu);
+  varrer(window.localStorage, true);
+})();
 </script>
 
 {% if not google_ok %}

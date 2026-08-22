@@ -184,10 +184,18 @@ def test_sair_manda_o_navegador_limpar_os_rascunhos(app_teste, cliente):
 
 
 def test_a_limpeza_nao_dispara_numa_visita_normal_a_entrada(cliente):
-    """Apagar em toda visita destruiria o rascunho vivo de quem só abriu a tela
-    de entrada noutra aba. A limpeza é condicionada a `?saiu=1`."""
+    """Apagar TUDO em toda visita destruiria o rascunho vivo de quem só abriu a
+    tela de entrada noutra aba. A limpeza total é condicionada a `?saiu=1`.
+
+    ⚠️ Desde o F3 (2026-08-21) a visita comum não é mais inerte: ela apaga o que
+    VENCEU (12 h) e recolhe por inteiro o `localStorage` legado, onde o rascunho
+    morava antes de passar para o `sessionStorage`. O que se exige aqui é que o
+    rascunho VIVO sobreviva a uma visita comum; o resto está em
+    `test_rascunho_nao_sobrevive_a_aba.py`."""
     html = cliente.get("/entrar").text
-    assert 'get("saiu") === "1"' in html, "a limpeza deixou de ser condicional"
+    assert 'get("saiu") === "1"' in html, (
+        "a limpeza total deixou de ser condicional: rascunho vivo de outra aba "
+        "seria destruído por uma visita à tela de entrada")
 
 
 # ───────────────────────────── proxies: a escolha tem de estar escrita

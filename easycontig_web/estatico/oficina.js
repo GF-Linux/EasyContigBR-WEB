@@ -40,12 +40,26 @@
   // na exportação (ADR 0052) — isto não muda essa regra, só evita que recarregar
   // a página perca a correção. O `.ab1` em disco continua intocado, e o rascunho
   // é do navegador de quem editou, não do servidor.
+  //
+  // ⚠️ `sessionStorage`, NÃO `localStorage` — achado F3 da varredura de
+  // 2026-08-21. Aqui dentro vão as leituras ALINHADAS de uma corrida ainda não
+  // publicada, e no `localStorage` elas sobreviviam ao fim da sessão do
+  // servidor: numa estação compartilhada de laboratório, a próxima pessoa a
+  // sentar abria o devtools e lia a sequência de quem estava antes, sem
+  // credencial nenhuma. `sessionStorage` mantém intacto o motivo de o rascunho
+  // existir (recarregar a página não perde a correção — ele sobrevive ao F5),
+  // e some quando a aba fecha, que é justamente quando a pessoa foi embora.
   const CHAVE = "easycontig:rascunho:" + location.pathname;
+  const GUARDA = window.sessionStorage;
+  // Prazo de validade, o que o comentário do `entrar.html` já pedia: aba
+  // esquecida aberta a noite inteira não deve entregar a edição da manhã
+  // anterior. 12 h cobre um dia de trabalho com folga.
+  const VALIDADE_MS = 12 * 60 * 60 * 1000;
 
   function guardarRascunho() {
     try {
-      if (!est.removidas) { localStorage.removeItem(CHAVE); return; }
-      localStorage.setItem(CHAVE, JSON.stringify({
+      if (!est.removidas) { GUARDA.removeItem(CHAVE); return; }
+      GUARDA.setItem(CHAVE, JSON.stringify({
         seq: est.seq.map(s => s.join("")), removidas: est.removidas,
         quando: new Date().toISOString(),
       }));
@@ -53,8 +67,17 @@
   }
 
   function lerRascunho() {
-    try { return JSON.parse(localStorage.getItem(CHAVE) || "null"); }
-    catch (e) { return null; }
+    try {
+      const r = JSON.parse(GUARDA.getItem(CHAVE) || "null");
+      if (!r) return null;
+      // Vencido não volta — e sai do armazenamento em vez de ficar esperando.
+      const t = Date.parse(r.quando || "");
+      if (!t || (Date.now() - t) > VALIDADE_MS) {
+        GUARDA.removeItem(CHAVE);
+        return null;
+      }
+      return r;
+    } catch (e) { return null; }
   }
 
   fetch(raiz.dataset.traco, { headers: { accept: "application/json" } })
@@ -588,7 +611,7 @@
     est.exportado = true;
     // Exportou: o rascunho cumpriu o papel e sai. Guardá-lo depois disso faria a
     // próxima visita ressuscitar uma edição que já virou arquivo.
-    try { localStorage.removeItem(CHAVE); } catch (e) {}
+    try { GUARDA.removeItem(CHAVE); } catch (e) {}
     const av = document.getElementById("rascunho-antigo");
     if (av) av.style.display = "none";
     render();
