@@ -4,45 +4,10 @@ Fachada web do EasyContig BR. Sobe um par F+R — ou a pasta inteira de uma
 corrida — e devolve o alinhamento, os dois cromatogramas acoplados, a
 identificação, o relatório e o CSV.
 
-**ATENÇÃO** — este parágrafo dizia até 2026-08-06 que a web **não** tinha cromatograma
-interativo nem edição de base. Deixou de ser verdade em 05/08, quando a Fase 2
-saiu do papel: o workspace da amostra desenha o traço em canvas, arrasta para os
-lados, ajusta amplitude e edita base — e o consenso só vira definitivo na
-exportação. O desktop continua existindo e não foi substituído.
-
-Por que assim, e não o app inteiro no navegador: [ADR 0050][adr50] no segundo
-cérebro. Resumo: o lote é 100 % backend, já estava implementado, e é o que o
-laboratório pediu na prática duas vezes.
 
 ## Como está montado
 
-```
-   navegador                    este repo                     EasyContig BR
-  ┌──────────┐               ┌──────────────────┐           ┌──────────────┐
-  │  upload  │ ─── .ab1 ───▶ │ servidor_web.py  │─ 3 vagas ▶│  app/core/   │
-  │          │ (nginx, teto  │ grava, ENFILEIRA │(workspace │ (biblioteca) │
-  │  polling │ ◀── status ── │ e responde       │ e bancos) │   tracy      │
-  └──────────┘   por rota)   └──┬───────────┬───┘           │   blastn     │
-                                │           │               │   NJ         │
-                        grava   │           │  enfileira    │   MrBayes    │
-                                ▼           ▼               │              │
-                  ┌─────────────────┐ ┌─────────────────┐   └──────▲───────┘
-                  │ /dados (volume) │ │  fila.sqlite3   │          │
-                  │ lotes/<id>/     │ │  (WAL)          │          │ importa
-                  │  entrada/  .ab1 │ │  DUAS filas:    │          │
-                  │  trabalho/ tracy│ │   lotes         │          │
-                  │  arvore/   mb   │ │   arvores       │          │
-                  │  relatorio.*    │ │  + perfis,      │          │
-                  └────────▲────────┘ │    pedidos,     │          │
-                           │          │    pulso        │          │
-                lê e grava │          └────────▲────────┘          │
-                           │                   │ reivindica        │
-                           │           (UPDATE condicional)        │
-                         ┌─┴───────────────────┴───────────────────┴─┐
-                         │ trabalhador_da_fila × N  (a mesma imagem) │
-                         │ pega um LOTE; não havendo, uma ÁRVORE     │
-                         └───────────────────────────────────────────┘
-```
+![Como está montado: o navegador envia os .ab1 pelo nginx ao servidor_web, que grava no volume e enfileira no SQLite; o trabalhador da fila reivindica o lote e roda tracy, blastn e MrBayes pelo app/core, fora da requisição.](docs/arquitetura.svg)
 
 O servidor web **não processa nada**. Ele grava os arquivos, põe o lote na fila
 e responde — 116 ms para um envio de 26 MB, medido. Os ~14 s de montagem e
