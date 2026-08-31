@@ -17,17 +17,88 @@ laboratório pediu na prática duas vezes.
 ## Como está montado
 
 ```
-   navegador                     este repo                    EasyContig BR
-  ┌──────────┐   .ab1     ┌────────────────────┐           ┌────────────────┐
-  │  upload  │ ─────────▶ │  servidor_web.py   │           │   app/core/    │
-  └──────────┘            │  grava e ENFILEIRA │           │  (biblioteca)  │
-       ▲                  └─────────┬──────────┘           │  tracy · blast │
-       │  relatório                 │ SQLite               │  árvore · lote │
-       │                  ┌─────────▼──────────┐  importa  │                │
-       └───────────────── │ processamento/     │ ─────────▶│                │
-                          │ trabalhador_da_fila│           └────────────────┘
-                          └────────────────────┘
+   navegador                    este repo                     EasyContig BR
+  ┌──────────┐               ┌──────────────────┐           ┌──────────────┐
+  │  upload  │ ─── .ab1 ───▶ │ servidor_web.py  │─ 3 vagas ▶│  app/core/   │
+  │          │ (nginx, teto  │ grava, ENFILEIRA │(workspace │ (biblioteca) │
+  │  polling │ ◀── status ── │ e responde       │ e bancos) │   tracy      │
+  └──────────┘   por rota)   └──┬───────────┬───┘           │   blastn     │
+                                │           │               │   NJ         │
+                        grava   │           │  enfileira    │   MrBayes    │
+                                ▼           ▼               │              │
+                  ┌─────────────────┐ ┌─────────────────┐   └──────▲───────┘
+                  │ /dados (volume) │ │  fila.sqlite3   │          │
+                  │ lotes/<id>/     │ │  (WAL)          │          │ importa
+                  │  entrada/  .ab1 │ │  DUAS filas:    │          │
+                  │  trabalho/ tracy│ │   lotes         │          │
+                  │  arvore/   mb   │ │   arvores       │          │
+                  │  relatorio.*    │ │  + perfis,      │          │
+                  └────────▲────────┘ │    pedidos,     │          │
+                           │          │    pulso        │          │
+                lê e grava │          └────────▲────────┘          │
+                           │                   │ reivindica        │
+                           │           (UPDATE condicional)        │
+                         ┌─┴───────────────────┴───────────────────┴─┐
+                         │ trabalhador_da_fila × N  (a mesma imagem) │
+                         │ pega um LOTE; não havendo, uma ÁRVORE     │
+                         └───────────────────────────────────────────┘
 ```
+
+O servidor web **não processa nada**. Ele grava os arquivos, põe o lote na fila
+e responde — 116 ms para um envio de 26 MB, medido. Os ~14 s de montagem e
+identificação acontecem no trabalhador, onde ninguém está com uma conexão
+aberta esperando. É essa separação que faz o serviço aguentar 100 pessoas na
+mesma máquina que aguentaria 20.
+
+Nenhuma decisão científica mora aqui. Montagem, identidade, limiares e o texto
+do relatório são todos de `app/core/`, o mesmo código que o desktop usa — o que
+mantém as duas fachadas dizendo a mesma coisa sobre a mesma amostra.
+
+**Duas filas no mesmo banco, um trabalhador só.** O envio de lote e o pedido de
+árvore são filas separadas (`lotes` e `arvores`), e o laço do trabalhador tenta
+primeiro um lote e, não havendo, uma árvore — o que mantém a corrida de alguém
+na frente do enfeite. As duas se reivindicam pelo mesmo `UPDATE` condicional,
+então subir mais réplicas continua seguro.
+
+**A regra de ouro tem uma exceção, e ela é medida.** Reabrir uma amostra no
+workspace e montar um banco de referência rodam `tracy`/`blastn` no próprio
+processo web, atrás de um semáforo de `EASYCONTIG_MAX_PESADAS` vagas (3 no
+compose): quem exceder leva 503 na hora, em vez de segurar a thread que o resto
+do site usa. É a única coisa pesada que acontece dentro de uma requisição.
+
+**O teto de corpo é do nginx, e é por rota.** O padrão do `server` é 2 MB; só
+`= /lotes` sobe para 512 MB, `= /bancos/meu` para 32 MB e `= /perfil` para 8 MB.
+O Starlette spoola o corpo inteiro em disco **antes** de a rota rodar, então
+cota e `max_bytes` só agem depois de os bytes já terem subido — quem segura é o
+arquivo em `implantacao/`.
+
+### Onde os dados param
+
+Tudo num lugar só, e é de propósito: a promessa das ADRs 0050/0057 é que migrar
+o serviço seja **copiar uma pasta**. No servidor essa pasta é `/var/lib/easycontig`
+(montada como `/dados` no contêiner); em desenvolvimento é o que estiver em
+`EASYCONTIG_DATA_DIR`.
+
+```
+<EASYCONTIG_DATA_DIR>/
+├── lotes/<id>/entrada/*.ab1     os traços como o usuário mandou — é o peso
+├── lotes/<id>/trabalho/         as saídas intermediárias do tracy
+├── lotes/<id>/arvore/           o que o MrBayes produziu
+├── lotes/<id>/relatorio.html · relatorio.json · resultado.csv
+├── fila.sqlite3                 as duas filas, perfis, pedidos e pulso
+├── bancos/                      os bancos de referência montados aqui
+└── fotos/                       as fotos de perfil
+```
+
+Um lote de 40 amostras (80 `.ab1`) ocupa **~98 MB** depois de processado, e a
+entrada mais o `trabalho/` respondem por quase tudo. **Não há banco de dados
+fora daqui:** o `fila.sqlite3` guarda metadado, não traço.
+
+`EASYCONTIG_RETENCAO_DIAS` (30 no compose) é o que apaga a pasta do lote quando
+o prazo vence, contado do `criado_em`, na faxina que o trabalhador roda de hora
+em hora. **Apagar não tem desfazer, e ninguém é avisado antes** — veja "O que
+ainda não está feito".
+
 
 ## Árvore filogenética do lote (19/08/2026)
 
@@ -50,16 +121,6 @@ convergência do MCMC em uma frase em vez do ASDSF cru.
 A ciência é de `app/core/phylogeny.py`; este repo só junta os consensos, descobre
 o marcador e desenha. Precisa do `mb` no PATH (ou `EASYCONTIG_MRBAYES_BIN`) — o
 MrBayes não vem de `pip` nem de repositório de distribuição.
-
-O servidor web **não processa nada**. Ele grava os arquivos, põe o lote na fila
-e responde — 116 ms para um envio de 26 MB, medido. Os ~14 s de montagem e
-identificação acontecem no trabalhador, onde ninguém está com uma conexão
-aberta esperando. É essa separação que faz o serviço aguentar 100 pessoas na
-mesma máquina que aguentaria 20.
-
-Nenhuma decisão científica mora aqui. Montagem, identidade, limiares e o texto
-do relatório são todos de `app/core/`, o mesmo código que o desktop usa — o que
-mantém as duas fachadas dizendo a mesma coisa sobre a mesma amostra.
 
 ## Onde cada coisa mora
 
@@ -84,9 +145,11 @@ easycontig_web/
 │   ├── limite_de_requisicoes.py      quantas requisições por janela
 │   └── cota_de_espaco.py             quanto UMA CONTA ocupa
 ├── processamento/           o que roda fora da requisição
-│   ├── fila_de_lotes.py              a fila, em SQLite
-│   ├── trabalhador_da_fila.py        o processo que a esvazia
-│   └── executor_de_lote.py           a única ponte com a ciência
+│   ├── fila_de_lotes.py              a fila dos lotes, em SQLite
+│   ├── fila_de_arvores.py            a segunda fila: pedidos de árvore
+│   ├── trabalhador_da_fila.py        o processo que esvazia as duas
+│   ├── executor_de_lote.py           a única ponte com a ciência
+│   └── executor_de_arvore.py         junta os consensos e chama o MrBayes
 └── dados/                   o que se lê e se guarda
     ├── esquema_e_migracoes.py        como o banco muda de versão
     ├── bancos_de_referencia.py       referências montadas sob demanda
@@ -110,8 +173,8 @@ pip install -e ".[dev]"
 cp .env.example .env        # já vem apontando para a instalação do Deck
 set -a; . ./.env; set +a
 
-uvicorn easycontig_web.main:app --port 8099 --reload   # num terminal
-python -m easycontig_web.trabalhador                   # noutro
+uvicorn easycontig_web.servidor_web:app --port 8099 --reload  # num terminal
+python -m easycontig_web.processamento.trabalhador_da_fila   # noutro
 ```
 
 Abra <http://127.0.0.1:8099>. Em `EASYCONTIG_AUTH=dev` qualquer e-mail entra sem
