@@ -1,295 +1,253 @@
-#? ROTAS DE BANCOS — os bancos de referência: montar, remover e enviar o seu
-#!
-#! 1. Só rotas. O que elas usam em comum mora em `comum.py`.
-#! 2. O `app` não é montado aqui: este arquivo expõe um `router`, e quem o
-#!    inclui é o `servidor_web`.
+"""
+rotas_de_bancos.py — os bancos de referencia: o catalogo (NCBI) e os bancos proprios (FASTA enviado).
 
-#? SERVIDOR WEB — Decisão sobre não processar nada aqui 04/08/2026
-#!
-#! 1. Sobe assim: `uvicorn easycontig_web.servidor_web:app`
-#! 2. REGRA DE OURO: este arquivo NÃO processa nada. Recebe arquivo, grava em
-#!    disco, enfileira e responde.
-#! 3. Todo trabalho pesado é do trabalhador, em outro processo.
-#! 4. É a diferença entre aguentar 100 pessoas e cair com 20.
-from __future__ import annotations
+    GET  /bancos?feito=<id>          pagina_bancos   bancos.html: catalogo por grupo com o estado de cada um, meus bancos, erro = recado, feito
+    POST /bancos/{banco_id}/montar   montar_banco    estante.montar(id, ncbi): procura no NCBI, baixa, makeblastdb -> 303 /bancos?feito=<id>
+    POST /bancos/{banco_id}/remover  remover_banco   meu_... so do dono; do catalogo so administrador -> 303 /bancos
+    POST /bancos/meu                 enviar_banco    apelido + FASTA (ate 20 MB) -> estante.montar_do_usuario -> 303 /bancos?feito=meu
 
-import errno
-import os
-import sys
-import traceback
-import secrets
-import shutil
-import threading
-import time
-from contextlib import contextmanager
-from pathlib import Path
+    o que da errado na montagem:
+        BancoOcupado (outro pedido montando o mesmo)  -> 409 com o motivo
+        ErroDoBanco / ErroDoNcbi (escritos para a tela) -> recado com o motivo + 303 /bancos
+        qualquer outra excecao                          -> log completo; recado generico + 303 /bancos
+
+COMO FUNCIONA
+
+    Montar do catalogo e sincrono de proposito: sao segundos para os pequenos e
+    quem aperta esta olhando; os grandes avisam o tamanho antes. O banco do
+    usuario roda o makeblastdb numa vaga pesada (instalacao.vaga_pesada) e em
+    thread, para nao segurar o laco do servidor.
+
+    Um banco do catalogo e de todo o laboratorio: remontar ou remover so
+    administrador (EASYCONTIG_ADMINS; vazio = ninguem, de proposito).
+
+COMO USAR
+
+    app.include_router(rotas_de_bancos.router)
+
+O QUE MUDOU (em relacao ao original)
+
+ 1. _so_uma_montagem (trava O_EXCL <prefixo>.montando.lock) sumiu: a
+    EstanteDeBancos.trava faz o mesmo por dentro de montar/montar_do_usuario
+    e levanta BancoOcupado, que aqui vira 409 — com o motivo da estante
+    (diz que outro pedido esta montando e que a trava velha se limpa sozinha),
+    em vez de "este banco ja esta sendo montado agora; espere terminar".
+
+ 2. ErroDoBanco e ErroDoNcbi chegam a tela: as mensagens ja nascem para
+    quem esta na frente do formulario (sem caminho de servidor; a pasta dos
+    bancos sai como <bancos>). O original mandava tudo para o log e
+    mostrava "nao foi possivel montar o banco; tente de novo. O motivo
+    completo esta no log" — e o motivo mais comum (termo sem resultado,
+    NCBI fora, FASTA sem '>') era exatamente o que a pessoa precisava ler.
+    O generico continua para o que nao foi previsto.
+
+ 3. O FASTA e medido em BYTES antes de decodificar. O original decodificava
+    com 'replace' e media caracteres: um FASTA de 20 MB + 1 byte com
+    acentos multibyte no cabecalho passava do teto sem ser pego.
+
+ 4. _e_administrador lia EASYCONTIG_ADMINS a cada clique; e
+    instalacao.e_administrador(u), com a lista lida uma vez.
+
+ 5. O item do template era {"c": ficha, "estado": ...}; agora {"ficha": ...,
+    "estado": ...}. `meus` sao EstadoDoBanco (id, apelido, sequencias, ...).
+
+POR QUE nao nasce classe
+
+    Rotas; o estado (estante, ncbi, cotas, vagas) e da Instalacao.
+"""
+
+import logging
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               RedirectResponse)
-from fastapi.staticfiles import StaticFiles
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
-from starlette.middleware.gzip import GZipMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 
-from ..dados import leitura_de_amostras as mod_amostras
-from ..contas import autenticacao as auth
-from ..dados import bancos_de_referencia as bancos
-from .. import configuracao as config
-from ..contas import cota_de_espaco as cotas
-from ..processamento import executor_de_lote as executor
-from ..processamento import fila_de_lotes as fila
-from ..contas import limite_de_requisicoes as limites
-from ..dados import pedidos_entre_labs as pedidos
-from ..contas import perfil_do_laboratorio as perfil
-from ..dados import expurgo_por_retencao as retencao
-from ..dados import cromatograma as traco
+from bancos_de_referencia import CATALOGO, POR_ID, BancoOcupado, ErroDoBanco, id_do_usuario
+from cliente_ncbi import ErroDoNcbi
+
+from easycontig_web.web import comum
 
 
-cfg = config.carregar()
+REGISTRO = logging.getLogger('easycontig.bancos')
 
-# ⚠️ Trava de arranque: `EASYCONTIG_PRODUCAO=1` recusa subir com a porta aberta.
-# Fica atrás de uma variável para o desenvolvimento local não precisar de nada,
-# e o `docker-compose` de produção a define.
-if os.environ.get("EASYCONTIG_PRODUCAO") == "1":
-    _problemas = config.conferir_producao()
-    if _problemas:
-        raise RuntimeError(
-            "EASYCONTIG_PRODUCAO=1 e a configuração não está pronta:\n  - "
-            + "\n  - ".join(_problemas))
+TETO_DO_FASTA = 20 * 1024 * 1024  #* bytes; 60 000 sequencias de 18S dao uns 100 MB, mas um banco proprio e de dezenas a centenas
 
-# ⚠️ O `GOOGLE_CLIENT_ID` errado é MUDO deste lado: `google_configurado()` aceita
-# qualquer texto, e o erro só aparece na página do Google (`401 invalid_client`,
-# "The OAuth client was not found") depois de a pessoa escolher a conta. Aviso,
-# não trava: quem sabe se o cliente existe é o Google, e recusar subir por causa
-# de um formato seria trocar um palpite por outro.
-if os.environ.get("EASYCONTIG_AUTH", "dev").lower() == "google":
-    _queixa = auth.queixa_do_client_id()
-    if _queixa:
-        print("\n  ⚠️  " + _queixa + "\n", file=sys.stderr, flush=True)
+PREFIXO_DO_USUARIO = 'meu_'
 
+SO_ADMINISTRADOR_REMONTA = ('este banco compartilhado já está montado; remontá-lo sobrescreve a referência que todo o laboratório usa '
+                            'e é ação de quem administra o servidor')
 
-# `docs_url=None` em produção: `/api/docs`, `/redoc` e `/openapi.json` respondiam
-# 200 SEM sessão (verificado em 2026-08-06) e publicam o mapa inteiro da API —
-# toda rota, todo parâmetro, todo formato. Não é vazamento de dado, é o mapa de
-# onde procurar, entregue a quem ainda não entrou. Em desenvolvimento continua
-# ligado, que é onde ele serve para alguma coisa.
-from fastapi import APIRouter
-
-from .comum import (
-    EXT_ACEITAS, TEMPLATES, _br, _casca, _exigir, _lote_do_usuario, _marcar_resposta,
-    _pegar_recado, _por_recado, _referencias, _u, _vaga_pesada, cfg,
-)
+SO_ADMINISTRADOR_REMOVE = 'remover um banco compartilhado é ação de quem administra o servidor; defina EASYCONTIG_ADMINS para liberar'
 
 router = APIRouter()
 
 
-# ------------------------------------------------------- bancos de referência
-@router.get("/bancos", response_class=HTMLResponse)
-def pagina_bancos(request: Request, feito: str = ""):
-    u = _exigir(request)
-    grupos: dict[str, list] = {}
-    for c in bancos.CATALOGO:
-        grupos.setdefault(c.grupo, []).append(
-            {"c": c, "estado": bancos.estado(cfg().data_dir, c.id)})
-    return TEMPLATES.TemplateResponse(request, "bancos.html", {
-        **_casca(u), "grupos": grupos,
-        "meus": bancos.meus_bancos(cfg().data_dir, u.email),
-        "erro": _pegar_recado(request), "feito": feito,
+
+
+@router.get('/bancos', response_class=HTMLResponse)
+def pagina_bancos(request: Request, feito: str = ''):
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    grupos = {}
+
+    for ficha in CATALOGO:
+        grupos.setdefault(ficha.grupo, []).append({'ficha': ficha, 'estado': instalacao.estante.estado(ficha.id)})
+
+    return comum.TEMPLATES.TemplateResponse(request, 'bancos.html', {
+        **instalacao.casca(u),
+        'grupos': grupos,
+        'meus': instalacao.estante.meus_bancos(u.email),
+        'erro': comum.pegar_recado(request),
+        'feito': feito,
     })
 
 
-@contextmanager
-def _so_uma_montagem(banco_id: str):
-    """Impede duas montagens do MESMO banco ao mesmo tempo.
-
-    Sem isto, dois cliques simultâneos — ou dois processos, que é o normal em
-    produção (`replicas` no compose) — rodam `makeblastdb -out <mesmo prefixo>`
-    em paralelo e intercalam escritas nos mesmos arquivos de índice. O resultado
-    não é um erro: é um banco corrompido que só aparece como "sem acerto" na
-    amostra de alguém, dias depois.
-
-    Arquivo de trava com `O_EXCL`, e não um lock em memória, porque a disputa é
-    ENTRE PROCESSOS. Trava órfã (processo morto no meio) é limpa por idade: uma
-    montagem real leva segundos, então o que passa de meia hora é entulho.
-    """
-    alvo = bancos.prefixo(cfg().data_dir, banco_id)
-    alvo.parent.mkdir(parents=True, exist_ok=True)
-    trava = alvo.with_suffix(".montando.lock")
-    if trava.exists():
-        try:
-            velha = (time.time() - trava.stat().st_mtime) > 1800
-        except OSError:
-            velha = False
-        if velha:
-            trava.unlink(missing_ok=True)
-    try:
-        fd = os.open(trava, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        raise HTTPException(
-            status_code=409,
-            detail="este banco já está sendo montado agora; espere terminar")
-    try:
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-        yield
-    finally:
-        trava.unlink(missing_ok=True)
 
 
-@router.post("/bancos/{banco_id}/montar")
+def falha_na_tela(request, erro, generico):
+
+    #* o que a pessoa le quando a montagem falha: o motivo, se foi escrito para ela; senao o generico. o log leva tudo
+
+    if isinstance(erro, (ErroDoBanco, ErroDoNcbi)):
+
+        REGISTRO.warning('%s', erro)
+
+        comum.por_recado(request, str(erro))
+
+    else:
+
+        REGISTRO.error('%s: %s: %s', generico, type(erro).__name__, erro, exc_info=erro)
+
+        comum.por_recado(request, generico)
+
+    return RedirectResponse('/bancos', status_code=303)
+
+
+
+
+@router.post('/bancos/{banco_id}/montar')
 def montar_banco(request: Request, banco_id: str):
-    """Baixa do NCBI e monta. Síncrono de propósito: são segundos para os
-    pequenos, e quem aperta está olhando. Os grandes avisam o tamanho antes."""
-    u = _exigir(request)
-    limites.conferir("banco", request, u.email)
-    if banco_id not in bancos.POR_ID:
-        raise HTTPException(status_code=404, detail="banco desconhecido")
-    # ⚠️ REMONTAR NÃO É MONTAR. A regra ao lado (`remover_banco`) diz que montar
-    # segue liberado por ser ADITIVO — e é, enquanto o banco não existe. Quando
-    # ele já existe, `makeblastdb -out <prefixo>` reescreve os `.nhr/.nin/.nsq`
-    # NO LUGAR: é a mesma destruição que a remoção faz, pela porta que ficou
-    # aberta justamente porque se chamava "montar". Enquanto reescreve, o
-    # `blastn` do trabalhador e o de `/api/.../consultar` leem um banco em pleno
-    # vôo, e o desfecho é o defeito da ADR 0039 — falha de instalação chegando
-    # como "sem acerto" na amostra de outra pessoa.
-    #
-    # Então: criar, qualquer conta; SOBRESCREVER o que é de todo mundo, só quem
-    # administra. Bancos `meu_` não passam por aqui (são do próprio dono).
-    if bancos.existe(cfg().data_dir, banco_id) and not _e_administrador(u):
-        raise HTTPException(
-            status_code=403,
-            detail="este banco compartilhado já está montado; remontá-lo "
-                   "sobrescreve a referência que todo o laboratório usa e é "
-                   "ação de quem administra o servidor")
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    instalacao.limitador.conferir('banco', request, u.email)
+
+    if banco_id not in POR_ID:
+        raise HTTPException(404, 'banco desconhecido')
+
+    if instalacao.estante.existe(banco_id) and not instalacao.e_administrador(u):
+        raise HTTPException(403, SO_ADMINISTRADOR_REMONTA)
+
     try:
-        with _so_uma_montagem(banco_id):
-            bancos.montar(cfg().data_dir, banco_id, blast_bin=cfg().blast_bin)
-    except HTTPException:
-        raise                                   # 409 da trava sobe como está
-    except Exception as e:                      # noqa: BLE001
-        # ⚠️ O `str(e)` das operações de banco (makeblastdb/blastn/E/S) carrega
-        # caminho absoluto do servidor e stderr da ferramenta — detalhe interno
-        # que não vai para a tela. Genérico para quem vê, completo no log.
-        print(f"  ⚠️  falha ao montar o banco {banco_id}: "
-              f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        _por_recado(request, "não foi possível montar o banco; tente de novo. "
-                             "O motivo completo está no log.")
-        return RedirectResponse("/bancos", status_code=303)
-    return RedirectResponse(f"/bancos?feito={quote(banco_id)}", status_code=303)
+        instalacao.estante.montar(banco_id, instalacao.ncbi)
+
+    except BancoOcupado as erro:
+        raise HTTPException(409, str(erro))
+
+    except Exception as erro:
+        return falha_na_tela(request, erro, f'não foi possível montar o banco {banco_id}; tente de novo. O motivo completo está no log.')
+
+    return RedirectResponse(f'/bancos?feito={quote(banco_id)}', status_code=303)
 
 
-def _e_administrador(u: auth.Usuario) -> bool:
-    """Quem pode mexer no que é de todo mundo. Vazio = ninguém, de propósito."""
-    lista = {e.strip().lower()
-             for e in os.environ.get("EASYCONTIG_ADMINS", "").split(",") if e.strip()}
-    return u.email.lower() in lista
 
 
-@router.post("/bancos/{banco_id}/remover")
+@router.post('/bancos/{banco_id}/remover')
 def remover_banco(request: Request, banco_id: str):
-    u = _exigir(request)
-    if banco_id.startswith("meu_"):
-        # banco de usuário só some pela mão do dono
-        if banco_id not in {b["id"] for b in bancos.meus_bancos(cfg().data_dir, u.email)}:
-            raise HTTPException(status_code=404, detail="banco não encontrado")
-    elif banco_id not in bancos.POR_ID:
-        raise HTTPException(status_code=404, detail="banco desconhecido")
-    elif not _e_administrador(u):
-        # ⚠️ Verificado em 2026-08-06: QUALQUER conta autenticada removia um banco
-        # do catálogo COMPARTILHADO — um estagiário recém-cadastrado derrubava a
-        # referência que todo o laboratório usa, e a próxima corrida de qualquer
-        # pessoa passava a dizer "sem acerto" sem nada explicando por quê. É a
-        # pior forma do defeito que a ADR 0039 descreve: falha da instalação
-        # aparecendo como resultado da amostra.
-        #
-        # Remontar leva segundos, então o estrago é reversível — mas só depois de
-        # alguém descobrir o que houve, e nada na tela contaria.
-        #
-        # MONTAR segue liberado: é aditivo, já tem teto de taxa, e é o fluxo que
-        # a página inteira existe para oferecer. Quem apaga é que precisa de nome.
-        raise HTTPException(
-            status_code=403,
-            detail="remover um banco compartilhado é ação de quem administra o "
-                   "servidor; defina EASYCONTIG_ADMINS para liberar")
-    bancos.remover(cfg().data_dir, banco_id)
-    return RedirectResponse("/bancos", status_code=303)
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    if banco_id.startswith(PREFIXO_DO_USUARIO):
+
+        if banco_id not in {estado.id for estado in instalacao.estante.meus_bancos(u.email)}:
+            raise HTTPException(404, 'banco não encontrado')
+
+    elif banco_id not in POR_ID:
+        raise HTTPException(404, 'banco desconhecido')
+
+    elif not instalacao.e_administrador(u):
+        raise HTTPException(403, SO_ADMINISTRADOR_REMOVE)
+
+    instalacao.estante.remover(banco_id)
+
+    return RedirectResponse('/bancos', status_code=303)
 
 
-@router.post("/bancos/meu")
-async def enviar_banco(request: Request, apelido: str = Form(...),
-                       fasta: UploadFile = File(...)):
-    u = _exigir(request)
-    # ⚠️ Esta rota era a ÚNICA que escreve em disco sem teto de taxa nenhum, e
-    # os bancos do usuário também não entram na cota da conta — então uma conta
-    # comum enchia o volume onde moram os `.ab1` de todo mundo, 20 MB por vez,
-    # sem nada que recolhesse depois. Achado pelo painel de verificação em
-    # 2026-08-06. O teto de "banco" é o mesmo que já protege o NCBI na rota de
-    # montar: 10 por hora, que para quem monta banco à mão é folgado.
-    limites.conferir("banco", request, u.email)
 
-    # ⚠️ Achado M2 de 2026-08-08: faltavam DUAS travas aqui, e o balde de taxa
-    # não substitui nenhuma delas. Um banco de usuário não expira (a faxina só
-    # apaga lote) e não entrava na cota — então 10 FASTAs de 20 MB por hora,
-    # cada um com apelido diferente, eram ~200 MB/h PERMANENTES e invisíveis.
-    # `_NOME_OK` aceita 40 caracteres, ou seja o espaço de apelidos é infinito
-    # para efeito prático: o teto tinha de ser de QUANTIDADE e de BYTES.
-    quanto = cotas.situacao(cfg().sqlite_path, cfg().lotes_dir, u.email, cfg().data_dir)
-    if quanto.max_bancos and quanto.bancos >= quanto.max_bancos:
-        _por_recado(request, f"você já mantém {quanto.bancos} bancos próprios "
-                             f"(o limite é {quanto.max_bancos}); remova um "
-                             "antes de montar outro")
-        return RedirectResponse("/bancos", status_code=303)
-    if not quanto.pode_enviar and quanto.bytes_usados >= quanto.max_bytes_conta > 0:
-        _por_recado(request, quanto.motivo)
-        return RedirectResponse("/bancos", status_code=303)
 
-    # ⚠️ ESTA ROTA É `async def`, E POR ISSO O `makeblastdb` NÃO PODE SER CHAMADO
-    # DIRETO (achado do painel de 2026-08-11, 3 de 3 verificadores).
-    #
-    # O corpo de uma rota `async def` roda NO EVENT LOOP, não no threadpool. E
-    # `montar_do_usuario` termina em `subprocess.run(makeblastdb, timeout=600)`
-    # (`bancos.py:171`), que bloqueia de verdade. Com um uvicorn de um
-    # trabalhador só — que é o que o `Dockerfile` sobe —, enquanto esse
-    # subprocesso roda o servidor **não atende mais ninguém**: nem o login, nem
-    # o `/saude`, nem um envio em curso. O teto de taxa é 10/hora por conta, e
-    # 10 × 600 s cobre a hora inteira que ele mede.
-    #
-    # A rota irmã que monta do NCBI (`montar_banco`) nunca teve o problema por
-    # ser um `def` simples — o Starlette manda `def` para o threadpool sozinho.
-    # Ou seja, o padrão certo já existia no arquivo e só esta rota escapou dele.
-    #
-    # Duas correções, e as duas fazem falta:
-    #   * `run_in_threadpool` tira o bloqueio do event loop;
-    #   * `_vaga_pesada()` é o mesmo semáforo que `api_traco` e `api_consultar`
-    #     já usam. Sem ele, sair do event loop só troca o problema de lugar:
-    #     40 montagens simultâneas ocupariam o threadpool inteiro, que é o
-    #     achado M4 de 2026-08-08 outra vez, por uma rota nova.
+def cabe_mais_um(request, cota):
+
+    #* a cota de bancos e de bytes da conta, como recado (nao 413): quem esta na pagina de bancos le e decide o que apagar
+
+    if cota.max_bancos and cota.bancos >= cota.max_bancos:
+
+        comum.por_recado(request, f'você já mantém {cota.bancos} bancos próprios (o limite é {cota.max_bancos}); remova um antes de montar outro')
+
+        return False
+
+    if not cota.pode_enviar and cota.bytes_usados >= cota.max_bytes_conta > 0:
+
+        comum.por_recado(request, cota.motivo)
+
+        return False
+
+    return True
+
+
+
+
+@router.post('/bancos/meu')
+async def enviar_banco(request: Request, apelido: str = Form(...), fasta: UploadFile = File(...)):
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    instalacao.limitador.conferir('banco', request, u.email)
+
+    if not cabe_mais_um(request, instalacao.cotas.situacao(u.email)):
+        return RedirectResponse('/bancos', status_code=303)
+
     try:
-        banco_id = bancos.id_do_usuario(u.email, apelido.strip())
-        dados = (await fasta.read(20 * 1024 * 1024 + 1)).decode("utf-8", "replace")
-        if len(dados) > 20 * 1024 * 1024:
-            raise ValueError("o FASTA passa de 20 MB")
-        with _vaga_pesada():
-            await run_in_threadpool(bancos.montar_do_usuario, cfg().data_dir,
-                                    banco_id, dados, blast_bin=cfg().blast_bin)
+        banco_id = id_do_usuario(u.email, apelido.strip())
+
+        dados = await fasta.read(TETO_DO_FASTA + 1)
+
+        if len(dados) > TETO_DO_FASTA:
+            raise ErroDoBanco(f'o FASTA passa de {TETO_DO_FASTA // (1024 * 1024)} MB')
+
+        with instalacao.vaga_pesada():
+            await run_in_threadpool(instalacao.estante.montar_do_usuario, banco_id, dados.decode('utf-8', 'replace'))
+
     except HTTPException:
-        # ⚠️ ANTES do `except Exception`, senão o 503 de "sem vaga" é engolido e
-        # volta como um texto de erro na página — a trava existiria e ninguém
-        # veria que ela agiu.
         raise
-    except Exception as e:                      # noqa: BLE001
-        # ⚠️ Mesmo cuidado do `montar_banco`: o `str(e)` do makeblastdb/E-S traz
-        # caminho do servidor e stderr da ferramenta — genérico na tela, o
-        # diagnóstico completo fica no log do servidor.
-        print(f"  ⚠️  falha ao montar o banco do usuário: "
-              f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        _por_recado(request, "não foi possível montar o seu banco; tente de novo. "
-                             "O motivo completo está no log.")
-        return RedirectResponse("/bancos", status_code=303)
-    return RedirectResponse("/bancos?feito=meu", status_code=303)
+
+    except BancoOcupado as erro:
+        raise HTTPException(409, str(erro))
+
+    except Exception as erro:
+        return falha_na_tela(request, erro, 'não foi possível montar o seu banco; tente de novo. O motivo completo está no log.')
+
+    return RedirectResponse('/bancos?feito=meu', status_code=303)
 
 
+
+
+def main():
+
+    for rota in router.routes:
+        print(f'  {",".join(sorted(rota.methods)):9} {rota.path:28} {rota.endpoint.__name__}')
+
+    print(f'  catálogo: {len(CATALOGO)} bancos em {len({ficha.grupo for ficha in CATALOGO})} grupos; FASTA próprio até {TETO_DO_FASTA // (1024 * 1024)} MB')
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

@@ -1,315 +1,417 @@
-#? LEITURA DE AMOSTRAS — Decisão sobre olhar UMA amostra 05/08/2026
-#!
-#! 1. Lê, por amostra, o `relatorio.json` já gravado no lote.
-#! 2. Existe porque a corrida real tem 40 amostras, e a única forma de olhar UMA
-#!    era abrir o relatório inteiro e procurar com Ctrl+F.
-#! 3. Aqui não se monta nem se identifica nada: o arquivo já está em disco,
-#!    escrito por `app/core/report.py`. Este módulo só formata para a tela.
-#! 4. Nenhuma decisão científica mora aqui.
-#! 5. Os limiares NÃO são reescritos: cada ressalva carrega o seu em `rule`, e é
-#!    esse texto que a tela imprime. Repetir o número aqui criaria uma segunda
-#!    fonte para o mesmo dado.
-#! 6. Ausência continua ausência: sem medida vira string vazia, nunca `0` — zero
-#!    é um número e seria lido como medida.
-#! 7. "Não achou" e "não conseguiu procurar" são coisas diferentes, e saem com
-#!    textos diferentes.
-#!
-#* Autor: Gustavo Gonçalves Freitas — LHV
-#* Copyright (c) 2026 Gustavo Gonçalves Freitas. Todos os direitos reservados.
-from __future__ import annotations
+"""
+leitura_de_amostras.py — le o relatorio.json ja gravado no lote e formata cada amostra para a tela.
+
+A corrida real tem 40 amostras, e a unica forma de olhar UMA era abrir o
+relatorio inteiro e procurar com Ctrl+F. Aqui nao se monta nem se identifica
+nada: o relatorio ja esta em disco, escrito pelo relatorio.py do nucleo. Este
+arquivo so le, conta e formata. Nenhuma decisao cientifica mora aqui, e os
+limiares nao sao reescritos: cada ressalva carrega o seu em `regra`, e e esse
+texto que a tela imprime.
+
+Duas regras da tela que este arquivo garante:
+
+  - ausencia continua ausencia: sem medida vira string VAZIA, nunca 0 — zero
+    e um numero e seria lido como "medi e deu zero";
+  - "nao achou" e "nao conseguiu procurar" sao coisas diferentes e saem com
+    textos diferentes (SITUACOES); e "nao montou" ganha de tudo, porque ali
+    nada chegou a ser consultado.
+
+
+COMO FUNCIONA — do relatorio.json aos dicts que os templates leem
+=================================================================
+
+    carregar(relatorio_json)  ->  RelatorioDoLote (nucleo)  |  None se nao existe, nao e JSON ou nao tem forma de relatorio
+           |                                                    (a causa vai para o log; a pagina diz "relatorio indisponivel")
+           |
+           |-- contar_amostras(relatorio_json) -> int | None      so o numero, com memoria por (mtime, tamanho) — o perfil pergunta 500x
+           |
+           |-- resumo(lote)          -> dict do cabecalho: total, situacoes que OCORRERAM (texto, classe, nota, n), avulsas, pareadas, ...
+           |
+           '-- listar(lote)          -> [formatar_amostra(fatos)]  na ordem do relatorio (a tabela)
+                      |
+                      '-- formatar_amostra(fatos)  -> numeros com casas fixas (numero), situacao_na_tela + rotulo_da_situacao,
+                                                      ressalvas [{codigo, texto, regra}], leituras [formatar_leitura(...)]
+                                                      a pagina da amostra chama a MESMA funcao: linha e pagina nunca divergem
+
+
+COMO USAR
+=========
+
+    from easycontig_web import configuracao
+    from easycontig_web.dados import leitura_de_amostras
+
+    cfg = configuracao.carregar()
+    lote = leitura_de_amostras.carregar(cfg.pastas_do_lote('v2-UNsPd').relatorio_json)
+    if lote is None:                                     #* 404 "relatorio indisponivel"
+        ...
+    cabecalho = leitura_de_amostras.resumo(lote)         #* cabecalho['situacoes'], ['avulsas'], ['pareadas'], ['banco'], ['trim']
+    linhas = leitura_de_amostras.listar(lote)            #* uma por amostra, para a tabela
+    uma = leitura_de_amostras.formatar_amostra(lote.amostra('amostra12'))  #* a MESMA formatacao, para a pagina da amostra (lote.amostra da None se nao ha)
+
+    n = leitura_de_amostras.contar_amostras(caminho)     #* o perfil: so o inteiro, sem decodificar de novo a cada visita
+
+
+O QUE MUDOU DO dados/leitura_de_amostras.py ORIGINAL
+====================================================
+
+ 1. carregar devolve o RelatorioDoLote do nucleo (FatosDaAmostra dentro), nao
+    o dict cru do JSON. Um relatorio.json ANTIGO (chaves em ingles: samples,
+    consensus_len...) nao tem mais forma de relatorio: None, com a causa no
+    log — a pagina diz "relatorio indisponivel". Na VPS isso alcanca so os
+    lotes com menos de 30 dias no dia da troca (a retencao apaga o resto).
+
+ 2. Os dicts formatados falam portugues como o nucleo: key -> chave,
+    accession -> acesso, cobertura_query -> cobertura_da_consulta,
+    e_value -> valor_e, pct_cobertura_1x -> pct_cobertura_1,
+    sentido_nome -> sentido_pelo_nome. Sairam `situacao_id` (o nucleo ja
+    grava 'nao_montou' quando a montagem falha — nao ha mais dois codigos
+    que divergem) e `invertido`/`contig_invertido: 'sim'|'nao'` (fica um so,
+    `contig_invertido`, booleano). Entraram os fatos novos do nucleo:
+    par_pelo_dna, sentido_absoluto, evidencia. Os templates serao reescritos
+    na fase do front com estes nomes.
+
+ 3. _amostras/_situacao/_rotulo_situacao/_num/_formatar/_leitura viraram
+    situacao_na_tela/rotulo_da_situacao/numero/formatar_amostra/
+    formatar_leitura, sem sublinhado: sao o que a fase do front vai chamar
+    ao montar os templates novos. _amostras sumiu: lote.amostras ja e a lista.
+
+ 4. contar_amostras continua com a memoria por (mtime_ns, tamanho) — o
+    perfil pergunta isso para ate 500 lotes por visita e a resposta tem que
+    ser a mesma de len(carregar(...).amostras). Sugestao para depois, a
+    decidir: gravar n_amostras na tabela `lotes` ao concluir e aposentar a
+    memoria.
+
+ 5. Os textos de SITUACOES e a ORDEM_SITUACOES sao os mesmos, letra por letra.
+    A regra "erro ou consenso de 0 pb = nao_montou" fica como guarda mesmo
+    com o nucleo ja gravando nao_montou: a tela nunca pode dizer "sem acerto"
+    de uma amostra que nao teve o que consultar.
+
+ 6. valor_e: so None vira ''. O original fazia `e_value or ''`, que apagaria
+    um 0,0 numerico — o melhor e-value possivel. Na pratica nao mudava nada
+    (o blastn entrega o texto '0.0', que e verdadeiro), mas a regra da tela
+    e "ausencia vira vazio", nao "zero vira vazio".
+
+ 7. Nada foi cortado: carregar/listar/resumo/amostra sao chamados em
+    rotas_de_consulta_de_lote; contar_amostras em rotas_de_perfil.
+
+
+POR QUE NAO NASCE CLASSE
+========================
+
+    Tudo aqui e objeto -> dict e dict -> dict. Quem tem estado e o
+    RelatorioDoLote, que ja e classe no nucleo. A memoria de contagem e um
+    dict de modulo com validacao por stat: nao e dona de recurso nenhum.
+"""
 
 import json
+
+import logging
+
 from pathlib import Path
 
-# Como cada `id_status` de `app/core/report.py` aparece na tela: texto, classe de
-# cor (as de `base.html`) e a frase que diz de QUEM a situação fala.
-#
-# `sem_acerto` é NEUTRO de propósito. Numa corrida real de 40 amostras, 19 vêm
-# de marcadores groEL/dsb/sodB — não são rRNA, então não estão num banco 18S/16S
-# e não terem acerto é o resultado CERTO. Pintar essas 19 de vermelho seria
-# afirmar uma falha que não houve.
-#
-# `blast_indisponivel` e `sem_banco` usam o âmbar de "pendente" porque falam da
-# instalação, não da amostra: há o que consertar, e não é o material do usuário.
-SITUACOES: dict[str, tuple[str, str, str]] = {
-    "ok": (
-        "acerto no banco local", "pronto",
-        "Melhor acerto do BLAST dentro do banco local consultado — uma semelhança "
-        "com o que existe nesse banco, não uma identificação de espécie.",
-    ),
-    "sem_acerto": (
-        "sem acerto no banco local", "sub",
-        "O banco local foi consultado e nenhuma referência foi alcançada. Isso "
-        "descreve o banco consultado, não a amostra.",
-    ),
-    "blast_indisponivel": (
-        "busca não executada — blastn indisponível", "rodando",
-        "A busca no banco local não chegou a rodar porque o blastn não pôde ser "
-        "chamado. Fala da instalação, não do conteúdo da amostra.",
-    ),
-    "sem_banco": (
-        "busca não executada — sem banco local", "rodando",
-        "Nenhum banco de referência local estava disponível para consulta. Fala "
-        "da instalação, não do conteúdo da amostra.",
-    ),
-    # Achado testando em 2026-08-05: uma amostra que não montou (Tracy falhou,
-    # consenso de 0 pb) recebia a pílula de `sem_acerto` — mesma palavra e mesma
-    # cor das 19 cujo "sem acerto" é o resultado CERTO —, e ainda entrava naquela
-    # contagem. É a afirmação falsa mais cara possível aqui: dizer que o banco
-    # foi consultado quando não houve o que consultar. Situação própria, e
-    # vermelha, porque desta vez a falha é real.
-    "nao_montou": (
-        "não montou — nada foi consultado", "falhou",
-        "A montagem do consenso falhou, então não houve sequência para procurar "
-        "no banco. Isto NÃO é 'sem acerto': nada chegou a ser consultado.",
-    ),
+import relatorio as modulo_relatorio
+
+
+
+REGISTRO = logging.getLogger('easycontig.leitura_de_amostras')
+
+#* como cada `situacao` do relatorio.py aparece na tela: texto, classe de cor (as do base.html) e a frase que diz de QUEM a situacao fala.
+#! `sem_acerto` e NEUTRO de proposito: numa corrida real de 40 amostras, 19 vem de marcadores groEL/dsb/sodB — nao sao rRNA,
+#! nao estao num banco 18S/16S, e nao terem acerto e o resultado CERTO. Pintar essas 19 de vermelho afirmaria uma falha que nao houve.
+#! `blast_indisponivel` e `sem_banco` usam o ambar de "pendente" porque falam da instalacao, nao da amostra.
+#! `nao_montou` e vermelho porque desta vez a falha e real — e NAO e 'sem acerto': nada chegou a ser consultado.
+SITUACOES = {
+    'ok': ('acerto no banco local', 'pronto',
+           'Melhor acerto do BLAST dentro do banco local consultado — uma semelhança com o que existe nesse banco, não uma identificação de espécie.'),
+    'sem_acerto': ('sem acerto no banco local', 'sub',
+                   'O banco local foi consultado e nenhuma referência foi alcançada. Isso descreve o banco consultado, não a amostra.'),
+    'blast_indisponivel': ('busca não executada — blastn indisponível', 'rodando',
+                           'A busca no banco local não chegou a rodar porque o blastn não pôde ser chamado. Fala da instalação, não do conteúdo da amostra.'),
+    'sem_banco': ('busca não executada — sem banco local', 'rodando',
+                  'Nenhum banco de referência local estava disponível para consulta. Fala da instalação, não do conteúdo da amostra.'),
+    'nao_montou': ('não montou — nada foi consultado', 'falhou',
+                   "A montagem do consenso falhou, então não houve sequência para procurar no banco. Isto NÃO é 'sem acerto': nada chegou a ser consultado."),
 }
 
-# A ordem em que as situações aparecem no cabeçalho. Fixa, para o cabeçalho não
-# mudar de forma entre um lote e outro.
-ORDEM_SITUACOES = ("ok", "sem_acerto", "blast_indisponivel", "sem_banco",
-                   "nao_montou")
+ORDEM_SITUACOES = ('ok', 'sem_acerto', 'blast_indisponivel', 'sem_banco', 'nao_montou')  #* fixa: o cabecalho nao muda de forma entre um lote e outro
+
+CONTAGENS = {}  #* caminho -> (mtime_ns, tamanho, n): a memoria de contar_amostras
 
 
-def carregar(relatorio_json: Path) -> dict | None:
-    """Lê o `relatorio.json` do lote. `None` se não existe ou não serve.
-
-    Não levanta: um relatório ilegível é assunto da página, que diz "relatório
-    indisponível", e não motivo para derrubar a requisição inteira. Também
-    devolve `None` para um JSON válido que não tenha a forma de um relatório —
-    aceitá-lo daria uma tela vazia se passando por lote sem amostras.
-    """
-    try:
-        texto = Path(relatorio_json).read_text(encoding="utf-8")
-        rep = json.loads(texto)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(rep, dict) or not isinstance(rep.get("samples"), list):
-        return None
-    return rep
 
 
-# ------------------------------------------------- quantas amostras, e só isso
-#
-# Medido em 2026-08-06: a página do perfil abria e decodificava o
-# `relatorio.json` de CADA corrida da conta — 25,89 ms para 40 delas, e o teto
-# ali é 500 lotes, não 50. O que ela faz com todo esse JSON é contar `samples`:
-# a tabela mostra o número e o resumo o soma. Um relatório de 40 amostras tem
-# 64 KB e produzia um inteiro.
-#
-# Guardar o JSON inteiro em memória resolveria o tempo e criaria um problema
-# pior (dezenas de MB por conta ativa). O que se guarda é o inteiro.
-#
-# A validação é `mtime`+tamanho, e não "lote pronto não muda mais": um `os.stat`
-# custa microssegundos e não depende de eu ter razão sobre o ciclo de vida do
-# arquivo. Se o relatório for regravado, o número é recontado.
-_contagens: dict[str, tuple[int, int, int]] = {}      # caminho -> (mtime, tam, n)
+def carregar(relatorio_json):
 
+    #* o RelatorioDoLote gravado pelo trabalhador, ou None se nao existe, nao e JSON ou nao tem forma de relatorio.
+    #! nao levanta: relatorio ilegivel e assunto da pagina ("relatorio indisponivel"), nao motivo para derrubar a requisicao.
+    #! e um JSON valido SEM a lista de amostras tambem e None: aceita-lo daria uma tela vazia se passando por lote sem amostras
 
-def contar_amostras(relatorio_json: Path) -> int | None:
-    """Quantas amostras o relatório tem. `None` quando não há relatório válido.
-
-    Mesma resposta que `len(carregar(...)["samples"])`, sem pagar a decodificação
-    de novo a cada visita.
-    """
     caminho = Path(relatorio_json)
+
     try:
-        st = caminho.stat()
-    except OSError:
-        _contagens.pop(str(caminho), None)
+        dicionario = json.loads(caminho.read_text(encoding='utf-8'))
+
+        if not isinstance(dicionario, dict) or not isinstance(dicionario.get('amostras'), list):
+            raise ValueError('o JSON nao tem a lista "amostras" (relatorio de outra versao, ou nem e um relatorio)')
+
+        return modulo_relatorio.RelatorioDoLote.de_dicionario(dicionario)
+
+    except FileNotFoundError:
+        return None  #* lote sem relatorio ainda (ou expurgado): nem vale uma linha de log
+
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as erro:  #* ValueError cobre o JSONDecodeError; os outros, a forma errada por dentro
+        REGISTRO.warning('relatorio ilegivel em %s: %s: %s', caminho, type(erro).__name__, erro)
         return None
+
+
+
+
+def contar_amostras(relatorio_json):
+
+    #* quantas amostras o relatorio tem; None quando nao ha relatorio valido. Mesma resposta que len(carregar(...).amostras).
+    #! medido no original: o perfil decodificava o relatorio.json de CADA corrida da conta — 25,89 ms para 40, e o teto e 500 —
+    #! para tirar um inteiro de cada um. Guarda-se so o inteiro, validado por mtime+tamanho (um stat custa microssegundos e
+    #! nao depende de ninguem ter razao sobre o ciclo de vida do arquivo): relatorio regravado e recontado
+
+    caminho = Path(relatorio_json)
 
     chave = str(caminho)
-    marca = (st.st_mtime_ns, st.st_size)
-    guardado = _contagens.get(chave)
+
+    try:
+        estado = caminho.stat()
+
+    except OSError:
+        CONTAGENS.pop(chave, None)
+        return None
+
+
+    marca = (estado.st_mtime_ns, estado.st_size)
+
+    guardado = CONTAGENS.get(chave)
+
     if guardado and guardado[:2] == marca:
         return guardado[2]
 
-    rep = carregar(caminho)
-    if rep is None:
-        _contagens.pop(chave, None)
+
+    lote = carregar(caminho)
+
+    if lote is None:
+        CONTAGENS.pop(chave, None)
         return None
-    n = len(rep.get("samples") or [])
-    _contagens[chave] = (*marca, n)
-    return n
 
 
-def resumo(rep: dict) -> dict:
-    """Contagens do lote para o cabeçalho. Só contagem — nada de nota ou score.
+    CONTAGENS[chave] = (*marca, len(lote.amostras))
 
-    `situacoes` já vem pronta para a tela (texto, classe e a frase de contexto),
-    e só com as situações que realmente ocorreram: um "0 sem acerto" impresso
-    sugeriria que alguém esperava o contrário.
-    """
-    amostras = _amostras(rep)
-    por_situacao: dict[str, int] = {}
-    for s in amostras:
-        codigo = _situacao(s)
+    return len(lote.amostras)
+
+
+
+
+def resumo(lote):
+
+    #* as contagens do lote para o cabecalho — so contagem, nada de nota ou score.
+    #! `situacoes` vem pronta para a tela e SO com as situacoes que ocorreram: um "0 sem acerto" impresso sugeriria que alguem esperava o contrario.
+    #! `avulsas` NAO e detalhe: numa corrida cujos nomes so trazem o poco (`..._A09.ab1`), TODAS as leituras caem aqui — medido no
+    #! original, 81 de 81 — e o app estava CERTO (a identidade do individuo so o nome resolve). O defeito era a tela CALAR:
+    #! recusa informada e resultado, silencio parece defeito
+
+    por_situacao = {}
+
+    for fatos in lote.amostras:
+        codigo = situacao_na_tela(fatos)
         por_situacao[codigo] = por_situacao.get(codigo, 0) + 1
 
-    conhecidas = [c for c in ORDEM_SITUACOES if c in por_situacao]
-    outras = sorted(c for c in por_situacao if c not in ORDEM_SITUACOES)
+
+    conhecidas = [codigo for codigo in ORDEM_SITUACOES if codigo in por_situacao]
+
+    outras = sorted(codigo for codigo in por_situacao if codigo not in ORDEM_SITUACOES)
+
     situacoes = []
+
     for codigo in conhecidas + outras:
-        texto, classe, nota = _rotulo_situacao(codigo)
-        situacoes.append({"codigo": codigo, "texto": texto, "classe": classe,
-                          "nota": nota, "n": por_situacao[codigo]})
+        texto, classe, nota = rotulo_da_situacao(codigo)
+        situacoes.append({'codigo': codigo, 'texto': texto, 'classe': classe, 'nota': nota, 'n': por_situacao[codigo]})
+
 
     return {
-        "total": len(amostras),
-        "por_situacao": por_situacao,
-        "situacoes": situacoes,
-        # Leitura que nao formou par. NAO e detalhe: numa corrida cujos nomes
-        # so trazem o poco (`..._A09.ab1`, com SMPL1 identico nos 80), TODAS as
-        # leituras caem aqui -- medido em 2026-08-07, 81 de 81. E o app estava
-        # CERTO: o sentido sai do conteudo e e confiavel, mas a identidade do
-        # individuo so o nome resolve (ADR 0034), e ali nao ha nome que diga
-        # qual leitura e de qual amostra.
-        #
-        # O defeito era a tela CALAR. Quem enviou via 81 linhas de uma leitura
-        # so, sem nada explicando -- e a leitura natural e "o programa falhou",
-        # quando o certo e "os nomes nao permitem parear". Mesmo padrao da ADR
-        # 0039: recusa informada e resultado, silencio parece defeito.
-        "avulsas": sum(1 for s in amostras if len(s.get("reads") or []) < 2),
-        "pareadas": sum(1 for s in amostras if len(s.get("reads") or []) >= 2),
-        "com_ressalva": sum(1 for s in amostras if s.get("caveats")),
-        "com_erro": sum(1 for s in amostras if s.get("error")),
-        "com_contig_invertido": sum(1 for s in amostras if s.get("contig_flipped")),
-        # contexto do lote, copiado do topo do relatório
-        "pasta": rep.get("folder") or "",
-        "gerado_em": rep.get("generated_at") or "",
-        "n_arquivos": rep.get("n_files") or 0,
-        "motor": rep.get("engine") or "",
-        "trim": rep.get("trim") or 0,
-        "banco": rep.get("db") or "",
-        "notas": [n for n in (rep.get("notes") or []) if n],
+        'total': len(lote.amostras),
+        'por_situacao': por_situacao,
+        'situacoes': situacoes,
+        'avulsas': sum(1 for fatos in lote.amostras if len(fatos.leituras) < 2),
+        'pareadas': sum(1 for fatos in lote.amostras if len(fatos.leituras) >= 2),
+        'com_ressalva': sum(1 for fatos in lote.amostras if fatos.ressalvas),
+        'com_erro': sum(1 for fatos in lote.amostras if fatos.erro),
+        'com_contig_invertido': sum(1 for fatos in lote.amostras if fatos.contig_invertido),
+        'pasta': lote.pasta or '',  #* contexto do lote, copiado do topo do relatorio
+        'gerado_em': lote.gerado_em or '',
+        'n_arquivos': lote.n_arquivos or 0,
+        'motor': lote.motor or '',
+        'trim': lote.trim or 0,
+        'banco': lote.banco or '',
+        'notas': [nota for nota in lote.notas if nota],
     }
 
 
-def listar(rep: dict) -> list[dict]:
-    """As amostras já formatadas para a tabela, na ordem do relatório."""
-    return [_formatar(s) for s in _amostras(rep)]
 
 
-def amostra(rep: dict, key: str) -> dict | None:
-    """Uma amostra pelo `key`, na mesma formatação da tabela. `None` se não há.
+def listar(lote):
 
-    Mesma formatação de propósito: a linha da tabela e a página da amostra não
-    podem exibir números diferentes para a mesma medida.
-    """
-    for s in _amostras(rep):
-        if s.get("key") == key:
-            return _formatar(s)
-    return None
+    #* as amostras ja formatadas para a tabela, na ordem do relatorio
+
+    return [formatar_amostra(fatos) for fatos in lote.amostras]
 
 
-# ------------------------------------------------------------------ internos
-def _amostras(rep: dict) -> list[dict]:
-    itens = rep.get("samples") if isinstance(rep, dict) else None
-    return [s for s in (itens or []) if isinstance(s, dict)]
 
 
-def _situacao(s: dict) -> str:
-    """A situação da IDENTIFICAÇÃO — mas a falha de montagem ganha de tudo.
+def situacao_na_tela(fatos):
 
-    A ordem importa e é o conserto de um defeito real: o `id_status` que
-    `report.py` grava numa amostra que nem montou continua sendo `sem_acerto`,
-    porque do ponto de vista do BLAST não houve acerto mesmo. Só que na tela
-    isso vira a MESMA frase das amostras cujo "sem acerto" é o resultado certo,
-    e passa a afirmar que o banco foi consultado. Não foi: não havia consenso.
-    """
-    if s.get("error") or not s.get("consensus_len"):
-        return "nao_montou"
-    return s.get("id_status") or "sem_acerto"
+    #* a situacao da IDENTIFICACAO — mas a falha de montagem ganha de tudo.
+    #! o nucleo ja grava 'nao_montou' quando a montagem falha; a guarda fica para o consenso de 0 pb sem erro:
+    #! na tela, 'sem_acerto' afirmaria que o banco foi consultado, e nao havia consenso para consultar
+
+    if fatos.erro or not fatos.consenso_pb:
+        return 'nao_montou'
+
+    return fatos.situacao or 'sem_acerto'
 
 
-def _rotulo_situacao(codigo: str) -> tuple[str, str, str]:
-    # Situação desconhecida (relatório mais novo que esta tela) aparece com o
-    # código cru e sem cor: melhor exibir algo ilegível do que traduzi-lo errado.
-    return SITUACOES.get(codigo, (codigo, "sub", ""))
 
 
-def _num(valor, casas: int) -> str:
-    """Número com casas fixas — string VAZIA quando não há medida.
+def rotulo_da_situacao(codigo):
 
-    O `0` é o inimigo aqui: preencher a ausência com zero transforma "não medi"
-    em "medi e deu zero", que é uma afirmação que ninguém fez.
-    """
+    #* (texto, classe, nota) de uma situacao; situacao desconhecida (relatorio mais novo que esta tela) sai com o codigo cru e sem cor:
+    #* melhor exibir algo ilegivel do que traduzi-lo errado
+
+    return SITUACOES.get(codigo, (codigo, 'sub', ''))
+
+
+
+
+def numero(valor, casas):
+
+    #* numero com casas fixas — string VAZIA quando nao ha medida.
+    #! o 0 e o inimigo aqui: preencher a ausencia com zero transforma "nao medi" em "medi e deu zero", que ninguem afirmou
+
     if valor is None:
-        return ""
+        return ''
+
     try:
-        return f"{float(valor):.{casas}f}"
+        return f'{float(valor):.{casas}f}'
+
     except (TypeError, ValueError):
-        return ""
+        return ''
 
 
-def _formatar(s: dict) -> dict:
-    # Dois códigos de propósito, e eles PODEM divergir:
-    # `situacao_id` é o que `report.py` gravou e o que sai no CSV — a paridade
-    # entre as duas saídas é testada e tem que continuar valendo.
-    # `situacao` é o que a tela mostra, e numa amostra que não montou ele diz
-    # `nao_montou` onde o CSV ainda diz `sem_acerto`. A divergência é o conserto,
-    # não um descuido: no CSV existe a coluna `erro` ao lado para desfazer a
-    # ambiguidade, e na tela não existia nada.
-    codigo_bruto = s.get("id_status") or "sem_acerto"
-    codigo = _situacao(s)
-    texto, classe, nota = _rotulo_situacao(codigo)
-    consenso = s.get("consensus_len") or 0
-    cobertura = s.get("mean_coverage")
-    ressalvas = [
-        {"codigo": c.get("code") or "", "texto": c.get("text") or "",
-         "regra": c.get("rule") or ""}
-        for c in (s.get("caveats") or []) if isinstance(c, dict)
-    ]
+
+
+def formatar_amostra(fatos):
+
+    #* o dict de UMA amostra para a tabela e para a pagina: os mesmos valores e a mesma formatacao do CSV.
+    #! identidade com 1 casa, e nao 3: o nucleo grava round(identidade, 1); imprimir 99.400 onde o blastn mediu 99,44
+    #! AFIRMA uma precisao que o numero nao tem (conferido contra o blastn cru em 8 amostras, no original)
+
+    codigo = situacao_na_tela(fatos)
+
+    texto, classe, nota = rotulo_da_situacao(codigo)
+
+    ressalvas = [{'codigo': ressalva.codigo or '', 'texto': ressalva.texto or '', 'regra': ressalva.regra or ''} for ressalva in fatos.ressalvas]
+
     return {
-        "key": s.get("key") or "",
-        # ---- montagem (mesmos valores e mesma formatação do CSV)
-        "n_leituras": len(s.get("reads") or []),
-        "consenso_pb": consenso,
-        "cobertura_media": _num(cobertura, 2) if cobertura else "",
-        "n_cobertura_1": s.get("n_cov1") or 0,
-        "pct_cobertura_1x": _num(s.get("pct_cov1"), 1) if consenso else "",
-        "discordancias": s.get("n_corrected") or 0,
-        "contig_invertido": "sim" if s.get("contig_flipped") else "nao",
-        "invertido": bool(s.get("contig_flipped")),
-        # ---- identificação
-        "organismo": s.get("organism") or "",
-        "accession": s.get("accession") or "",
-        # 1 casa, e nao 3: `report.py` grava `round(hit.pct_identity, 1)`, entao
-        # imprimir 99.400 onde o blastn mediu 99,44 AFIRMA uma precisao que o
-        # numero nao tem. Conferido contra o blastn cru em 8 amostras.
-        "identidade": _num(s.get("pct_identity"), 1),
-        "cobertura_query": _num(s.get("query_cover"), 1),
-        "e_value": s.get("e_value") or "",
-        "marcador": s.get("id_source") or "",
-        "situacao_id": codigo_bruto,
-        "situacao": codigo,
-        "situacao_texto": texto,
-        "situacao_classe": classe,
-        "situacao_nota": nota,
-        "identificado": bool(s.get("organism")),
-        # ---- ressalvas e falha
-        "ressalvas": ressalvas,
-        "n_ressalvas": len(ressalvas),
-        "erro": s.get("error") or "",
-        "leituras": [_leitura(r) for r in (s.get("reads") or [])
-                     if isinstance(r, dict)],
+        'chave': fatos.chave or '',
+        'n_leituras': len(fatos.leituras),  #* ---- montagem
+        'consenso_pb': fatos.consenso_pb or 0,
+        'cobertura_media': numero(fatos.cobertura_media, 2) if fatos.cobertura_media else '',
+        'n_cobertura_1': fatos.n_cobertura_1 or 0,
+        'pct_cobertura_1': numero(fatos.pct_cobertura_1, 1) if fatos.consenso_pb else '',
+        'discordancias': fatos.discordancias or 0,
+        'contig_invertido': bool(fatos.contig_invertido),
+        'par_pelo_dna': fatos.par_pelo_dna,  #* None (nao conferido) / True / False
+        'sentido_absoluto': bool(fatos.sentido_absoluto),
+        'evidencia': fatos.evidencia or '',
+        'organismo': fatos.organismo or '',  #* ---- identificacao
+        'acesso': fatos.acesso or '',
+        'identidade': numero(fatos.identidade, 1),
+        'cobertura_da_consulta': numero(fatos.cobertura_da_consulta, 1),
+        'valor_e': fatos.valor_e if fatos.valor_e is not None else '',
+        'marcador': fatos.marcador or '',
+        'situacao': codigo,
+        'situacao_texto': texto,
+        'situacao_classe': classe,
+        'situacao_nota': nota,
+        'identificado': bool(fatos.organismo),
+        'ressalvas': ressalvas,  #* ---- ressalvas e falha
+        'n_ressalvas': len(ressalvas),
+        'erro': fatos.erro or '',
+        'leituras': [formatar_leitura(leitura) for leitura in fatos.leituras],
     }
 
 
-def _leitura(r: dict) -> dict:
-    inicio, fim = r.get("col_start") or 0, r.get("col_end") or 0
-    nome, medido = r.get("orient_name"), r.get("orient_content")
+
+
+def formatar_leitura(leitura):
+
+    #* o dict de UMA leitura dentro da amostra; o relatorio ja aponta a divergencia entre o sentido do nome e o medido, a tela so repete
+
+    pelo_nome, medido = leitura.sentido_pelo_nome, leitura.sentido_medido
+
     return {
-        "nome": r.get("name") or "",
-        "primer": r.get("primer") or "",
-        "sentido_nome": nome or "",
-        "sentido_medido": medido or "",
-        # O relatório aponta a divergência entre o sentido declarado no nome e o
-        # medido no conteúdo; a tela só repete o apontamento.
-        "sentido_diverge": bool(nome and medido and nome != medido),
-        "bases": r.get("n_bases") or 0,
-        "q_medio": f"Q{r['mean_q']}" if r.get("mean_q") else "",
-        "q_rotulo": r.get("q_label") or "",
-        "janela": f"{inicio}–{fim}" if fim else "",
+        'nome': leitura.nome or '',
+        'primer': leitura.primer or '',
+        'sentido_pelo_nome': pelo_nome or '',
+        'sentido_medido': medido or '',
+        'sentido_diverge': bool(pelo_nome and medido and pelo_nome != medido),
+        'bases': leitura.bases or 0,
+        'q_medio': f'Q{leitura.q_medio}' if leitura.q_medio else '',
+        'q_rotulo': leitura.q_rotulo or '',
+        'janela': f'{leitura.coluna_inicial or 0}–{leitura.coluna_final}' if leitura.coluna_final else '',
     }
+
+
+
+
+def main():
+
+    from easycontig_web import configuracao
+
+    lote_id = input('Id de um lote ja processado (ou enter para sair): ').strip()
+
+    if not lote_id:
+        raise SystemExit(0)
+
+    cfg = configuracao.carregar()
+
+    caminho = cfg.pastas_do_lote(lote_id).relatorio_json
+
+    lote = carregar(caminho)
+
+    if lote is None:
+        raise SystemExit(f'relatorio indisponivel em {caminho} (nao existe, nao e JSON ou nao tem a forma de um relatorio; veja o log)')
+
+
+    print(f'{lote!r} — contar_amostras: {contar_amostras(caminho)}\n')
+
+    cabecalho = resumo(lote)
+
+    print(f"{cabecalho['total']} amostras ({cabecalho['pareadas']} pareadas, {cabecalho['avulsas']} avulsas), {cabecalho['com_ressalva']} com ressalva, {cabecalho['com_erro']} com erro; banco: {cabecalho['banco']!r}, trim {cabecalho['trim']}")
+
+    for situacao in cabecalho['situacoes']:
+        print(f"  {situacao['n']:>3}  {situacao['texto']} [{situacao['classe']}]")
+
+
+    print()
+
+    for linha in listar(lote):
+        print(f"  {linha['chave']:<28} {linha['n_leituras']} leit.  {linha['consenso_pb']:>5} pb  cob {linha['cobertura_media'] or '—':>5}  id {linha['identidade'] or '—':>5}  {linha['organismo'] or '—':<30} {linha['situacao_texto']}" + (f"  ({linha['n_ressalvas']} ressalva(s))" if linha['n_ressalvas'] else ''))
+
+
+    chave = input('\nChave de uma amostra para ver inteira (ou enter): ').strip()
+
+    if chave:
+        fatos = lote.amostra(chave)
+        print(json.dumps(formatar_amostra(fatos), ensure_ascii=False, indent=1) if fatos else f'nao ha amostra {chave!r} neste lote')
+
+
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

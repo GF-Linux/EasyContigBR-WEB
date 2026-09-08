@@ -4,9 +4,10 @@
 #
 #   docker compose up -d --build
 #
-# Antes: rode `./tools/preparar_nucleo.sh` (copia só o pacote do núcleo para
-# ./nucleo — link simbólico NÃO funciona, e o repo inteiro levaria os .ab1
-# para dentro da imagem) e ponha os bancos BLAST em ./bancos.
+# Antes: ponha os bancos BLAST curados em ./bancos (referencias_18S.*,
+# referencias_16S.*) e a EASYCONTIG_SECRET_KEY no .env. O núcleo está neste
+# repositório e entra na imagem com o COPY do Dockerfile — não há passo de
+# preparar nada.
 
 services:
   web:
@@ -19,29 +20,25 @@ services:
     environment: &ambiente
       # ⚠️ A TRAVA DE ARRANQUE, LIGADA. Ela recusa subir em modo `dev`, sem
       # SECRET_KEY, sem HTTPS_ONLY, sem URL_BASE ou sem ninguém ter decidido
-      # quem entra — e até 2026-08-06 NÃO ESTAVA AQUI, ou seja, o único lugar
-      # onde ela importa era o único onde não valia. Descoberto subindo o
-      # compose pela primeira vez. As CINCO condições (a do URL_BASE entrou em
-      # 2026-08-08, achado L5) já são satisfeitas pelas linhas abaixo — mas o
-      # URL_BASE vem do `.env`, então é lá que ele precisa estar de verdade.
+      # quem entra (configuracao.conferir_producao). As cinco condições são
+      # satisfeitas pelas linhas abaixo — mas SECRET_KEY e URL_BASE vêm do
+      # `.env`, então é lá que elas precisam estar de verdade.
       EASYCONTIG_PRODUCAO: "1"
       EASYCONTIG_DATA_DIR: /dados
       EASYCONTIG_DB_18S: /bancos/referencias_18S
       EASYCONTIG_DB_16S: /bancos/referencias_16S
       EASYCONTIG_TRACY_BIN: /usr/local/bin/tracy
       EASYCONTIG_TRIM: "4"
-      # ⚠️ Estas quatro FALTAVAM, e o efeito não é cosmético — descoberto pela
-      # varredura de 06/08. Sem elas o container cai nos padrões do código:
+      # ⚠️ Sem estas linhas o contêiner cai nos padrões do código, e dois deles
+      # não são cosméticos:
       #   RETENCAO_DIAS ausente = 0 = GUARDAR PARA SEMPRE. A política de 30 dias
-      #     que o laboratório decidiu simplesmente não valeria em produção, e o
-      #     volume cresceria em silêncio — que é a pendência que a ADR 0050
-      #     levantou e que todo mundo achava resolvida.
-      #   URL_BASE ausente = o endereço de volta do Google passa a sair do
-      #     cabeçalho `Host`, que quem faz a requisição escolhe. Desde
-      #     2026-08-08 é também o espelho da checagem de origem dos POST (a
-      #     defesa de CSRF do achado M3), e por isso virou trava de arranque.
-      # As de cota e taxa caem em padrões sãos, mas o `.env` do servidor era
-      # ignorado sem nada dizer.
+      #     do laboratório não valeria, e o volume cresceria em silêncio.
+      #   URL_BASE ausente = o endereço de volta do Google sairia do cabeçalho
+      #     `Host`, que quem faz a requisição escolhe; ele é também o espelho
+      #     da checagem de origem dos POST (defesa de CSRF), daí ser trava de
+      #     arranque.
+      # As de cota e taxa caem em padrões sãos; estão aqui para o `.env` do
+      # servidor valer em vez de ser ignorado sem nada dizer.
       EASYCONTIG_RETENCAO_DIAS: ${EASYCONTIG_RETENCAO_DIAS:-30}
       EASYCONTIG_URL_BASE: ${EASYCONTIG_URL_BASE:-}
       EASYCONTIG_MAX_LOTES_ATIVOS: ${EASYCONTIG_MAX_LOTES_ATIVOS:-10}
@@ -50,12 +47,12 @@ services:
       EASYCONTIG_LIM_LEITURA: ${EASYCONTIG_LIM_LEITURA:-300}
       EASYCONTIG_LIM_BANCO: ${EASYCONTIG_LIM_BANCO:-10}
       EASYCONTIG_LIM_LOGIN: ${EASYCONTIG_LIM_LOGIN:-20}
-      # Quantas remontagens (tracy/blastn) o WEB aceita ao mesmo tempo — achado
-      # M4 de 2026-08-08. 3 e não o padrão 4 do código porque esta caixa tem
-      # 2 vCPU e o trabalhador disputa as mesmas: 3 no web + o trabalhador já é
-      # o dobro de processos que de núcleos, e passar disso troca "uma rota
-      # lenta" por "o site inteiro parado". Quem exceder leva 503 na hora, sem
-      # segurar thread do threadpool — que é o recurso que o resto do site usa.
+      # Quantas remontagens (tracy/blastn) o WEB aceita ao mesmo tempo. 3, e
+      # não o padrão 4 do código, porque esta caixa tem 2 vCPU e o trabalhador
+      # disputa as mesmas: 3 no web + o trabalhador já é o dobro de processos
+      # que de núcleos, e passar disso troca "uma rota lenta" por "o site
+      # inteiro parado". Quem exceder leva 503 na hora, sem segurar thread do
+      # threadpool — que é o recurso que o resto do site usa.
       EASYCONTIG_MAX_PESADAS: ${EASYCONTIG_MAX_PESADAS:-3}
       EASYCONTIG_AUTH: google
       EASYCONTIG_DOMINIO: ${EASYCONTIG_DOMINIO:-ufrrj.br}
@@ -77,17 +74,15 @@ services:
       #     adivinha, e que `docker compose down -v` apaga;
       # (2) as ADRs 0050/0057 prometem que migrar para a UFRRJ e "copiar uma
       #     pasta". Isto e a pasta.
-      # ⚠️ Ela precisa ser do UID 10001 (o `easycontig` do Dockerfile:40), senao
+      # ⚠️ Ela precisa ser do UID 10001 (o `easycontig` do Dockerfile), senao
       # o conteiner sobe e morre com PermissionError em /dados/lotes.
       #   mkdir -p /var/lib/easycontig && chown 10001:10001 /var/lib/easycontig
       - /var/lib/easycontig:/dados
       - ./bancos:/bancos:ro
-    # ⚠️ Este `status==200` só passou a significar alguma coisa em 2026-08-08.
-    # Antes o /saude devolvia 200 mesmo com `ok: false`, então a checagem
-    # respondia "saudável" com o tracy sumido ou os bancos sem índice. Hoje
-    # doente responde 503 e o `urlopen` levanta, o que derruba a checagem — que
-    # é o comportamento que sempre se quis. Não há reinício automático por
-    # unhealthy no compose: o contêiner fica MARCADO, e quem opera vê no `ps`.
+    # O /saude responde 503 quando falta tracy, blastn ou índice de banco, e o
+    # `urlopen` levanta — é isso que derruba a checagem. Não há reinício
+    # automático por unhealthy no compose: o contêiner fica MARCADO, e quem
+    # opera vê no `ps`.
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/saude').status==200 else 1)"]
@@ -127,10 +122,10 @@ services:
 # muda, e a variavel passa a apontar para um endereco que nao existe.
 #
 # O efeito disso NAO e um erro visivel -- e o `X-Forwarded-For` deixar de ser
-# confiavel e todo visitante anonimo voltar a dividir um balde so de limite,
-# que e o achado F2 de 2026-08-06: um estranho tranca o login do laboratorio
-# inteiro a ~2 req/min. Nada quebra, ninguem percebe. Por isso o numero e
-# escrito aqui e nao descoberto a cada subida.
+# confiavel e todo visitante anonimo voltar a dividir um balde so de limite:
+# um estranho tranca o login do laboratorio inteiro a ~2 req/min. Nada quebra,
+# ninguem percebe. Por isso o numero e escrito aqui e nao descoberto a cada
+# subida.
 networks:
   default:
     ipam:

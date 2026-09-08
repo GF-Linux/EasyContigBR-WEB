@@ -1,172 +1,298 @@
-#? EXECUTOR DE LOTE — Decisão sobre a fronteira com a ciência 04/08/2026
-#!
-#! 1. Roda UM lote. É a única ponte entre a web e o núcleo científico.
-#! 2. Este arquivo NÃO decide nada sobre montagem, identidade ou limiar: copia
-#!    parâmetro, chama `run_batch` e grava os três artefatos que o usuário baixa.
-#! 3. Mudou o que o relatório afirma? O lugar é `app/core/report.py`, nunca
-#!    aqui — é o que mantém web e desktop dizendo a mesma coisa da mesma amostra.
-from __future__ import annotations
+"""
+executor_de_lote.py — roda UM lote da web no nucleo e grava os tres arquivos.
+
+Nada de ciencia aqui. Quem pareia, monta, identifica e mede e o nucleo
+(lote.py, montagem.py, identificacao.py, relatorio.py). Este arquivo pega o
+lote que a web ja gravou em disco, acha as ferramentas, escolhe os bancos,
+chama o nucleo e deixa na pasta do lote o que a tela serve: relatorio.html,
+relatorio.json e resultado.csv.
+
+
+COMO FUNCIONA — da pasta do lote aos tres arquivos
+==================================================
+
+    executar(cfg, lote_id, nome, n_esperado, referencia, progresso)
+           |
+           |-- cfg.pastas_do_lote(lote_id)                 -> entrada/, trabalho/, relatorio.*, resultado.csv
+           |
+           |-- lote.achar_traces(pastas.entrada)           nenhum .ab1/.abi/.scf?      -> ValueError
+           |                                               n != n_esperado?            -> ValueError (envio incompleto: NADA e processado)
+           |
+           |-- motor_do_tracy()                            ferramentas.exigir_programa: sem tracy -> FerramentaAusente
+           |-- busca_de_referencia(cfg, referencia)        ferramentas.procurar_programa: sem blastn -> None (o lote monta; as amostras ficam blast_indisponivel)
+           |         |
+           |         '-- bancos_do_lote(cfg, referencia)   ''/'curado' -> [banco_18s, banco_16s] da configuracao
+           |                                               outro id    -> estante_de_bancos(cfg).banco(id), se existe
+           |                                                              (a UNICA EstanteDeBancos da web: pasta_de_bancos + makeblastdb da escada)
+           |
+           |-- lote.montar_lote(traces, MontadorDeAmostra(motor, trabalho, trim=cfg.trim), busca, nome, progresso)
+           |                                               -> RelatorioDoLote (uma amostra ruim nao derruba o lote)
+           |
+           |-- relatorio.json  <- relatorio.para_json()
+           |-- relatorio.html  <- documento_html(relatorio)   = <html><head><title> em volta de relatorio.renderizar_html
+           '-- resultado.csv   <- para_csv(relatorio)         = uma linha por amostra, as 15 colunas de sempre
+           |
+           v
+    RelatorioDoLote  (o trabalhador da fila so conta as amostras e registra o tempo)
+
+
+COMO USAR
+=========
+
+    from easycontig_web import configuracao
+    from easycontig_web.processamento import executor_de_lote
+
+    cfg = configuracao.carregar()
+    relatorio = executor_de_lote.executar(cfg, 'v2-UNsPd', nome='corrida 13719', n_esperado=80)
+
+    for fatos in relatorio.amostras:
+        print(fatos.chave, fatos.organismo, fatos.situacao)
+
+
+O QUE MUDOU DO executor_de_lote.py ORIGINAL
+===========================================
+
+ 1. pastas_do_lote saiu daqui: e configuracao.PastasDoLote (cfg.pastas_do_lote),
+    porque tres arquivos precisavam da mesma regra e um deles a repetia para
+    nao importar este.
+
+ 2. As ferramentas vem do ferramentas.py do nucleo, pela escada dele. O
+    original gravava EASYCONTIG_BLAST_BIN no os.environ para o nucleo achar o
+    blastn; agora ninguem escreve no ambiente — o nucleo le a variavel sozinho.
+    estante_de_bancos(cfg) e o unico lugar da web que constroi a EstanteDeBancos
+    (rotas de bancos, envio, consulta, cota, comum e arvore usam a mesma): o
+    dados/bancos_de_referencia.py da web virou o do nucleo (veja NAO-PORTADO.md).
+
+ 3. Sem blastn o lote MONTA e cada amostra sai blast_indisponivel (busca=None
+    em lote.montar_lote). E o que o original fazia por dentro do batch.py, uma
+    excecao por amostra; e e a regra da casa: montar e avisar em vez de recusar.
+
+ 4. bancos_do_lote devolve a lista de BancoDeMarcador, e so. O original
+    devolvia tambem um rotulo que executar() recebia como _rotulo e nunca usava.
+    O banco escolhido pelo usuario entra com o marcador DELE (o gene da ficha,
+    ou o apelido do banco proprio), e nao mais disfarcado de "18S" na coluna
+    marcador — o relatorio passa a dizer contra o que a amostra foi comparada.
+
+ 5. O erro do banco nao montado ORIENTA: diz onde montar.
+
+ 6. Nomes: rep -> relatorio, s -> fatos, BatchReport -> RelatorioDoLote,
+    SampleFacts -> FatosDaAmostra; as colunas do CSV sao as mesmas, byte a byte.
+
+ 7. Nada foi cortado: executar, documento_html e para_csv tem os mesmos
+    chamadores de antes (trabalhador_da_fila, rotas e testes).
+
+
+POR QUE NAO NASCE CLASSE
+========================
+
+    O executor nao e dono de nada: o tracy e do MotorTracy, a pasta e o trim
+    sao do MontadorDeAmostra, o blastn e os bancos sao da BuscaDeReferencia,
+    os caminhos sao da PastasDoLote. Ele recebe a configuracao, monta os donos
+    e chama na ordem. Ficam funcoes.
+"""
 
 import csv
+
 import html
+
 import io
-from pathlib import Path
 
-from app.core import batch
-from app.core.report import BatchReport, render_html
-from app.core.tracy_engine import TracyEngine
+import bancos_de_referencia
 
-from ..configuracao import Config
+import ferramentas
 
+import identificacao
 
-def pastas_do_lote(cfg: Config, lote_id: str) -> dict[str, Path]:
-    """Os caminhos de um lote. **Todo** acesso a disco de lote passa por aqui.
+import lote as modulo_lote
 
-    O `lote_id` é conferido em vez de confiado (endurecimento de 2026-08-08).
-    Ele é um `secrets.token_urlsafe`, sem `/` nem `.`, e hoje toda rota passa
-    antes por `_lote_do_usuario` → `fila.pegar`, que só devolve id que existe no
-    banco — ou seja, a segurança está em NENHUM chamador esquecer essa ordem.
-    Como esta função é a que decide onde se lê e se escreve, ela não deveria
-    depender disso. Mesma regra do `retencao._nome_simples`, e de propósito:
-    quem apaga e quem escreve concordam sobre o que é um id.
-    """
-    if not isinstance(lote_id, str) or not lote_id.strip():
-        raise ValueError("lote_id vazio")
-    if lote_id in (".", "..") or "/" in lote_id or "\\" in lote_id \
-            or "\0" in lote_id or lote_id != Path(lote_id).name:
-        raise ValueError(f"lote_id inválido: {lote_id!r}")
-    raiz = cfg.lotes_dir / lote_id
-    return {
-        "raiz": raiz,
-        "entrada": raiz / "entrada",     # os .ab1 como o usuário mandou
-        "trabalho": raiz / "trabalho",   # saídas do tracy (intermediário)
-        "relatorio_html": raiz / "relatorio.html",
-        "relatorio_json": raiz / "relatorio.json",
-        "resultado_csv": raiz / "resultado.csv",
-    }
+import montagem
+
+import motor_tracy
+
+import relatorio as modulo_relatorio
 
 
-def _motor(cfg: Config) -> TracyEngine:
-    return TracyEngine(cfg.tracy_bin) if cfg.tracy_bin else TracyEngine()
+
+CURADO = 'curado'  #* o valor de `referencia` que significa "os bancos 18S + 16S da instalacao", igual a ''
+
+COLUNAS_DO_CSV = ['amostra', 'n_leituras', 'consenso_pb', 'cobertura_media', 'pct_cobertura_1x', 'organismo', 'accession',
+                  'identidade_%', 'cobertura_query_%', 'e_value', 'marcador', 'situacao_id', 'contig_invertido', 'erro', 'ressalvas']  #! a ordem e o contrato com a planilha e o R do laboratorio
 
 
-def bancos_do_lote(cfg: Config, referencia: str) -> tuple:
-    """Qual banco identifica esta corrida. Devolve (db_18s, db_16s, rotulo).
-
-    `curado` é o banco do RAIC 2026 — o que produziu todos os resultados
-    validados até aqui (ADR 0037). Qualquer outro é uma escolha explícita de
-    quem enviou, e vai gravada no lote para o relatório continuar interpretável.
-    """
-    if not referencia or referencia == "curado":
-        return cfg.db_18s, cfg.db_16s, "curado (RAIC 2026)"
-    from ..dados import bancos_de_referencia as bancos
-    pref = bancos.prefixo(cfg.data_dir, referencia)
-    if not bancos.existe(cfg.data_dir, referencia):
-        raise ValueError(f"o banco '{referencia}' não está montado nesta instalação")
-    c = bancos.POR_ID.get(referencia)
-    rotulo = f"{c.nome} · {c.marcador}" if c else referencia.split("_", 2)[-1]
-    # Um banco só: o motor recebe como 18S e o 16S fica de fora, porque a
-    # escolha aqui é do usuário e não uma cascata 18S→16S.
-    return pref, None, rotulo
 
 
-def executar(cfg: Config, lote_id: str, *, nome: str = "", n_esperado: int = 0,
-             referencia: str = "", progresso=None) -> BatchReport:
-    """Monta e identifica o lote já gravado em disco; grava HTML+JSON+CSV."""
-    p = pastas_do_lote(cfg, lote_id)
-    traces = batch.find_traces(p["entrada"])
+def motor_do_tracy():
+
+    #* o MotorTracy com o tracy que a escada do ferramentas.py achar. sem tracy nao ha montagem: FerramentaAusente.
+
+    return motor_tracy.MotorTracy(ferramentas.exigir_programa('tracy', 'EASYCONTIG_TRACY_BIN', 'bin', None))
+
+
+
+
+def estante_de_bancos(cfg):
+
+    #* a EstanteDeBancos desta instalacao: a pasta dos bancos da configuracao + o makeblastdb da escada do ferramentas.py
+    #! makeblastdb ausente NAO derruba: a estante lista, consulta e remove; so a montagem sobe ErroDoBanco, na hora, com a orientacao
+
+    return bancos_de_referencia.EstanteDeBancos(cfg.pasta_de_bancos, ferramentas.procurar_programa('makeblastdb', 'EASYCONTIG_BLAST_BIN', 'blast', None))
+
+
+
+
+def bancos_do_lote(cfg, referencia=''):
+
+    #* os BancoDeMarcador que o lote consulta, na ordem. vazio ou 'curado' = os dois da instalacao (18S depois 16S).
+    #! um banco escolhido pelo usuario entra SOZINHO: a escolha e dele, nao uma cascata 18S -> 16S
+
+    if not referencia or referencia == CURADO:
+        return [identificacao.BancoDeMarcador(prefixo, marcador) for prefixo, marcador in ((cfg.banco_18s, '18S'), (cfg.banco_16s, '16S')) if prefixo]
+
+
+    estante = estante_de_bancos(cfg)
+
+    if not estante.existe(referencia):
+        raise ValueError(f"o banco '{referencia}' não está montado nesta instalação — monte-o na página de bancos "
+                         f"(ou escolha o banco curado) e envie o lote de novo")
+
+    return [estante.banco(referencia)]
+
+
+
+
+def busca_de_referencia(cfg, referencia=''):
+
+    #* a BuscaDeReferencia pronta, ou None se nao ha blastn: o lote monta mesmo assim e o relatorio diz que a busca nao rodou
+
+    blastn = ferramentas.procurar_programa('blastn', 'EASYCONTIG_BLAST_BIN', 'blast', None)
+
+    if blastn is None:
+        return None
+
+    return identificacao.BuscaDeReferencia(blastn, bancos_do_lote(cfg, referencia))
+
+
+
+
+def executar(cfg, lote_id, nome='', n_esperado=0, referencia='', progresso=None):
+
+    #* monta e identifica o lote ja gravado em disco; grava HTML + JSON + CSV na pasta do lote e devolve o RelatorioDoLote
+
+    pastas = cfg.pastas_do_lote(lote_id)
+
+    traces = modulo_lote.achar_traces(pastas.entrada)
+
     if not traces:
-        raise ValueError("nenhum arquivo .ab1/.abi/.scf no lote")
+        raise ValueError('nenhum arquivo .ab1/.abi/.scf no lote — a pasta de entrada esta vazia ou so tem arquivos de outro tipo')
 
-    # Cinto e suspensório sobre a corrida do upload: se o que está em disco não
-    # bate com o que o lote declarou, o certo é PARAR. Um relatório de 33 de 40
-    # amostras não se distingue de um relatório de uma corrida com 33 — não há
-    # como o usuário perceber a falta, então processar seria pior que falhar.
+
+    #! se o que esta em disco nao bate com o que o lote declarou, o certo e PARAR: um relatorio de 33 de 40 amostras
+    #! nao se distingue de um relatorio de uma corrida com 33, e o usuario nao teria como perceber a falta
+
     if n_esperado and len(traces) != n_esperado:
-        raise ValueError(
-            f"o lote declarou {n_esperado} arquivo(s) e há {len(traces)} em disco; "
-            f"envio incompleto — nada foi processado")
-
-    p["trabalho"].mkdir(parents=True, exist_ok=True)
-
-    # O blastn é localizado por `app.core.identify.resolve_blast_bin`, que lê
-    # esta variável antes de procurar no PATH. Ajustar aqui em vez de exigir que
-    # o operador exporte no shell certo mantém a configuração num lugar só.
-    if cfg.blast_bin:
-        import os
-        os.environ["EASYCONTIG_BLAST_BIN"] = str(cfg.blast_bin)
-
-    db18, db16, _rotulo = bancos_do_lote(cfg, referencia)
-    rep = batch.run_batch(
-        traces,
-        engine=_motor(cfg),
-        out_dir=p["trabalho"],
-        trim=cfg.trim,
-        db_18s=db18,
-        db_16s=db16,
-        folder=nome or lote_id,
-        progress=progresso,
-    )
-
-    p["relatorio_json"].write_text(rep.to_json(), encoding="utf-8")
-    p["relatorio_html"].write_text(documento_html(rep), encoding="utf-8")
-    p["resultado_csv"].write_text(para_csv(rep), encoding="utf-8")
-    return rep
+        raise ValueError(f'o lote declarou {n_esperado} arquivo(s) e há {len(traces)} em disco; envio incompleto — nada foi processado')
 
 
-def documento_html(rep: BatchReport) -> str:
-    """O relatório do núcleo dentro de um documento HTML de verdade.
+    pastas.trabalho.mkdir(parents=True, exist_ok=True)
 
-    `render_html` devolve um FRAGMENTO (começa no `<style>`), porque no desktop
-    ele alimenta o `QTextDocument` que gera o PDF — e ali um `<head>` atrapalha.
-    Na web o mesmo texto vai direto para o navegador, e sem `<title>` o "Salvar
-    como PDF" do Ctrl+P nomeia o arquivo com a URL: o usuário termina com
-    `127.0.0.1_lotes_v2-UNsPd....pdf` em vez do nome da corrida.
+    busca = busca_de_referencia(cfg, referencia)  #* antes do tracy: um banco inexistente falha aqui, sem ter montado nada
 
-    Envolver aqui, e não em `app/core/report.py`, mantém o desktop intocado —
-    é o mesmo motivo de `report_pdf.py` não existir deste lado (ADR 0050).
-    """
-    titulo = f"EasyContig BR — {rep.folder}" if rep.folder else "EasyContig BR — lote"
-    return (
-        "<!doctype html>\n<html lang='pt-BR'>\n<head>\n"
-        "<meta charset='utf-8'>\n"
-        "<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
-        f"<title>{html.escape(titulo)}</title>\n"
-        "</head>\n<body>\n" + render_html(rep) + "\n</body>\n</html>\n"
-    )
+    montador = montagem.MontadorDeAmostra(motor_do_tracy(), pastas.trabalho, trim=cfg.trim)
+
+    relatorio = modulo_lote.montar_lote(traces, montador, busca, nome=nome or lote_id, progresso=progresso)
 
 
-def para_csv(rep: BatchReport) -> str:
-    """Uma linha por amostra — o formato que o laboratório já recebeu na mão.
+    pastas.relatorio_json.write_text(relatorio.para_json(), encoding='utf-8')
+    pastas.relatorio_html.write_text(documento_html(relatorio), encoding='utf-8')
+    pastas.resultado_csv.write_text(para_csv(relatorio), encoding='utf-8')
 
-    `identidade_%` fica VAZIO quando não houve acerto, em vez de 0: zero é um
-    número e seria lido como medida. A coluna `situacao_id` é que separa "achou",
-    "procurou e não achou" e "não conseguiu procurar" (ADR 0047).
-    """
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow([
-        "amostra", "n_leituras", "consenso_pb", "cobertura_media",
-        "pct_cobertura_1x", "organismo", "accession", "identidade_%",
-        "cobertura_query_%", "e_value", "marcador", "situacao_id",
-        "contig_invertido", "erro", "ressalvas",
-    ])
-    for s in rep.samples:
-        w.writerow([
-            s.key,
-            len(s.reads),
-            s.consensus_len,
-            f"{s.mean_coverage:.2f}" if s.mean_coverage else "",
-            f"{s.pct_cov1:.1f}" if s.consensus_len else "",
-            s.organism or "",
-            s.accession or "",
-            f"{s.pct_identity:.1f}" if s.pct_identity is not None else "",
-            f"{s.query_cover:.1f}" if s.query_cover is not None else "",
-            s.e_value or "",
-            s.id_source or "",
-            s.id_status,
-            "sim" if s.contig_flipped else "nao",
-            s.error or "",
-            " | ".join(c.text for c in s.caveats),
-        ])
-    return buf.getvalue()
+    return relatorio
+
+
+
+
+def documento_html(relatorio):
+
+    #* o fragmento do nucleo dentro de um documento HTML inteiro: sem <title>, o "salvar como PDF" do navegador nomeia o arquivo com a URL
+
+    titulo = f'EasyContig BR — {relatorio.pasta}' if relatorio.pasta else 'EasyContig BR — lote'
+
+    return ("<!doctype html>\n<html lang='pt-BR'>\n<head>\n"
+            "<meta charset='utf-8'>\n"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
+            f'<title>{html.escape(titulo)}</title>\n'
+            '</head>\n<body>\n' + modulo_relatorio.renderizar_html(relatorio) + '\n</body>\n</html>\n')
+
+
+
+
+def para_csv(relatorio):
+
+    #* uma linha por amostra, o formato que o laboratorio ja recebia na mao.
+    #! identidade fica VAZIA quando nao houve acerto, e nao 0: zero e um numero e seria lido como medida.
+    #! quem separa "achou", "procurou e nao achou" e "nao conseguiu procurar" e a coluna situacao_id
+
+    saida = io.StringIO()
+
+    escritor = csv.writer(saida)
+
+    escritor.writerow(COLUNAS_DO_CSV)
+
+    for fatos in relatorio.amostras:
+
+        escritor.writerow([fatos.chave,
+                           len(fatos.leituras),
+                           fatos.consenso_pb,
+                           f'{fatos.cobertura_media:.2f}' if fatos.cobertura_media else '',
+                           f'{fatos.pct_cobertura_1:.1f}' if fatos.consenso_pb else '',
+                           fatos.organismo or '',
+                           fatos.acesso or '',
+                           f'{fatos.identidade:.1f}' if fatos.identidade is not None else '',
+                           f'{fatos.cobertura_da_consulta:.1f}' if fatos.cobertura_da_consulta is not None else '',
+                           fatos.valor_e or '',
+                           fatos.marcador or '',
+                           fatos.situacao,
+                           'sim' if fatos.contig_invertido else 'nao',
+                           fatos.erro or '',
+                           ' | '.join(ressalva.texto for ressalva in fatos.ressalvas)])
+
+    return saida.getvalue()
+
+
+
+
+def main():
+
+    from easycontig_web import configuracao
+
+    lote_id = input('Id do lote ja gravado em lotes/<id>/entrada (ou enter para sair): ').strip()
+
+    if not lote_id:
+        raise SystemExit(0)
+
+    referencia = input("Banco (enter = curado 18S + 16S; ou o id de um banco montado, ex. apicomplexa_18s): ").strip()
+
+    cfg = configuracao.carregar()
+
+
+    def mostrar(feito, total, chave):
+        if chave:
+            print(f'  {feito + 1} de {total}: {chave}')
+
+
+    relatorio = executar(cfg, lote_id, referencia=referencia, progresso=mostrar)
+
+    pastas = cfg.pastas_do_lote(lote_id)
+
+    print(f'\n{relatorio!r}  banco: {relatorio.banco}')
+
+    for fatos in relatorio.amostras:
+        print(f'  {fatos!r}')
+
+    print(f'\nGravados: {pastas.relatorio_html.name}, {pastas.relatorio_json.name}, {pastas.resultado_csv.name} em {pastas.raiz}')
+
+
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

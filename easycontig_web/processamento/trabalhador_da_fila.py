@@ -1,13 +1,96 @@
-#? TRABALHADOR DA FILA — Decisão sobre rodar fora do servidor 04/08/2026
-#!
-#! 1. Sobe assim: `python -m easycontig_web.processamento.trabalhador_da_fila`
-#! 2. Roda SEPARADO do servidor web: a requisição devolve o protocolo em
-#!    milissegundos e some; os ~26 s do lote acontecem aqui, sem ninguém
-#!    esperando com uma conexão aberta.
-#! 3. Para dobrar a vazão, suba mais de um: disputam a mesma fila, e o UPDATE
-#!    condicional garante que cada lote é de um só.
-#! 4. Uma VPS de 4 vCPU comporta ~3 trabalhadores, deixando um núcleo para a web.
-from __future__ import annotations
+"""
+trabalhador_da_fila.py — o processo que esvazia as duas filas: monta o lote, monta a arvore e passa a faxina.
+
+Roda SEPARADO do servidor web (decisao de 04/08/2026): a requisicao devolve o
+protocolo em milissegundos e some; os ~26 s do lote acontecem aqui, sem
+ninguem esperando com uma conexao aberta. Para dobrar a vazao, suba mais de
+um: disputam a mesma fila, e o UPDATE condicional de `reivindicar` garante
+que cada lote e de um so. Uma VPS de 4 vCPU comporta ~3 trabalhadores,
+deixando um nucleo para a web.
+
+
+COMO FUNCIONA — a vida do processo
+==================================
+
+    python -m easycontig_web.processamento.trabalhador_da_fila      (o docker-compose sobe TRABALHADORES replicas disto)
+         |
+         v
+    trabalhador = Trabalhador(cfg)          eu = maquina:pid — a fila precisa saber o DONO de cada lote
+         |
+    trabalhador.arrancar()                  (uma vez, ao subir)
+         |   banco.preparar()
+         |   lotes.reenfileirar_orfaos(eu)      lote RODANDO de um irmao que morreu volta para a fila; o de um irmao vivo, nao
+         |   lotes.falhar_envios_abandonados()  RECEBENDO ha mais de meia hora = pasta pela metade: FALHOU com o aviso
+         |   arvores.reenfileirar_orfaos(eu)    o mesmo para os pedidos de arvore (a tabela de pulso e a mesma)
+         |   diagnostico + politica de retencao no log   (quem opera descobre sem ler codigo se o expurgo esta ligado)
+         |   primeiro pulso, e a thread "pulso" a cada INTERVALO_PULSO s
+         v
+    trabalhador.rodar()                     (o laco, ate SIGTERM/SIGINT; o lote em curso termina antes de sair)
+         |
+         |--> faxinar()            de hora em hora, a primeira no arranque (quando o operador esta olhando o log)
+         |--> rodar_um()           lote na fila?  reivindicar -> executor_de_lote.executar -> concluir  (ou falhar, com o erro)
+         |--> rodar_uma_arvore()   senao, pedido?  reivindicar -> executor_de_arvore.executar -> concluir (ou falhar)
+         '--> nada?                dorme OCIOSO s e olha de novo
+
+    Lote primeiro, arvore depois: quem espera o resultado da corrida tem
+    prioridade sobre quem pediu uma analise extra sobre corrida que ja terminou.
+
+    O pulso bate numa THREAD, nao no topo do laco (achado do painel de
+    verificacao, 08/2026): `rodar_um` segura o laco o lote inteiro, e um lote
+    de 400 arquivos passa dos PULSO_VELHO s — o trabalhador ocupado ficava
+    indistinguivel de um morto, e o irmao subindo reenfileirava justamente o
+    lote que estava sendo montado. Na thread o pulso diz o que precisa dizer:
+    "este PROCESSO esta vivo". Ele continua batendo depois do SIGTERM, ate o
+    lote em curso terminar: e o que impede o irmao de pegar o lote no meio.
+
+    Um lote ruim nao derruba o trabalhador: FALHOU com `TipoDoErro: texto` no
+    banco (e o que a pagina do lote mostra) e o proximo usuario segue sendo
+    atendido. Terminei mas nao sou mais o dono (o irmao me deu por morto e
+    reivindicou): nao carimbo PRONTO — publicaria a MINHA montagem por cima da
+    dele. A faxina fica fora do `rodar_um`: falha de faxina nao pode impedir o
+    lote de alguem de ser processado.
+
+
+COMO USAR
+=========
+
+    trabalhador = Trabalhador(cfg)          cfg = configuracao.carregar()
+    trabalhador.arrancar()
+    trabalhador.rodar()                     bloqueia; trabalhador.pedir_parada() (ou SIGTERM) encerra depois do item atual
+
+    trabalhador.rodar_um()                  um lote so; True se havia trabalho
+    trabalhador.rodar_uma_arvore()          um pedido de arvore so; True se havia trabalho
+    trabalhador.faxinar()                   a faxina, se ja passou a hora (proxima_faxina)
+
+    EASYCONTIG_LOG=DEBUG muda o nivel do log (padrao INFO)
+
+
+O QUE MUDOU DO trabalhador_da_fila.py ORIGINAL (215 linhas)
+============================================================
+
+    1. O trabalhador e uma classe: `eu`, as duas filas, os dois sinais de parada e a hora da proxima faxina
+       moravam num global `_parar` e em variaveis locais do `main()`; agora sao atributos de `Trabalhador`, e
+       cada pedaco do arranque e do laco e um metodo que a bancada chama sozinho (o original so testava inteiro).
+    2. As filas sao objetos (`FilaDeLotes`, `FilaDeArvores`) sobre um `BancoSqlite`; o original passava
+       `cfg.sqlite_path` em toda chamada. O lote e o pedido sao `Lote` e `PedidoDeArvore`, nao dicts.
+    3. `falhar_envios_abandonados` e chamado aqui, com o seu proprio log; no original ficava escondido dentro
+       de `reenfileirar_orfaos` e ninguem ficava sabendo quantos envios foram dados por perdidos.
+    4. Os sinais sao instalados ANTES do arranque: um SIGTERM que chegasse durante o `reenfileirar_orfaos`
+       matava o processo no meio; agora ele termina o arranque e sai pelo laco.
+    5. Ocioso, o laco espera no proprio sinal de parada (`parada_pedida.wait(OCIOSO)`), nao num `sleep`.
+    6. A faxina recebe o banco e a pasta de lotes e devolve `BalancoDaFaxina` (era dict).
+
+
+POR QUE NASCE CLASSE
+====================
+
+    O trabalhador E um estado com vida: uma identidade que os outros processos
+    leem na tabela de pulso, uma thread que bate enquanto ele vive, um pedido
+    de parada que chega por sinal e a hora da proxima faxina. O original
+    guardava isso num global e em locais do `main()`, e por isso so dava para
+    testar subindo o processo inteiro.
+"""
+
 
 import logging
 import os
@@ -16,200 +99,244 @@ import socket
 import threading
 import time
 
-from .. import configuracao as config
-from ..processamento import executor_de_arvore as executor_arvore
-from ..processamento import executor_de_lote as executor
-from ..processamento import fila_de_arvores as fila_arvores
-from ..processamento import fila_de_lotes as fila
-from ..dados import expurgo_por_retencao as retencao
-
-log = logging.getLogger("easycontig.trabalhador")
-
-# De hora em hora, e não a cada volta do laço: a faxina varre o disco inteiro
-# para somar tamanhos, e nada do que ela decide muda em 0,25 s — um lote leva
-# dias para vencer. Mora aqui, e não num cron, porque o trabalhador é o processo
-# que a universidade já vai manter de pé; um agendamento a mais no sistema é
-# mais uma coisa para alguém esquecer de configurar na migração de servidor.
-INTERVALO_FAXINA = 3600.0
-
-_parar = False
+from easycontig_web import configuracao
+from easycontig_web.dados import expurgo_por_retencao as expurgo
+from easycontig_web.dados.banco_sqlite import BancoSqlite
+from easycontig_web.processamento import executor_de_arvore, executor_de_lote
+from easycontig_web.processamento.fila import INTERVALO_PULSO
+from easycontig_web.processamento.fila_de_arvores import FilaDeArvores
+from easycontig_web.processamento.fila_de_lotes import FilaDeLotes
 
 
-def _pedir_parada(*_):
-    global _parar
-    _parar = True
-    log.info("parada pedida — encerro depois do lote atual")
+REGISTRO = logging.getLogger('easycontig.trabalhador')
+
+INTERVALO_FAXINA = 3600.0  #* segundos entre faxinas. de hora em hora, nao a cada volta: ela varre o disco inteiro e um lote leva dias para vencer
+
+OCIOSO = 0.25  #* segundos de espera quando as duas filas estao vazias
+
+PAUSA_APOS_ERRO = 2.0  #* segundos de espera depois de um erro no proprio laco (banco fora do ar), para nao encher o log
 
 
-def bater_pulso(cfg: config.Config, eu: str, parar: threading.Event) -> None:
-    """O pulso em thread PRÓPRIA, e é o ponto todo.
-
-    ⚠️ Ele batia no topo do laço, e `rodar_um` segura o laço o lote INTEIRO.
-    Um lote de 40 amostras leva ~26 s e cabia nos 90 s de `PULSO_VELHO` — mas o
-    app aceita 400 arquivos, e aí o trabalhador ocupado fica indistinguível de
-    um morto. O irmão subindo reenfileirava justamente o lote que estava sendo
-    montado: o defeito que o pulso existe para impedir, entrando pela porta dos
-    fundos. Achado pelo painel de verificação horas depois do conserto.
-
-    Numa thread, o pulso passa a dizer o que precisa dizer — "este PROCESSO está
-    vivo" — em vez de "este processo está entre lotes". `daemon` para não segurar
-    o encerramento, e cada `pulsar` abre a própria conexão.
-    """
-    while not parar.wait(fila.INTERVALO_PULSO):
-        try:
-            fila.pulsar(cfg.sqlite_path, eu)
-        except Exception:                       # noqa: BLE001
-            log.exception("não consegui registrar o pulso; segue processando")
 
 
-def rodar_um(cfg: config.Config, eu: str = "") -> bool:
-    """Pega um lote da fila e processa. True se havia trabalho."""
-    lote = fila.reivindicar(cfg.sqlite_path, eu)
-    if not lote:
-        return False
+def identidade():
 
-    lote_id = lote["id"]
-    log.info("lote %s: iniciando (%s arquivos)", lote_id, lote["n_arquivos"])
-    t0 = time.perf_counter()
-    try:
-        def _prog(feito, total, etapa):
-            fila.progresso(cfg.sqlite_path, lote_id, feito, total, etapa or "", eu)
+    #* quem sou eu nesta fila: maquina + PID basta. a tela pergunta "ha ALGUEM vivo", mas o lote precisa saber o dono
 
-        rep = executor.executar(cfg, lote_id, nome=lote["nome"],
-                                n_esperado=lote["n_arquivos"],
-                                referencia=lote.get("referencia") or "",
-                                progresso=_prog)
-        if fila.concluir(cfg.sqlite_path, lote_id, eu):
-            log.info("lote %s: pronto em %.1f s (%d amostras)",
-                     lote_id, time.perf_counter() - t0, len(rep.samples))
+    return f'{socket.gethostname()}:{os.getpid()}'
+
+
+
+
+class Trabalhador:
+
+    #* um processo que atende as duas filas; arrancar() uma vez, rodar() ate pedir_parada()
+
+
+    def __init__(self, cfg, eu=''):
+
+        self.cfg = cfg
+        self.banco = BancoSqlite(cfg.caminho_do_sqlite)
+        self.lotes = FilaDeLotes(self.banco)
+        self.arvores = FilaDeArvores(self.banco)
+        self.eu = eu or identidade()
+        self.parada_pedida = threading.Event()  #* SIGTERM/SIGINT: o laco sai depois do item em curso
+        self.parar_pulso = threading.Event()    #* so depois do laco: o pulso segue batendo enquanto o ultimo lote termina
+        self.proxima_faxina = 0.0               #* zero, e nao monotonic(): a primeira faxina roda no arranque
+
+
+    def pedir_parada(self, *_):
+
+        #* o tratador de sinal; os argumentos (numero do sinal, quadro) nao importam
+
+        self.parada_pedida.set()
+
+        REGISTRO.info('parada pedida — encerro depois do lote atual')
+
+
+    def bater_pulso(self):
+
+        #* o alvo da thread "pulso": registra que este processo esta vivo a cada INTERVALO_PULSO s, ate parar_pulso
+
+        while not self.parar_pulso.wait(INTERVALO_PULSO):
+
+            try:
+                self.lotes.pulsar(self.eu)
+
+            except Exception:
+                REGISTRO.exception('não consegui registrar o pulso; segue processando')
+
+
+    def arrancar(self):
+
+        #* o que acontece uma vez, ao subir: prepara o banco, devolve orfaos a fila, conta a instalacao no log, comeca a pulsar
+
+        self.banco.preparar()
+
+        orfaos = self.lotes.reenfileirar_orfaos(self.eu)  #* com `eu`: isto roda ANTES do primeiro pulso, e sem dizer quem sou eu apareceria para mim mesmo como morto
+
+        if orfaos:
+            REGISTRO.warning('%d lote(s) sem dono vivo voltaram para a fila', orfaos)
+
+        abandonados = self.lotes.falhar_envios_abandonados()
+
+        if abandonados:
+            REGISTRO.warning('%d envio(s) parados há mais de meia hora foram dados por interrompidos', abandonados)
+
+        orfas = self.arvores.reenfileirar_orfaos(self.eu)
+
+        if orfas:
+            REGISTRO.warning('%d árvore(s) sem dono vivo voltaram para a fila', orfas)
+
+
+        for item, deu_certo, detalhe in configuracao.diagnostico(self.cfg):
+            REGISTRO.info('%-10s %s  %s', item, 'OK ' if deu_certo else 'FALTA', detalhe)
+
+        if self.cfg.retencao_dias:
+            REGISTRO.info('retenção: lotes são apagados %d dias após o envio', self.cfg.retencao_dias)
+
         else:
-            # Perdi o lote no meio do caminho: outro trabalhador é o dono agora.
-            # Carimbar PRONTO aqui publicaria a MINHA montagem por cima da dele.
-            log.warning("lote %s: terminei mas não sou mais o dono — desfecho "
-                        "deixado para quem está com ele", lote_id)
-    except Exception as e:                      # noqa: BLE001
-        # Um lote ruim não pode derrubar o trabalhador: ele volta para a fila e
-        # o próximo usuário continua sendo atendido. O erro vai para o banco,
-        # que é o que a página do lote mostra.
-        log.exception("lote %s: falhou", lote_id)
-        fila.falhar(cfg.sqlite_path, lote_id, f"{type(e).__name__}: {e}", eu)
-    return True
+            REGISTRO.info('retenção DESLIGADA: nenhum lote é apagado automaticamente')
 
 
-def rodar_uma_arvore(cfg: config.Config, eu: str = "") -> bool:
-    """Pega um pedido de árvore e monta. True se havia trabalho.
+        self.lotes.pulsar(self.eu)  #* o primeiro pulso ANTES da thread: entre o reenfileirar acima e o primeiro tique eu nao existiria para os outros
 
-    Gêmeo de `rodar_um`, e de propósito: mesmo tratamento de erro (um pedido
-    ruim não derruba o trabalhador), mesma conferência de dono no desfecho (não
-    carimbar por cima de quem está com o pedido agora).
-    """
-    pedido = fila_arvores.reivindicar(cfg.sqlite_path, eu)
-    if not pedido:
-        return False
+        threading.Thread(target=self.bater_pulso, daemon=True, name='pulso').start()
 
-    pedido_id, lote_id = pedido["id"], pedido["lote_id"]
-    log.info("árvore %s: iniciando (lote %s)", pedido_id, lote_id)
-    t0 = time.perf_counter()
-    try:
-        lote = fila.pegar(cfg.sqlite_path, lote_id) or {}
-        resumo = executor_arvore.executar(
-            cfg, lote_id, referencia=lote.get("referencia") or "",
-            etapa=lambda texto: fila_arvores.etapa(cfg.sqlite_path, pedido_id,
-                                                   texto, eu))
-        if fila_arvores.concluir(cfg.sqlite_path, pedido_id, resumo, eu):
-            arvores = sum(1 for r in resumo if not r.get("recusado"))
-            log.info("árvore %s: pronta em %.1f s (%d marcador(es))",
-                     pedido_id, time.perf_counter() - t0, arvores)
-        else:
-            log.warning("árvore %s: terminei mas não sou mais o dono", pedido_id)
-    except Exception as e:                      # noqa: BLE001
-        log.exception("árvore %s: falhou", pedido_id)
-        fila_arvores.falhar(cfg.sqlite_path, pedido_id, f"{type(e).__name__}: {e}", eu)
-    return True
+        REGISTRO.info('trabalhador pronto — aguardando lotes')
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=os.environ.get("EASYCONTIG_LOG", "INFO"),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    cfg = config.carregar()
-    fila.criar_esquema(cfg.sqlite_path)
+    def rodar_um(self):
 
-    # Quem sou eu nesta fila. Máquina + PID basta: a pergunta que a tela faz é
-    # "há ALGUÉM vivo atendendo", não "quem" — mas o LOTE precisa saber o dono,
-    # para o arranque de um trabalhador não reenfileirar o trabalho do outro.
-    eu = f"{socket.gethostname()}:{os.getpid()}"
+        #* pega um lote da fila e processa; True se havia trabalho
 
-    # ⚠️ Passa `eu` porque isto roda ANTES do primeiro pulso: sem dizer quem
-    # sou, eu apareceria para mim mesmo como um trabalhador morto.
-    orfaos = fila.reenfileirar_orfaos(cfg.sqlite_path, eu)
-    if orfaos:
-        log.warning("%d lote(s) sem dono vivo voltaram para a fila", orfaos)
+        lote = self.lotes.reivindicar(self.eu)
 
-    # As árvores também. A tabela de pulso é a mesma — é o mesmo processo que
-    # atende as duas filas —, então quem está vivo se pergunta uma vez só.
-    orfas = fila_arvores.reenfileirar_orfaos(
-        cfg.sqlite_path, fila.trabalhadores_vivos(cfg.sqlite_path), eu)
-    if orfas:
-        log.warning("%d árvore(s) sem dono vivo voltaram para a fila", orfas)
+        if not lote:
+            return False
 
-    for item, ok, det in config.diagnostico(cfg):
-        log.info("%-10s %s  %s", item, "OK " if ok else "FALTA", det)
+        REGISTRO.info('lote %s: iniciando (%s arquivos)', lote.id, lote.n_arquivos)
 
-    # A política de retenção vai para o log toda vez que o processo sobe. Quem
-    # opera o servidor tem que conseguir descobrir se o expurgo está ligado sem
-    # ler código — e "desligado" é um estado legítimo, não um defeito.
-    if cfg.retencao_dias:
-        log.info("retenção: lotes são apagados %d dias após o envio",
-                 cfg.retencao_dias)
-    else:
-        log.info("retenção DESLIGADA: nenhum lote é apagado automaticamente")
+        inicio = time.perf_counter()
 
-    signal.signal(signal.SIGTERM, _pedir_parada)
-    signal.signal(signal.SIGINT, _pedir_parada)
+        def avisar(feito, total, etapa):
 
-    log.info("trabalhador pronto — aguardando lotes")
-    ocioso = 0.25
-    # Zero e não `time.monotonic()`: a primeira faxina roda no arranque. É quando
-    # o operador está olhando o log, então é a hora em que um expurgo inesperado
-    # ainda dá para perceber e desligar.
-    proxima_faxina = 0.0
+            self.lotes.progresso(lote.id, feito, total, etapa or '', self.eu)
 
-    # O primeiro pulso ANTES da thread: entre o `reenfileirar_orfaos` acima e o
-    # primeiro tique haveria uma janela em que eu não existo para os outros.
-    fila.pulsar(cfg.sqlite_path, eu)
-    parar_pulso = threading.Event()
-    threading.Thread(target=bater_pulso, args=(cfg, eu, parar_pulso),
-                     daemon=True, name="pulso").start()
-
-    while not _parar:
         try:
-            if time.monotonic() >= proxima_faxina:
-                proxima_faxina = time.monotonic() + INTERVALO_FAXINA
-                # Fora do `rodar_um` de propósito: falha de faxina não pode
-                # impedir o lote de alguém de ser processado.
-                try:
-                    r = retencao.faxina(cfg.sqlite_path, cfg.lotes_dir,
-                                        dias=cfg.retencao_dias)
-                    if r["apagados"]:
-                        log.info("faxina: %d lote(s) expurgados, %.1f MB liberados",
-                                 r["apagados"], r["bytes"] / 1048576)
-                except Exception:               # noqa: BLE001
-                    log.exception("faxina falhou; segue processando a fila")
+            relatorio = executor_de_lote.executar(self.cfg, lote.id, nome=lote.nome, n_esperado=lote.n_arquivos,
+                                                  referencia=lote.referencia, progresso=avisar)
 
-            # Lote primeiro, árvore depois: quem espera o resultado da corrida
-            # tem prioridade sobre quem pediu uma análise extra sobre corrida
-            # que já terminou. O `or` curto-circuita — havendo lote na fila,
-            # nem se pergunta pelas árvores.
-            if not (rodar_um(cfg, eu) or rodar_uma_arvore(cfg, eu)):
-                time.sleep(ocioso)
-        except Exception:                       # noqa: BLE001
-            log.exception("erro no laço do trabalhador")
-            time.sleep(2)
-    parar_pulso.set()
-    log.info("trabalhador encerrado")
+            if self.lotes.concluir(lote.id, self.eu):
+                REGISTRO.info('lote %s: pronto em %.1f s (%d amostras)', lote.id, time.perf_counter() - inicio, len(relatorio.amostras))
+
+            else:
+                REGISTRO.warning('lote %s: terminei mas não sou mais o dono — desfecho deixado para quem está com ele', lote.id)
+
+        except Exception as erro:
+            REGISTRO.exception('lote %s: falhou', lote.id)
+            self.lotes.falhar(lote.id, f'{type(erro).__name__}: {erro}', self.eu)
+
+        return True
 
 
-if __name__ == "__main__":
-    main()
+    def rodar_uma_arvore(self):
+
+        #* pega um pedido de arvore e monta; True se havia trabalho. gemeo de rodar_um, de proposito: mesmo erro, mesma conferencia de dono
+
+        pedido = self.arvores.reivindicar(self.eu)
+
+        if not pedido:
+            return False
+
+        REGISTRO.info('árvore %s: iniciando (lote %s)', pedido.id, pedido.lote_id)
+
+        inicio = time.perf_counter()
+
+        def avisar(texto):
+
+            self.arvores.etapa(pedido.id, texto, self.eu)
+
+        try:
+            lote = self.lotes.pegar(pedido.lote_id)
+
+            resumo = executor_de_arvore.executar(self.cfg, pedido.lote_id, referencia=lote.referencia if lote else '', etapa=avisar)
+
+            if self.arvores.concluir(pedido.id, resumo, self.eu):
+                montadas = sum(1 for marcador in resumo if not marcador.get('recusado'))
+                REGISTRO.info('árvore %s: pronta em %.1f s (%d marcador(es))', pedido.id, time.perf_counter() - inicio, montadas)
+
+            else:
+                REGISTRO.warning('árvore %s: terminei mas não sou mais o dono', pedido.id)
+
+        except Exception as erro:
+            REGISTRO.exception('árvore %s: falhou', pedido.id)
+            self.arvores.falhar(pedido.id, f'{type(erro).__name__}: {erro}', self.eu)
+
+        return True
+
+
+    def faxinar(self):
+
+        #* a faxina de retencao, se ja e hora; nunca derruba o laco
+
+        if time.monotonic() < self.proxima_faxina:
+            return
+
+        self.proxima_faxina = time.monotonic() + INTERVALO_FAXINA
+
+        try:
+            balanco = expurgo.faxina(self.banco, self.cfg.pasta_de_lotes, self.cfg.retencao_dias)
+
+            if balanco.apagados:
+                REGISTRO.info('faxina: %d lote(s) expurgados, %.1f MB liberados', balanco.apagados, balanco.bytes / 1048576)
+
+        except Exception:
+            REGISTRO.exception('faxina falhou; segue processando a fila')
+
+
+    def rodar(self):
+
+        #* o laco: faxina na hora, lote primeiro, arvore depois, ate pedir_parada()
+
+        while not self.parada_pedida.is_set():
+
+            try:
+                self.faxinar()
+
+                if not (self.rodar_um() or self.rodar_uma_arvore()):  #* o `or` curto-circuita: havendo lote, nem se pergunta pelas arvores
+                    self.parada_pedida.wait(OCIOSO)
+
+            except Exception:
+                REGISTRO.exception('erro no laço do trabalhador')
+                self.parada_pedida.wait(PAUSA_APOS_ERRO)
+
+        self.parar_pulso.set()
+
+        REGISTRO.info('trabalhador encerrado')
+
+
+    def __repr__(self):
+
+        return f'Trabalhador({self.eu}, {self.banco.caminho})'
+
+
+
+
+def main():
+
+    logging.basicConfig(level=os.environ.get('EASYCONTIG_LOG', 'INFO'), format='%(asctime)s %(levelname)s %(name)s %(message)s')
+
+    trabalhador = Trabalhador(configuracao.carregar())
+
+    signal.signal(signal.SIGTERM, trabalhador.pedir_parada)
+    signal.signal(signal.SIGINT, trabalhador.pedir_parada)
+
+    trabalhador.arrancar()
+    trabalhador.rodar()
+
+
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

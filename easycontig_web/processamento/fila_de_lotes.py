@@ -1,460 +1,351 @@
-#? FILA DE LOTES — Decisão sobre não segurar a requisição 04/08/2026
-#!
-#! 1. Processar é barato: 0,65 s de CPU por amostra, medido.
-#! 2. O que derruba o servidor é manter a requisição HTTP ABERTA os ~26 s de um
-#!    lote de 40 — vinte pessoas e acabaram as conexões, com a CPU quase parada.
-#! 3. Então a requisição só ENFILEIRA e devolve um protocolo. Quem trabalha é
-#!    outro processo.
-#! 4. SQLite e não Redis: uma dependência a menos para a universidade manter, e
-#!    o volume real (algumas corridas por mês) não justifica outro serviço.
-#! 5. A troca por Redis é local — só este arquivo muda.
-from __future__ import annotations
+"""
+fila_de_lotes.py — a fila das corridas enviadas: nasce RECEBENDO, entra na fila com o ultimo byte gravado, e o trabalhador monta.
 
-import json
-import secrets
-import sqlite3
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+A requisicao HTTP so ENFILEIRA e devolve um protocolo (processar um lote de 40
+leva ~26 s, e vinte pessoas com a requisicao aberta esgotam as conexoes com a
+CPU parada). Quem trabalha e outro processo, que le esta fila. SQLite e nao
+Redis: uma dependencia a menos para a universidade manter, e o volume real
+(algumas corridas por mes) nao justifica outro servico.
 
-# RECEBENDO existe por causa de uma corrida real: o lote era inserido como
-# `na_fila` ANTES de os arquivos terminarem de subir, o trabalhador (que varre a
-# fila a cada 0,25 s) pegava no meio do upload de 26 MB e montava só o que já
-# tinha caído no disco. Resultado observado: relatório com 33 das 40 amostras e
-# NADA avisando da falta — o pior tipo de defeito, porque parece um resultado.
-# Agora o lote só entra na fila depois do último byte gravado.
-RECEBENDO, NA_FILA, RODANDO, PRONTO, FALHOU = (
-    "recebendo", "na_fila", "rodando", "pronto", "falhou")
 
-# Os estados que ocupam vaga na cota da conta: o lote existe e ainda vai dar
-# trabalho. Mora aqui, e não em `cotas.py`, porque quem precisa contá-los
-# dentro da transação do INSERT é este módulo — e `cotas` importa `fila`, não
-# o contrário.
-ATIVOS = (RECEBENDO, NA_FILA, RODANDO)
+COMO FUNCIONA — a vida de um lote
+=================================
 
-_ESQUEMA = """
-CREATE TABLE IF NOT EXISTS lotes (
-    id            TEXT PRIMARY KEY,
-    dono          TEXT NOT NULL DEFAULT '',
-    nome          TEXT NOT NULL DEFAULT '',
-    status        TEXT NOT NULL,
-    n_arquivos    INTEGER NOT NULL DEFAULT 0,
-    feito         INTEGER NOT NULL DEFAULT 0,
-    total         INTEGER NOT NULL DEFAULT 0,
-    etapa         TEXT NOT NULL DEFAULT '',
-    erro          TEXT NOT NULL DEFAULT '',
-    referencia    TEXT NOT NULL DEFAULT '',   -- banco escolhido para identificar
-    trabalhador   TEXT NOT NULL DEFAULT '',   -- quem o reivindicou (migração 3)
-    bytes_previstos INTEGER NOT NULL DEFAULT 0, -- reserva de cota (migração 4)
-    criado_em     TEXT NOT NULL,
-    iniciado_em   TEXT,
-    terminado_em  TEXT
-);
-CREATE INDEX IF NOT EXISTS ix_lotes_status ON lotes(status, criado_em);
-CREATE INDEX IF NOT EXISTS ix_lotes_dono   ON lotes(dono, criado_em);
+    novo_lote(dono, nome, n_arquivos, referencia, tetos...)         (rota de envio, ANTES de gravar os arquivos)
+           |   transacao(): conta os ativos da conta e a reserva de bytes dos envios em curso;
+           |   estourou -> CotaEstourada / CotaDeBytesEstourada (nada e inserido)
+           v
+       RECEBENDO  -- invisivel para o trabalhador: os arquivos ainda estao subindo
+           |         (um lote de 26 MB pego no meio do upload virou relatorio com 33 de 40 amostras, sem aviso nenhum)
+           |
+           |-- liberar_para_fila(lote_id, n_gravados)              (ultimo byte gravado; n_arquivos = o que REALMENTE caiu no disco)
+           |       v
+           |    NA_FILA --reivindicar(eu)--> RODANDO --progresso(...)--> concluir(id, eu) --> PRONTO
+           |                                    '------------------------falhar(id, erro, eu)---> FALHOU
+           |
+           '-- falhar_envios_abandonados()                          (arranque do trabalhador)
+                   RECEBENDO ha mais de ENVIO_ABANDONADO s -> FALHOU "o envio dos arquivos foi interrompido"
+                   (quem envia nao pulsa: a idade e a unica evidencia; o nginx deixa o corpo subir por 300 s, e meia hora e folga)
 
--- Sinal de vida do trabalhador. Nasceu em 2026-08-06, quando o autor mandou um
--- par e o lote ficou em `na_fila` PARA SEMPRE: nenhum trabalhador estava
--- atendendo esta fila. A tela dizia "Na fila. Esta página se atualiza sozinha",
--- que é uma promessa — alguém vai pegar — e não havia ninguém. Mesmo gênero da
--- mensagem de envio interrompido de 05/08: a tela afirmando um fato que não
--- verificou.
-CREATE TABLE IF NOT EXISTS pulso (
-    trabalhador TEXT PRIMARY KEY,
-    visto_em    TEXT NOT NULL
-);
+    reenfileirar_orfaos(eu), pulsar, trabalhadores_vivos, fila_atendida: herdados de fila.Fila
+    ATIVOS = (RECEBENDO, NA_FILA, RODANDO): os estados que ocupam vaga na cota da conta
+
+
+COMO USAR
+=========
+
+    from easycontig_web.dados import banco_sqlite
+    from easycontig_web.processamento import fila_de_lotes
+
+    lotes = fila_de_lotes.FilaDeLotes(banco_sqlite.BancoSqlite(cfg.caminho_do_sqlite))
+
+    try:
+        lote_id = lotes.novo_lote('ana@ufu.br', 'placa 12', 40, referencia='referencias_18S',
+                                  teto_ativos=10, bytes_previstos=26_000_000, teto_bytes=2 * 1024 ** 3, usados_em_disco=900_000_000)
+    except fila_de_lotes.CotaEstourada as erro:
+        ...                                               #* erro.ativos de erro.teto corridas em processamento
+    lotes.liberar_para_fila(lote_id, 40)
+
+    lote = lotes.pegar(lote_id)                           #* Lote: lote.status, lote.ativo, lote.n_arquivos...
+    for lote in lotes.listar(dono='ana@ufu.br', limite=25): ...
+
+    python -m easycontig_web.processamento.fila_de_lotes  #* quantos lotes por estado, os ultimos, quem esta vivo
+
+
+O QUE MUDOU DO fila_de_lotes.py ORIGINAL (460 linhas)
+=====================================================
+
+ 1. conectar, criar_esquema, _ESQUEMA, _agora, INTERVALO_PULSO/PULSO_VELHO e o
+    protocolo comum (pegar, reivindicar, _dono_confere, falhar, pulsar,
+    trabalhadores_vivos, fila_atendida, reenfileirar_orfaos) sairam daqui: o
+    banco e o BancoSqlite (dados/banco_sqlite.py), o protocolo e fila.Fila.
+    Este arquivo so tem o que e DOS LOTES: RECEBENDO, as cotas, novo_lote,
+    liberar_para_fila, listar, progresso, concluir, falhar_envios_abandonados.
+
+ 2. Lote e um objeto com uma propriedade por coluna (lote.status), e nao dict.
+    `lote.ativo` responde "ocupa vaga na cota / a pagina deve recarregar".
+
+ 3. novo_lote sempre abre transacao (BEGIN IMMEDIATE). O original so abria
+    quando havia teto; sem teto inseria em autocommit — dois caminhos para o
+    mesmo INSERT. A regra da cota nao mudou: contada DENTRO da transacao do
+    INSERT (com teto 1 e oito envios simultaneos da mesma conta, sete entravam
+    quando a conta era feita na rota).
+
+ 4. falhar_envios_abandonados e um metodo proprio. No original era um UPDATE
+    escondido dentro de reenfileirar_orfaos, cuja contagem devolvida nem o
+    incluia. O trabalhador chama os dois no arranque.
+
+ 5. listar(limite=0) devolve tudo (LIMIT -1); o original nao tinha "sem limite"
+    e a cota lia a tabela com SQL proprio.
+
+ 6. Os textos que a pagina mostra (o erro do envio interrompido) sao constantes
+    com nome, nao literais dentro do SQL.
+
+ 7. Nada foi cortado.
+
+
+POR QUE NASCE CLASSE
+====================
+
+    FilaDeLotes herda de Fila (ver fila.py): a tabela `lotes` dentro do banco
+    e o recurso, e o banco e o estado. Lote e o registro como objeto: nao
+    faz nada com o banco, so carrega os campos com nome e responde `ativo`.
+    As duas excecoes carregam os numeros que a rota usa para explicar ao
+    usuario o que estourou.
 """
 
-# O trabalhador bate o pulso a cada volta do laço, mas só grava a cada
-# `INTERVALO_PULSO` segundos. Some da conta depois de `PULSO_VELHO`: folga larga
-# de propósito, porque um lote grande segura o laço, e anunciar "ninguém está
-# atendendo" enquanto alguém trabalha seria trocar uma mentira por outra.
-INTERVALO_PULSO = 5.0
-PULSO_VELHO = 90.0
+import secrets
 
-# Idade a partir da qual um lote parado em RECEBENDO conta como envio
-# abandonado. Quem envia não pulsa, então a idade é a única evidência que
-# existe — ver o comentário longo em `reenfileirar_orfaos`.
-ENVIO_ABANDONADO = 1800.0
+from datetime import datetime, timedelta, timezone
+
+from easycontig_web.dados.banco_sqlite import agora
+
+from easycontig_web.processamento import fila
+
+from easycontig_web.processamento.fila import NA_FILA, RODANDO, PRONTO, FALHOU, TAMANHO_DA_ETAPA
 
 
-def _agora() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+RECEBENDO = 'recebendo'  #* os arquivos ainda estao subindo: o trabalhador nao ve o lote
+
+ATIVOS = (RECEBENDO, NA_FILA, RODANDO)  #* os estados que ocupam vaga na cota da conta: o lote existe e ainda vai dar trabalho
+
+ENVIO_ABANDONADO = 1800.0  #* segundos em RECEBENDO a partir dos quais o envio conta como abandonado (quem envia nao pulsa; a idade e a unica evidencia)
+
+AVISO_DE_ENVIO_INTERROMPIDO = 'o envio dos arquivos foi interrompido; envie a corrida de novo'  #* o erro gravado no lote abandonado; a pagina mostra
 
 
-@contextmanager
-def conectar(caminho: Path):
-    con = sqlite3.connect(caminho, timeout=30, isolation_level=None)
-    con.row_factory = sqlite3.Row
-    # WAL: o worker escreve progresso enquanto a página web lê o status. Sem
-    # isso, o SQLite serializa leitor e escritor e a página trava a cada polling.
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA busy_timeout=30000")
-    try:
-        yield con
-    finally:
-        con.close()
 
 
-def criar_esquema(caminho: Path) -> None:
-    """Cria as tabelas se faltarem e leva o banco à versão de esquema atual.
+class Lote:
 
-    As mudanças de esquema saíram daqui e foram para `migracoes.py` (2026-08-06):
-    o `if` que conferia `PRAGMA table_info` para descobrir se a coluna
-    `referencia` já existia funcionou para UMA coluna, mas não dizia em que
-    versão o banco estava, não tinha ordem declarada e não deixava por onde
-    voltar atrás. Agora o `PRAGMA user_version` responde as três coisas, e há
-    backup automático antes da primeira alteração.
+    #* uma linha da tabela lotes, com nome em cada campo. nao fala com o banco: quem grava e a FilaDeLotes
 
-    Continua seguro chamar a cada arranque, de qualquer processo: `IF NOT
-    EXISTS` para as tabelas e, nas migrações, nada roda duas vezes.
-    """
-    caminho.parent.mkdir(parents=True, exist_ok=True)
-    with conectar(caminho) as con:
-        con.executescript(_ESQUEMA)
-    # Importado aqui, e não no topo, porque `migracoes` importa `conectar` deste
-    # módulo — no topo seria import circular.
-    from ..dados import esquema_e_migracoes as migracoes
-    migracoes.aplicar(caminho)
+    def __init__(self, id, dono, nome, status, n_arquivos, feito, total, etapa, erro,
+                 referencia, trabalhador, bytes_previstos, criado_em, iniciado_em, terminado_em):
+
+        self.id = id  #* protocolo (secrets.token_urlsafe(9), 12 caracteres); e o nome da pasta do lote
+
+        self.dono = dono  #* e-mail da conta
+
+        self.nome = nome  #* o nome que o usuario deu a corrida
+
+        self.status = status  #* RECEBENDO / NA_FILA / RODANDO / PRONTO / FALHOU
+
+        self.n_arquivos = n_arquivos  #* quantos .ab1 REALMENTE cairam no disco (liberar_para_fila reescreve)
+
+        self.feito = feito  #* progresso: amostras ja montadas
+
+        self.total = total  #* progresso: amostras no lote
+
+        self.etapa = etapa  #* o que o trabalhador esta fazendo agora (texto da tela)
+
+        self.erro = erro  #* por que FALHOU
+
+        self.referencia = referencia  #* o banco escolhido para identificar: fica GRAVADO, o relatorio continua interpretavel se a instalacao mudar de banco
+
+        self.trabalhador = trabalhador  #* quem reivindicou (maquina + PID); '' antes de reivindicar ou depois de reenfileirar
+
+        self.bytes_previstos = bytes_previstos  #* reserva de cota enquanto os arquivos sobem; 0 depois de liberar_para_fila
+
+        self.criado_em = criado_em  #* ISO UTC
+
+        self.iniciado_em = iniciado_em  #* ISO UTC ou None
+
+        self.terminado_em = terminado_em  #* ISO UTC ou None
+
+
+    @property
+    def ativo(self):
+
+        #* ocupa vaga na cota e a pagina deve continuar recarregando
+
+        return self.status in ATIVOS
+
+
+    def __repr__(self):
+
+        return f'Lote({self.id!r}, {self.status!r}, dono={self.dono!r}, nome={self.nome!r})'
+
+
 
 
 class CotaEstourada(Exception):
-    """O teto de lotes ativos da conta já estava cheio quando o lote ia nascer."""
 
-    def __init__(self, ativos: int, teto: int):
-        self.ativos, self.teto = ativos, teto
-        super().__init__(f"{ativos} de {teto} lotes ativos")
+    #* o teto de lotes ativos da conta ja estava cheio quando o lote ia nascer; a rota diz "espere uma corrida terminar"
+
+    def __init__(self, ativos, teto):
+
+        self.ativos = ativos
+
+        self.teto = teto
+
+        super().__init__(f'{ativos} de {teto} lotes ativos')
+
+
 
 
 class CotaDeBytesEstourada(Exception):
-    """O que a conta já ocupa MAIS o que este envio reservou passa do teto.
 
-    Separada da `CotaEstourada` porque a resposta ao usuário é outra: aqui não
-    adianta esperar uma corrida terminar, é preciso liberar espaço.
-    """
+    #* o que a conta ja ocupa MAIS o que este envio reservou passa do teto. separada da CotaEstourada porque a resposta e outra:
+    #* aqui nao adianta esperar uma corrida terminar, e preciso liberar espaco
 
-    def __init__(self, usados: int, reservado: int, teto: int):
-        self.usados, self.reservado, self.teto = usados, reservado, teto
-        super().__init__(f"{usados} + {reservado} passa de {teto}")
+    def __init__(self, usados, reservado, teto):
+
+        self.usados = usados
+
+        self.reservado = reservado
+
+        self.teto = teto
+
+        super().__init__(f'{usados} + {reservado} passa de {teto}')
 
 
-def novo_lote(caminho: Path, *, dono: str, nome: str, n_arquivos: int,
-              referencia: str = "", teto_ativos: int = 0,
-              bytes_previstos: int = 0, teto_bytes: int = 0,
-              usados_em_disco: int = 0) -> str:
-    """Abre o lote em RECEBENDO — invisível para o trabalhador até liberar.
 
-    `referencia` é o banco escolhido para identificar. Fica GRAVADO no lote, e
-    não lido da configuração na hora de rodar: assim o relatório continua
-    interpretável mesmo que a instalação mude de banco depois — a pergunta "o
-    que este resultado comparou contra o quê" tem resposta no próprio registro.
 
-    ⚠️ `teto_ativos` é conferido **aqui dentro**, na mesma transação do INSERT.
-    A conferência da cota morava só na rota, antes do lote existir — e entre
-    contar e criar havia uma janela. Medido em 2026-08-06: com teto de 1 e oito
-    envios simultâneos da mesma conta, **sete entraram**. Todos passaram pela
-    contagem antes de qualquer um aparecer nela.
+class FilaDeLotes(fila.Fila):
 
-    `BEGIN IMMEDIATE` porque o SQLite só serializa escritores a partir do
-    momento em que a transação vira de escrita; começando em modo de leitura,
-    dois processos leem o mesmo número e os dois escrevem.
-    """
-    lote_id = secrets.token_urlsafe(9)
-    transacional = bool(teto_ativos or teto_bytes)
-    with conectar(caminho) as con:
-        if transacional:
-            con.execute("BEGIN IMMEDIATE")
-            marcas = ",".join("?" * len(ATIVOS))
+    #* a tabela lotes: o que so os lotes fazem; o protocolo comum (reivindicar, falhar, pulso, orfaos) vem de Fila
+
+    tabela = 'lotes'
+
+
+    def registro(self, linha):
+
+        return Lote(**dict(linha))
+
+
+    def novo_lote(self, dono, nome, n_arquivos, referencia='', teto_ativos=0, bytes_previstos=0, teto_bytes=0, usados_em_disco=0):
+
+        #* abre o lote em RECEBENDO e devolve o id. as cotas sao conferidas AQUI DENTRO, na transacao do INSERT:
+        #* conferir na rota, antes de o lote existir, deixava uma janela entre contar e criar (medido em 2026-08-06:
+        #* teto 1, oito envios simultaneos da mesma conta, SETE entraram). teto 0 = sem teto.
+        #* `usados_em_disco` e medido FORA (percorrer pastas seguraria a trava por dezenas de ms e lote terminado nao muda
+        #* de tamanho); o que PRECISA ser lido aqui dentro e a reserva dos lotes ainda em RECEBENDO — a corrida e essa:
+        #* dez envios simultaneos liam o mesmo `usados` antes de qualquer byte chegar ao disco
+
+        lote_id = secrets.token_urlsafe(9)
+
+        marcas = ','.join('?' * len(ATIVOS))
+
+        with self.banco.transacao() as con:
+
             if teto_ativos:
-                ativos = con.execute(
-                    f"SELECT COUNT(*) FROM lotes WHERE dono=? AND status IN ({marcas})",
-                    (dono, *ATIVOS)).fetchone()[0]
+
+                ativos = con.execute(f'SELECT COUNT(*) FROM lotes WHERE dono=? AND status IN ({marcas})', (dono, *ATIVOS)).fetchone()[0]
+
                 if ativos >= teto_ativos:
-                    con.execute("ROLLBACK")
                     raise CotaEstourada(ativos, teto_ativos)
-            # ⚠️ A RESERVA (achado L3 de 2026-08-08). `usados_em_disco` é medido
-            # FORA daqui porque percorrer pastas dentro de uma transação de
-            # escrita seguraria o banco por dezenas de ms — e ele não precisa
-            # ser fresco: lote terminado não muda de tamanho. O que PRECISA ser
-            # lido aqui dentro são as reservas dos lotes ainda em RECEBENDO,
-            # porque é exatamente essa a corrida: dez envios simultâneos liam o
-            # mesmo `usados` antes de qualquer byte chegar ao disco, e os dez
-            # passavam. A reserva aparece no INSERT, então o próximo a entrar
-            # nesta transação já a enxerga.
+
             if teto_bytes:
-                reservado = con.execute(
-                    "SELECT COALESCE(SUM(bytes_previstos),0) FROM lotes "
-                    "WHERE dono=? AND status=?", (dono, RECEBENDO)).fetchone()[0]
+
+                reservado = con.execute('SELECT COALESCE(SUM(bytes_previstos),0) FROM lotes WHERE dono=? AND status=?', (dono, RECEBENDO)).fetchone()[0]
+
                 if usados_em_disco + reservado + bytes_previstos > teto_bytes:
-                    con.execute("ROLLBACK")
-                    raise CotaDeBytesEstourada(usados_em_disco + reservado,
-                                               bytes_previstos, teto_bytes)
-        con.execute(
-            "INSERT INTO lotes (id, dono, nome, status, n_arquivos, criado_em,"
-            " referencia, bytes_previstos) VALUES (?,?,?,?,?,?,?,?)",
-            (lote_id, dono, nome, RECEBENDO, n_arquivos, _agora(), referencia,
-             max(0, int(bytes_previstos))),
-        )
-        # `isolation_level=None` deixa tudo em autocommit; a transação explícita
-        # acima é a única que precisa ser fechada à mão. Sem este COMMIT o lote
-        # nasceria e sumiria — e a contagem seguinte veria a vaga livre de novo.
-        if transacional:
-            con.execute("COMMIT")
-    return lote_id
+                    raise CotaDeBytesEstourada(usados_em_disco + reservado, bytes_previstos, teto_bytes)
 
-
-def liberar_para_fila(caminho: Path, lote_id: str, n_arquivos: int) -> None:
-    """Último byte gravado: agora sim o trabalhador pode pegar.
-
-    `n_arquivos` é reescrito aqui com o que REALMENTE foi gravado, e não com o
-    que o navegador prometeu no início — é esse número que o executor confere
-    contra os arquivos que acha em disco.
-    """
-    with conectar(caminho) as con:
-        # `bytes_previstos=0` junto: a reserva existe só enquanto o upload está
-        # em curso. Depois daqui os bytes estão no disco e são medidos de lá —
-        # manter a previsão faria a conta pagar duas vezes pelo mesmo lote.
-        con.execute("UPDATE lotes SET status=?, n_arquivos=?, bytes_previstos=0 "
-                    "WHERE id=? AND status=?",
-                    (NA_FILA, n_arquivos, lote_id, RECEBENDO))
-
-
-def pegar(caminho: Path, lote_id: str) -> dict | None:
-    with conectar(caminho) as con:
-        r = con.execute("SELECT * FROM lotes WHERE id=?", (lote_id,)).fetchone()
-    return dict(r) if r else None
-
-
-def listar(caminho: Path, *, dono: str | None = None, limite: int = 50) -> list[dict]:
-    sql = "SELECT * FROM lotes"
-    args: list = []
-    if dono is not None:
-        sql += " WHERE dono=?"
-        args.append(dono)
-    sql += " ORDER BY criado_em DESC LIMIT ?"
-    args.append(limite)
-    with conectar(caminho) as con:
-        return [dict(r) for r in con.execute(sql, args)]
-
-
-def reivindicar(caminho: Path, trabalhador: str = "") -> dict | None:
-    """Marca o lote mais antigo da fila como RODANDO e devolve — ou None.
-
-    O UPDATE condicional é o que permite mais de um trabalhador na mesma fila:
-    quem perder a corrida atualiza 0 linhas e tenta o próximo. Sem isso, dois
-    workers montariam o mesmo lote e gravariam por cima um do outro.
-
-    `trabalhador` fica GRAVADO na linha porque sem ele `reenfileirar_orfaos`
-    não consegue distinguir "o dono deste lote morreu" de "o dono está
-    trabalhando nele agora" — as duas situações são idênticas na tabela, e a
-    segunda foi tratada como a primeira até 2026-08-06.
-    """
-    with conectar(caminho) as con:
-        con.execute("BEGIN IMMEDIATE")
-        try:
-            r = con.execute(
-                "SELECT * FROM lotes WHERE status=? ORDER BY criado_em LIMIT 1",
-                (NA_FILA,),
-            ).fetchone()
-            if not r:
-                con.execute("COMMIT")
-                return None
-            n = con.execute(
-                "UPDATE lotes SET status=?, iniciado_em=?, trabalhador=? "
-                "WHERE id=? AND status=?",
-                (RODANDO, _agora(), trabalhador, r["id"], NA_FILA),
-            ).rowcount
-            con.execute("COMMIT")
-        except Exception:
-            con.execute("ROLLBACK")
-            raise
-        return dict(r) if n == 1 else None
-
-
-# ── só o dono carimba ────────────────────────────────────────────────────────
-# ⚠️ Estas três gravavam pelo `id` do lote e mais nada. Importa porque nenhuma
-# trava de reenfileiramento é perfeita: se um trabalhador for desapossado do
-# lote — por um reenfileiramento indevido, um relógio torto, uma pausa longa —
-# ele **ainda assim** carimbava PRONTO por cima do irmão que estava montando de
-# verdade, e o relatório publicado seria o da montagem abandonada. Achado pelo
-# painel de verificação em 2026-08-06: sem isto, mesmo com o pulso perfeito o
-# desfecho continuava podendo ser escrito por quem não estava mais no comando.
-#
-# `trabalhador=""` grava sem conferir, de propósito: é o caminho do servidor
-# web, que marca `falhou` num lote que ninguém chegou a reivindicar.
-def _dono_confere(trabalhador: str) -> tuple[str, tuple]:
-    return (" AND trabalhador=?", (trabalhador,)) if trabalhador else ("", ())
-
-
-def progresso(caminho: Path, lote_id: str, feito: int, total: int, etapa: str,
-              trabalhador: str = "") -> bool:
-    cond, extra = _dono_confere(trabalhador)
-    with conectar(caminho) as con:
-        return con.execute(
-            f"UPDATE lotes SET feito=?, total=?, etapa=? WHERE id=?{cond}",
-            (feito, total, etapa[:120], lote_id, *extra)).rowcount == 1
-
-
-def concluir(caminho: Path, lote_id: str, trabalhador: str = "") -> bool:
-    """True se este trabalhador ainda era o dono. False = perdeu o lote."""
-    cond, extra = _dono_confere(trabalhador)
-    with conectar(caminho) as con:
-        return con.execute(
-            f"UPDATE lotes SET status=?, terminado_em=?, etapa='' WHERE id=?{cond}",
-            (PRONTO, _agora(), lote_id, *extra)).rowcount == 1
-
-
-def falhar(caminho: Path, lote_id: str, erro: str, trabalhador: str = "") -> bool:
-    cond, extra = _dono_confere(trabalhador)
-    with conectar(caminho) as con:
-        return con.execute(
-            f"UPDATE lotes SET status=?, terminado_em=?, erro=?, etapa='' "
-            f"WHERE id=?{cond}",
-            (FALHOU, _agora(), erro[:2000], lote_id, *extra)).rowcount == 1
-
-
-def pulsar(caminho: Path, trabalhador: str) -> None:
-    """Registra que este trabalhador está vivo e olhando ESTA fila."""
-    with conectar(caminho) as con:
-        con.execute(
-            "INSERT INTO pulso (trabalhador, visto_em) VALUES (?,?) "
-            "ON CONFLICT(trabalhador) DO UPDATE SET visto_em=excluded.visto_em",
-            (trabalhador, _agora()))
-
-
-def fila_atendida(caminho: Path, agora: datetime | None = None) -> bool:
-    """Há algum trabalhador vivo atendendo esta fila?
-
-    Serve para a tela parar de prometer o que ninguém vai cumprir. É uma
-    pergunta sobre a FILA, não sobre um lote: quem responde é o pulso mais
-    recente de qualquer trabalhador.
-
-    Falha para o lado de "está atendida" em dois casos, e os dois são decisão,
-    não descuido:
-
-    * **registro ou relógio ilegíveis** — anunciar abandono por engano assusta à
-      toa, e o lote sendo processado desmente o aviso em segundos;
-    * **tabela ausente** — significa banco anterior a este recurso, o que só
-      acontece entre subir o código novo e reiniciar o servidor (o
-      `criar_esquema` do arranque cria a tabela). Durante uma atualização, todo
-      mundo veria "nada está atendendo" ao mesmo tempo, e seria mentira.
-
-    O caso que motivou tudo isto — pulso NENHUM, nunca — não depende de
-    interpretar data alguma e é respondido com um `False` seco.
-    """
-    agora = agora or datetime.now(timezone.utc)
-    try:
-        with conectar(caminho) as con:
-            linha = con.execute("SELECT MAX(visto_em) AS v FROM pulso").fetchone()
-    except sqlite3.Error:
-        return True
-    if not linha or not linha["v"]:
-        return False                     # nunca subiu trabalhador nenhum aqui
-    try:
-        visto = datetime.fromisoformat(linha["v"])
-    except ValueError:
-        return True
-    if visto.tzinfo is None:
-        visto = visto.replace(tzinfo=timezone.utc)
-    return (agora - visto).total_seconds() <= PULSO_VELHO
-
-
-def trabalhadores_vivos(caminho: Path, agora: datetime | None = None) -> set[str]:
-    """Quem bateu pulso há menos de `PULSO_VELHO`."""
-    agora = agora or datetime.now(timezone.utc)
-    vivos: set[str] = set()
-    try:
-        with conectar(caminho) as con:
-            linhas = con.execute("SELECT trabalhador, visto_em FROM pulso").fetchall()
-    except sqlite3.Error:
-        return vivos
-    for r in linhas:
-        try:
-            visto = datetime.fromisoformat(r["visto_em"])
-        except (ValueError, TypeError):
-            continue
-        if visto.tzinfo is None:
-            visto = visto.replace(tzinfo=timezone.utc)
-        if (agora - visto).total_seconds() <= PULSO_VELHO:
-            vivos.add(r["trabalhador"])
-    return vivos
-
-
-def reenfileirar_orfaos(caminho: Path, eu: str = "",
-                        agora: datetime | None = None) -> int:
-    """Devolve à fila os lotes deixados em RODANDO por um worker que morreu.
-
-    Chamado quando o worker sobe. Sem isso, uma queda de energia (o cenário que
-    motivou pôr isto numa VPS com no-break) deixaria o lote preso em "rodando"
-    para sempre, e a página do usuário giraria eternamente.
-
-    RECEBENDO NÃO é reenfileirado: um upload interrompido deixou a pasta pela
-    metade, e mandá-la para a fila reproduziria exatamente o defeito das 33 de
-    40 amostras. Lote sem upload completo é lote perdido, e tem que dizer isso.
-
-    ⚠️ **ANTES, ISTO REENFILEIRAVA O TRABALHO DOS OUTROS.** O UPDATE varria
-    *todos* os lotes em RODANDO, sem olhar de quem eram. E o
-    `docker-compose.yml` sobe `replicas: ${TRABALHADORES:-2}`: subir o segundo
-    trabalhador — ou reiniciar um deles, ou o `restart: unless-stopped` agindo
-    depois de um OOM — devolvia à fila o lote que o outro estava montando
-    **naquele instante**. Os dois passavam a escrever na mesma pasta.
-
-    Agora só volta para a fila o lote cujo dono **não está pulsando**. Um lote
-    sem dono registrado (banco anterior à migração 3) é reenfileirado apenas se
-    NENHUM outro trabalhador estiver vivo — na dúvida, não se toca no trabalho
-    alheio, porque o preço de esperar é uma página girando e o de errar é o
-    relatório de duas montagens misturadas.
-    """
-    vivos = trabalhadores_vivos(caminho, agora) - {eu}
-
-    def orfao(dono: str) -> bool:
-        if dono:
-            return dono not in vivos      # o dono existe: só é órfão se morreu
-        return not vivos                  # sem dono (banco velho): só se ninguém vive
-
-    with conectar(caminho) as con:
-        # `BEGIN IMMEDIATE`: ler e escrever na MESMA transação de escrita. Em
-        # autocommit, dois trabalhadores subindo juntos — que é o caso normal do
-        # `docker compose up` com duas réplicas — leem a mesma lista de órfãos e
-        # os dois reenfileiram.
-        con.execute("BEGIN IMMEDIATE")
-        try:
-            rodando = con.execute(
-                "SELECT id, trabalhador FROM lotes WHERE status=?",
-                (RODANDO,)).fetchall()
-            orfaos = [r["id"] for r in rodando if orfao(r["trabalhador"])]
-            n = 0
-            if orfaos:
-                marcas = ",".join("?" * len(orfaos))
-                n = con.execute(
-                    f"UPDATE lotes SET status=?, etapa='', trabalhador='' "
-                    f"WHERE id IN ({marcas}) AND status=?",
-                    (NA_FILA, *orfaos, RODANDO)).rowcount
-            # ⚠️ SÓ OS ENVIOS VELHOS (achado L4 de 2026-08-08). O UPDATE varria
-            # *todo* lote em RECEBENDO, sem olhar dono nem idade — e RECEBENDO é
-            # o estado de quem está com o upload EM CURSO neste segundo. Então
-            # qualquer reinício de trabalhador (um OOM, um `up -d --build` de
-            # deploy, o `restart: unless-stopped`) matava o envio que outra
-            # pessoa estava fazendo naquele instante, e ela recebia "o envio foi
-            # interrompido" sem nada ter acontecido do lado dela. Não cruza
-            # contas, mas é trabalho alheio perdido — e num deploy é justamente
-            # quando há dois trabalhadores subindo.
-            #
-            # O corte é por IDADE, e não por dono: quem envia não pulsa, logo
-            # não há como perguntar se está vivo. O prazo é folgado de propósito
-            # — o nginx da produção deixa o corpo subir por 300 s
-            # (`proxy_read_timeout`) e um lote de 400 `.ab1` usa isso — então um
-            # envio de verdade nunca chega perto de meia hora. O que passa desse
-            # prazo é pasta pela metade, que é o que esta linha existe para
-            # varrer.
-            corte = (agora or datetime.now(timezone.utc)) - timedelta(
-                seconds=ENVIO_ABANDONADO)
             con.execute(
-                "UPDATE lotes SET status=?, erro=? WHERE status=? AND criado_em<?",
-                (FALHOU, "o envio dos arquivos foi interrompido; envie a corrida de novo",
-                 RECEBENDO, corte.isoformat(timespec="seconds")))
-            con.execute("COMMIT")
-        except Exception:
-            con.execute("ROLLBACK")
-            raise
-        return n
+                'INSERT INTO lotes (id, dono, nome, status, n_arquivos, criado_em, referencia, bytes_previstos) VALUES (?,?,?,?,?,?,?,?)',
+                (lote_id, dono, nome, RECEBENDO, n_arquivos, agora(), referencia, max(0, int(bytes_previstos))))
+
+        return lote_id
+
+
+    def liberar_para_fila(self, lote_id, n_arquivos):
+
+        #* ultimo byte gravado: agora o trabalhador pode pegar. n_arquivos e reescrito com o que REALMENTE foi gravado (e esse
+        #* numero que o executor confere contra o disco); bytes_previstos=0 porque a reserva so vale enquanto o upload esta
+        #* em curso — depois os bytes estao no disco e sao medidos de la (manter a previsao cobraria duas vezes o mesmo lote)
+
+        with self.banco.conectar() as con:
+            con.execute('UPDATE lotes SET status=?, n_arquivos=?, bytes_previstos=0 WHERE id=? AND status=?', (NA_FILA, n_arquivos, lote_id, RECEBENDO))
+
+
+    def listar(self, dono=None, limite=50):
+
+        #* os lotes do mais novo para o mais velho; dono=None = de todos; limite=0 = todos
+
+        sql = 'SELECT * FROM lotes'
+
+        argumentos = []
+
+        if dono is not None:
+
+            sql += ' WHERE dono=?'
+
+            argumentos.append(dono)
+
+        sql += ' ORDER BY criado_em DESC LIMIT ?'
+
+        argumentos.append(limite if limite > 0 else -1)
+
+        with self.banco.conectar() as con:
+            return [self.registro(linha) for linha in con.execute(sql, argumentos)]
+
+
+    def progresso(self, lote_id, feito, total, etapa, trabalhador=''):
+
+        #* o executor avisando por onde vai; True se eu ainda era o dono
+
+        return self.gravar_do_dono(lote_id, trabalhador, feito=feito, total=total, etapa=etapa[:TAMANHO_DA_ETAPA])
+
+
+    def concluir(self, lote_id, trabalhador=''):
+
+        #* PRONTO. True se este trabalhador ainda era o dono; False = perdeu o lote, e o relatorio dele nao deve ser publicado
+
+        return self.gravar_do_dono(lote_id, trabalhador, status=PRONTO, terminado_em=agora(), etapa='')
+
+
+    def falhar_envios_abandonados(self, momento=None):
+
+        #* RECEBENDO ha mais de ENVIO_ABANDONADO segundos vira FALHOU com o aviso. so os VELHOS: RECEBENDO e o estado de quem
+        #* esta com o upload em curso neste segundo, e varrer todos (como ja foi feito) matava o envio que outra pessoa fazia
+        #* durante um deploy. um upload interrompido deixou a pasta pela metade, e mandar para a fila reproduziria o
+        #* relatorio de 33 de 40 amostras. devolve quantos marcou
+
+        corte = (momento or datetime.now(timezone.utc)) - timedelta(seconds=ENVIO_ABANDONADO)
+
+        with self.banco.conectar() as con:
+            return con.execute(
+                'UPDATE lotes SET status=?, erro=? WHERE status=? AND criado_em<?',
+                (FALHOU, AVISO_DE_ENVIO_INTERROMPIDO, RECEBENDO, corte.isoformat(timespec='seconds'))).rowcount
+
+
+
+
+def main():
+
+    from easycontig_web import configuracao
+    from easycontig_web.dados import banco_sqlite
+
+    digitado = input('Caminho do fila.sqlite3 (enter = o da configuracao, EASYCONTIG_DATA_DIR): ').strip()
+
+    banco = banco_sqlite.BancoSqlite(digitado) if digitado else banco_sqlite.BancoSqlite(configuracao.carregar().caminho_do_sqlite)
+
+    if not banco.caminho.exists():
+        print(f'o arquivo nao existe: {banco.caminho}')
+        return
+
+    lotes = FilaDeLotes(banco)
+
+    with banco.conectar() as con:
+        contagem = {linha['status']: linha['n'] for linha in con.execute('SELECT status, COUNT(*) AS n FROM lotes GROUP BY status')}
+
+    print(f'\n{lotes!r}')
+
+    for estado in (RECEBENDO, NA_FILA, RODANDO, PRONTO, FALHOU):
+        print(f'  {estado:10} {contagem.get(estado, 0)}')
+
+    print('\nultimos 10 lotes:')
+
+    for lote in lotes.listar(limite=10):
+        print(f'  {lote.id}  {lote.status:10} {lote.criado_em}  {lote.dono}  {lote.nome!r}  {lote.n_arquivos} arquivo(s)' + (f'  erro: {lote.erro[:60]}' if lote.erro else ''))
+
+    print(f'\ntrabalhadores vivos: {sorted(lotes.trabalhadores_vivos()) or "nenhum"}; fila atendida: {lotes.fila_atendida()}')
+
+
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

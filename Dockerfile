@@ -1,21 +1,16 @@
 # A mesma imagem serve o site E roda o trabalhador — muda só o comando
 # (ver docker-compose.yml). Uma imagem só evita a classe de bug em que web e
-# trabalhador rodam versões diferentes do núcleo científico e discordam sobre a
-# mesma amostra.
+# trabalhador rodam versões diferentes do núcleo e discordam sobre a mesma
+# amostra.
 FROM python:3.12-slim
 
 # blastn vem do repositório da distribuição; o Tracy vem do binário oficial
 # v0.8.9. NÃO trocar por bioconda: de lá vinha a v0.5.3, sem o subcomando
 # `consensus`, e o erro só aparece na hora de montar (ADR 0026).
+# O nome do arquivo publicado é `tracy-<versão>-linux-amd64`, com hífens; o
+# `tracy --version` no fim transforma download errado em erro de BUILD, em vez
+# de um contêiner que sobe e só falha na hora de montar um par.
 ARG TRACY_VERSION=v0.8.9
-# ⚠️ O nome do arquivo publicado é `tracy-<versão>-linux-amd64`, com hífens.
-# Aqui estava `tracy_linux_x86_64`, e **esta imagem nunca construiu**: o
-# `curl -fL` levava 404 e saía com 22. Descoberto em 2026-08-06, na primeira vez
-# que alguém rodou o build — ou seja, o `docker compose up --build` que a
-# ADR 0050 chama de "o que torna a entrega institucional possível" morria na
-# terceira camada, e ninguém sabia.
-# O `tracy --version` no fim é o que transforma download errado em erro de
-# BUILD, em vez de um contêiner que sobe e só falha na hora de montar um par.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ncbi-blast+ curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -25,9 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && tracy --version
 
 # O MrBayes é COMPILADO aqui porque não existe pacote: não está no Debian, não
-# está em `pip` e não está em conda-forge. Sem esta camada a imagem sobe inteira
-# e só a árvore falha — o gênero de defeito que a camada do Tracy acima já
-# custou uma vez, e que o `mb -v` no fim transforma em erro de BUILD.
+# está em `pip` e não está em conda-forge. Sem esta camada a imagem sobe
+# inteira e só a árvore falha — o `mb` no fim transforma isso em erro de BUILD.
 #
 # `--with-readline=no`: readline serve ao prompt interativo, e aqui o MrBayes
 # nunca é digitado — o NEXUS traz o bloco `MRBAYES` com `autoclose=yes`.
@@ -47,20 +41,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /opt/easycontig
 
-# O núcleo entra como pacote, não copiado: é a fronteira da ADR 0050. Espera-se
-# o repo do EasyContig ao lado deste, como `nucleo/` no contexto de build.
-COPY nucleo/ /opt/nucleo/
-RUN pip install --no-cache-dir /opt/nucleo
-
+# A web entra do commit; o núcleo (os .py da raiz) e o front (templates e
+# estáticos) NÃO estão no repositório desde 08/09/2026 — precisam já estar no
+# disco desta máquina, postos por `tools/enviar_privado.sh`. Eles entram na
+# imagem pelo mesmo COPY de sempre: o contexto de build é a pasta, não o commit.
+# ⚠️ `COPY *.py` falhando com "no source files were specified" quer dizer que o
+# núcleo não está nesta máquina — rode o tools/enviar_privado.sh, não procure
+# erro no Dockerfile.
 COPY pyproject.toml README.md ./
+COPY *.py ./
 COPY easycontig_web/ ./easycontig_web/
-# ⚠️ A lista é escrita à mão por causa do `--no-deps`, e por isso é fácil
-# esquecer uma: `matplotlib` entrou com a árvore filogenética, e sem ela a
-# imagem sobe, a árvore sai — e só a FIGURA some, calada (o desenho falha para o
-# lado seguro). Dependência nova no `pyproject.toml` precisa vir também aqui.
-RUN pip install --no-cache-dir --no-deps . \
-    && pip install --no-cache-dir fastapi "uvicorn[standard]" python-multipart \
-        jinja2 itsdangerous matplotlib
+
+# ⚠️ Sem esta camada, faltar o núcleo ou o front dá uma imagem que SOBE e só
+# falha na hora de montar um par (ImportError) ou de desenhar uma página (toda
+# rota em 500). Aqui vira erro de BUILD, com o que fazer escrito — a mesma
+# escolha das camadas do tracy e do mb acima.
+# A lista dos módulos sai do `py-modules` do próprio pyproject.toml, e não
+# escrita à mão aqui: escrita à mão, ela envelhece calada — a primeira versão
+# desta camada conferia três dos doze e deixava passar um build sem `tracado.py`.
+RUN python -c "import pathlib, tomllib, sys; \
+    modulos = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['tool']['setuptools']['py-modules']; \
+    caminhos = [modulo + '.py' for modulo in modulos] + ['easycontig_web/templates/base.html', 'easycontig_web/estatico/oficina.js']; \
+    faltam = [caminho for caminho in caminhos if not pathlib.Path(caminho).is_file()]; \
+    sys.exit('FALHOU: nao estao aqui, e nao sao versionados: ' + ', '.join(faltam) + '. Rode tools/enviar_privado.sh da maquina de desenvolvimento para esta antes de construir a imagem.' if faltam else 0)"
+
+RUN pip install --no-cache-dir .
 
 # Não roda como root: o processo recebe arquivo de fora e escreve em disco.
 RUN useradd -m -u 10001 easycontig && mkdir -p /dados && chown easycontig /dados

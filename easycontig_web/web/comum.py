@@ -1,212 +1,189 @@
-#? COMUM DA WEB — Decisão sobre o que toda rota usa 17/08/2026
-#!
-#! 1. Fica aqui o que TODAS as rotas precisam: os templates, a sessão, a casca da
-#!    página e a leitura do lote.
-#! 2. Existe para as rotas poderem morar em arquivos por assunto. Sem isto elas
-#!    importariam do servidor, e o servidor importa elas — ciclo de importação.
-#! 3. A configuração é lida A CADA USO (`cfg()`), e não guardada no import.
-#!    Motivo medido: a suíte tem 28 pontos de `importlib.reload(main)` para dar
-#!    a cada teste uma pasta própria. Recarregar o servidor NÃO recarrega este
-#!    módulo — um `cfg` guardado aqui ficaria preso na pasta do primeiro teste, e
-#!    as falhas apareceriam dependendo da ORDEM dos testes.
-#! 4. Custo medido da leitura fresca: 15,9 µs por chamada, ou 1,6 ms de CPU por
-#!    segundo a 100 req/s. Desprezível diante do que evita.
-#! 5. Este módulo NÃO conhece rota nenhuma. Quem importa daqui é rota.
+"""
+comum.py — o que toda rota usa e nao guarda estado: templates, sessao, recado, cabecalhos de seguranca.
 
-from __future__ import annotations
+    request ---> instalacao_de(request)   app.state.instalacao (veja instalacao.py)
+       |
+       |-----> usuario(request)           Usuario da sessao, ou None
+       |-----> exigir(request)            Usuario, ou HTTPException 401 "entre para continuar"
+       |
+       |-----> por_recado(request, texto) guarda UMA frase na sessao (assinada) para a proxima pagina mostrar
+       |-----> pegar_recado(request)      le e apaga: o recado aparece uma vez so
+       |
+       '-----> TEMPLATES                  Jinja2 apontado para easycontig_web/templates
+                 |-- filtro br            99.4 -> "99,4"   (so na tela; CSV e JSON continuam com ponto)
+                 '-- filtro tamanho       1536000 -> "1,5 MB"
 
-import os
-from contextlib import contextmanager
+    resposta --> marcar_resposta(resposta, nonce, https_only)   CSP com nonce, nosniff, DENY, noindex, HSTS
+
+COMO FUNCIONA
+
+    Sao funcoes puras sobre o request e a resposta. O que tem dono (banco, fila,
+    estante, NCBI) mora na Instalacao; aqui so mora o que e igual em qualquer
+    instalacao e nao muda entre pedidos.
+
+COMO USAR
+
+    from easycontig_web.web import comum
+
+    @router.get('/x')
+    def pagina_x(request: Request):
+        instalacao = comum.instalacao_de(request)
+        u = comum.exigir(request)
+        return comum.TEMPLATES.TemplateResponse(request, 'x.html', {**instalacao.casca(u), ...})
+
+O QUE MUDOU (em relacao a web/comum.py original)
+
+ 1. cfg() — a configuracao era relida do ambiente A CADA USO (15,9 us por
+    chamada) para a suite antiga poder recarregar o servidor 28 vezes. Agora a
+    configuracao e da Instalacao, e um teste que quer outra pasta cria outra
+    Instalacao e outro app (servidor_web.criar_app).
+
+ 2. _referencias, _casca, _lote_do_usuario, _relatorio e _vaga_pesada sairam
+    daqui: dependem do banco, da estante e do semaforo, entao sao metodos da
+    Instalacao. _vaga_pesada importava servidor_web por dentro da funcao para
+    escapar do import circular; nao ha mais ciclo.
+
+ 3. Tres funcoes diferentes formatavam bytes (aqui, no perfil e na cota). Fica
+    uma: cota_de_espaco.tamanho, exposta ao template como filtro `tamanho`.
+
+ 4. _u -> usuario, _exigir -> exigir, _por_recado/_pegar_recado sem o sublinhado;
+    _marcar_resposta -> marcar_resposta(resposta, nonce, https_only): o HSTS
+    lia EASYCONTIG_HTTPS_ONLY do ambiente a cada resposta; agora quem chama
+    passa o que a Instalacao leu uma vez.
+
+POR QUE nao nasce classe
+
+    Nada aqui tem ciclo de vida. TEMPLATES e um objeto da biblioteca montado
+    uma vez; o resto sao funcoes de um request para um valor.
+"""
+
 from pathlib import Path
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 from fastapi.templating import Jinja2Templates
 
-from .. import configuracao as config
-from ..contas import autenticacao as auth
-from ..contas import cota_de_espaco as cotas
-from ..contas import perfil_do_laboratorio as perfil
-from ..dados import bancos_de_referencia as bancos
-from ..dados import pedidos_entre_labs as pedidos
-from ..processamento import fila_de_lotes as fila
+from easycontig_web.contas import autenticacao
+from easycontig_web.contas.cota_de_espaco import tamanho
 
 
-#* A configuração, lida do ambiente NA HORA DO USO. Ver o item 3 do cabeçalho:
-#* guardá-la no import prende o valor da primeira vez que o módulo carregou.
-def cfg():
-    return config.carregar()
+PASTA_DE_TEMPLATES = Path(__file__).parent.parent / 'templates'  #* este arquivo mora em web/; os templates ficam na raiz do pacote
 
-TEMPLATES = Jinja2Templates(
-    #! `.parent.parent`: este arquivo mora em `web/`, e os templates ficam na
-    #! raiz do pacote. Com um `.parent` só, a pasta não existe.
-    directory=str(Path(__file__).parent.parent / "templates"))
+EXT_ACEITAS = {'.ab1', '.abi', '.scf'}  #* o que um lote pode conter
 
+RECADO = 'recado'  #* chave na sessao
 
-def _br(valor) -> str:
-    """Número no formato daqui: 99,4 e não 99.4.
+TAMANHO_DO_RECADO = 300  #* caracteres; um recado e uma frase, nao um log
 
-    Só na APRESENTAÇÃO. O CSV e o JSON continuam com ponto, porque são lidos por
-    programa (e o CSV vai para planilha e para o R). Misturar os dois na mesma
-    tela era o defeito: a página escrevia "25,1 MB" com vírgula e "96.500" com
-    ponto, e `96.500` em português lê-se noventa e seis mil e quinhentos.
-    """
-    texto = "" if valor is None else str(valor)
-    return texto.replace(".", ",") if texto else ""
+POLITICA_DE_SEGURANCA = ("default-src 'none'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                         "font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 
-
-TEMPLATES.env.filters["br"] = _br
+UM_ANO = 31536000  #* segundos, para o HSTS
 
 
 
-def _marcar_resposta(resposta, nonce: str) -> None:
-    """Carimba a política de segurança numa resposta. Fica em função à parte
-    porque a página de 500 precisa dos MESMOS cabeçalhos e **não passa por
-    middleware nenhum** — ver `_erro_nao_previsto`."""
-    h = resposta.headers
-    h["X-Robots-Tag"] = "noindex, nofollow, noarchive"
-    h["X-Content-Type-Options"] = "nosniff"
-    h["X-Frame-Options"] = "DENY"
-    h["Referrer-Policy"] = "same-origin"
-    h["Content-Security-Policy"] = (
-        "default-src 'none'; "
-        f"script-src 'self' 'nonce-{nonce}'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
-        "font-src 'self'; "
-        "connect-src 'self'; "
-        "form-action 'self'; "
-        "base-uri 'none'; "
-        "frame-ancestors 'none'")
-    if os.environ.get("EASYCONTIG_HTTPS_ONLY", "0") == "1":
-        h["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+def decimal_brasileiro(valor):
+
+    #* 99.4 -> "99,4"; None -> "". so na tela: o CSV vai para planilha e para o R, e "96.500" em portugues le-se noventa e seis mil e quinhentos
+
+    texto = '' if valor is None else str(valor)
+
+    return texto.replace('.', ',')
 
 
 
-EXT_ACEITAS = {".ab1", ".abi", ".scf"}
+
+TEMPLATES = Jinja2Templates(directory=str(PASTA_DE_TEMPLATES))
+
+TEMPLATES.env.filters['br'] = decimal_brasileiro
+
+TEMPLATES.env.filters['tamanho'] = tamanho
 
 
 
-# --------------------------------------------------------------------- sessão
-def _u(request: Request) -> auth.Usuario | None:
-    return auth.usuario_da_sessao(request)
+
+def instalacao_de(request):
+
+    return request.app.state.instalacao
 
 
-def _exigir(request: Request) -> auth.Usuario:
-    u = _u(request)
+
+
+def usuario(request):
+
+    return autenticacao.usuario_da_sessao(request.session)
+
+
+
+
+def exigir(request):
+
+    u = usuario(request)
+
     if not u:
-        raise HTTPException(status_code=401, detail="entre para continuar")
+        raise HTTPException(401, 'entre para continuar')
+
     return u
 
 
-# ------------------------------------------------------- recado de uma vez só
-# ⚠️ A MENSAGEM DE ERRO NÃO VIAJA MAIS NA URL (achado de 2026-08-11).
-#
-# O padrão antigo era `RedirectResponse("/bancos?erro=" + quote(texto))`, e a
-# página imprimia `{{ erro }}` direto do parâmetro. Como o leitor não conferia
-# nada, o texto exibido não era o que o app escreveu — era o que estivesse na
-# URL. Qualquer um monta `/labs?erro=sua+sessão+expirou,+reenvie+suas+
-# credenciais+em...` e a frase sai dentro da caixa de erro do próprio site, com
-# a autoridade visual dele. Não é XSS (o Jinja escapa, e foi conferido), é
-# falsificação de conteúdo — que é o que uma isca precisa.
-#
-# Podia ter virado um catálogo de códigos (`?erro=cota_bancos`), mas isso
-# obrigaria a jogar fora o detalhe das falhas de montagem, que é justamente o
-# que ajuda quem está tentando entender por que o banco não subiu. A sessão
-# resolve melhor: ela é um cookie ASSINADO pelo servidor, então o cliente não
-# consegue escrever nela, e o texto continua sendo exatamente o que o app pôs.
-#
-# "De uma vez só" é a outra metade: o recado é REMOVIDO ao ser lido, senão ele
-# reaparece em todo recarregamento da página e a pessoa fica olhando um erro que
-# já resolveu.
-_RECADO = "recado"
 
 
-def _por_recado(request: Request, texto: str) -> None:
-    request.session[_RECADO] = (texto or "")[:300]
+def por_recado(request, texto):
 
+    #* a mensagem NAO viaja na URL: `/labs?erro=sua+sessao+expirou...` sairia na caixa de erro do proprio site com a autoridade dele.
+    #* a sessao e assinada pelo servidor, entao o texto e sempre o que o app escreveu
 
-def _pegar_recado(request: Request) -> str:
-    return request.session.pop(_RECADO, "")
-
-
-def _referencias(u: auth.Usuario) -> list[dict]:
-    """As referências que esta conta pode escolher para identificar.
-
-    O curado vem primeiro e é o padrão: é o que produziu todos os resultados
-    validados até aqui (ADR 0037). Os demais só aparecem depois de montados —
-    oferecer o que não está pronto seria oferecer um erro.
-    """
-    itens = [{"id": "curado", "nome": "Banco curado do laboratório",
-              "detalhe": "18S + 16S · RAIC 2026 · o que validou os resultados até aqui",
-              "grupo": "Padrão"}]
-    for c in bancos.POR_ID.values():
-        if bancos.existe(cfg().data_dir, c.id):
-            e = bancos.estado(cfg().data_dir, c.id)
-            itens.append({"id": c.id, "nome": f"{c.nome} · {c.marcador}",
-                          "detalhe": f"{e.get('sequencias')} sequências do GenBank",
-                          "grupo": c.grupo})
-    for b in bancos.meus_bancos(cfg().data_dir, u.email):
-        itens.append({"id": b["id"], "nome": b["apelido"],
-                      "detalhe": f"{b.get('sequencias')} sequências suas",
-                      "grupo": "Meus bancos"})
-    return itens
-
-
-def _casca(u: auth.Usuario) -> dict:
-    """O que a barra lateral precisa, em qualquer página.
-
-    A lista de corridas mora na lateral porque é o que a pessoa volta para
-    consultar — o uso real é par a par (ADR 0051), e o que se acumula é o
-    histórico. Fica curta de propósito: a lateral é atalho, não arquivo.
-
-    `perfil_lateral` traz nome e foto porque a lateral mostrava a INICIAL do
-    e-mail mesmo depois de a pessoa ter enviado a foto — que aparecia só na
-    página de perfil. Quem troca a foto e continua vendo "GU" conclui, com
-    razão, que o envio não funcionou.
-    """
-    p = perfil.pegar(cfg().sqlite_path, u.email) or {}
-    return {
-        "usuario": u,
-        "corridas": fila.listar(cfg().sqlite_path, dono=u.email, limite=25),
-        "perfil_lateral": {"nome": p.get("nome") or "", "foto": p.get("foto") or ""},
-        # O contador de pedidos esperando ESTA conta. Vai na casca, e não só na
-        # página de pedidos, porque este app **não manda e-mail**: se o número
-        # não estiver na lateral de toda página, um pedido pode ficar meses sem
-        # ninguém saber que chegou. É um COUNT com índice próprio
-        # (`idx_pedidos_para`), medido em microssegundos.
-        "pedidos_pendentes": pedidos.contar_pendentes(cfg().sqlite_path, u.email),
-    }
-
-
-def _lote_do_usuario(lote_id: str, u: auth.Usuario) -> dict:
-    lote = fila.pegar(cfg().sqlite_path, lote_id)
-    if not lote:
-        raise HTTPException(status_code=404, detail="lote não encontrado")
-    # Dono confere mesmo com o id sendo aleatório: o link é compartilhável por
-    # descuido, e um .ab1 não publicado do laboratório não pode vazar por URL
-    # adivinhada nem por link colado no grupo errado.
-    if lote["dono"] != u.email:
-        raise HTTPException(status_code=404, detail="lote não encontrado")
-    return lote
+    request.session[RECADO] = (texto or '')[:TAMANHO_DO_RECADO]
 
 
 
 
-#* Toma uma das vagas de trabalho pesado (`tracy`, `blastn`), ou recusa NA HORA
-#* com 503. Não espera por vaga: esperar seguraria a thread, que é exatamente o
-#* que se quer liberar.
-#! O semáforo mora no `servidor_web`, e é lido aqui por importação TARDIA. Não é
-#!   capricho: os testes ajustam `EASYCONTIG_MAX_PESADAS` e recarregam o servidor,
-#!   e só assim esta função enxerga o semáforo NOVO em vez do antigo.
-@contextmanager
-def _vaga_pesada():
-    from .. import servidor_web
-    if not servidor_web._VAGAS_PESADAS.acquire(blocking=False):
-        raise HTTPException(
-            status_code=503,
-            detail="o servidor está ocupado montando outras amostras; tente de novo",
-            headers={"Retry-After": "5"})
-    try:
-        yield
-    finally:
-        servidor_web._VAGAS_PESADAS.release()
+def pegar_recado(request):
+
+    #* le e apaga: senao o erro reaparece a cada recarregamento, depois de resolvido
+
+    return request.session.pop(RECADO, '')
+
+
+
+
+def quer_html(request):
+
+    return 'text/html' in request.headers.get('accept', '')
+
+
+
+
+def marcar_resposta(resposta, nonce, https_only=False):
+
+    #* em funcao a parte porque a pagina de 500 precisa dos MESMOS cabecalhos e nao passa por middleware nenhum
+
+    cabecalhos = resposta.headers
+
+    cabecalhos['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
+    cabecalhos['X-Content-Type-Options'] = 'nosniff'
+    cabecalhos['X-Frame-Options'] = 'DENY'
+    cabecalhos['Referrer-Policy'] = 'same-origin'
+    cabecalhos['Content-Security-Policy'] = POLITICA_DE_SEGURANCA.format(nonce=nonce)
+
+    if https_only:
+        cabecalhos['Strict-Transport-Security'] = f'max-age={UM_ANO}; includeSubDomains'
+
+
+
+
+def main():
+
+    #* mostra os filtros e a pasta dos templates
+
+    print(f'templates em {PASTA_DE_TEMPLATES} ({"existe" if PASTA_DE_TEMPLATES.is_dir() else "NAO existe"})')
+
+    for valor in (99.4, 12, None, 'abc'):
+        print(f'  br({valor!r}) = {decimal_brasileiro(valor)!r}')
+
+    for n in (0, 1536000, 3 * 1024 ** 3):
+        print(f'  tamanho({n}) = {tamanho(n)!r}')
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

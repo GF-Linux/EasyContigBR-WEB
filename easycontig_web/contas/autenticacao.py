@@ -1,323 +1,511 @@
-#? AUTENTICAÇÃO — Decisão sobre quem entra 06/08/2026
-#!
-#! 1. Quem é o usuário, e se ele pode entrar. Dois provedores na mesma costura.
-#! 2. `dev` — digita o e-mail e entra. Só para desenvolvimento local, e recusa
-#!    subir se não estiver explicitamente ligado.
-#! 3. `google` — OAuth do Google, como decidido na ADR 0050. Gov.br descartado.
-#! 4. `EASYCONTIG_DOMINIO=ufrrj.br` restringe a entrada ao domínio institucional.
-#! 5. É isso que permite usar conta Google comum e ainda ser serviço da
-#!    universidade: o Google prova QUEM é, o domínio decide SE entra.
-#! 6. O caminho `google` NUNCA foi exercitado com credencial real — depende de
-#!    CLIENT_ID/SECRET que só o autor cria no console. O fluxo está inteiro
-#!    (ida, volta, troca do código por token, leitura do e-mail), mas até alguém
-#!    rodar com credencial de verdade, considere NÃO TESTADO.
-from __future__ import annotations
+"""
+autenticacao.py — quem e o usuario e se ele pode entrar: dois provedores na mesma costura, e o dominio decidindo a porta.
+
+`dev` — digita o e-mail e entra. So para desenvolvimento local; conferir_producao
+(configuracao.py) recusa subir assim em servidor. `google` — OAuth do Google: o
+Google prova QUEM e, e EASYCONTIG_DOMINIO decide SE entra. E isso que permite
+usar conta Google comum e ainda ser servico da universidade. Gov.br foi
+descartado (ADR 0050).
+
+O caminho `google` NUNCA foi exercitado com credencial real — depende de
+CLIENT_ID/SECRET que so o autor cria no console. O fluxo esta inteiro (ida,
+volta, troca do codigo por token, leitura do e-mail), e a bancada o prova
+contra um Google FALSO (servidor HTTP local); ate alguem rodar com credencial
+de verdade, considere NAO TESTADO contra o Google.
+
+
+COMO FUNCIONA — a entrada
+=========================
+
+    modo()  ->  'dev'                        POST /entrar: e-mail digitado
+                  |  dominio_ok(email, cfg.dominio_permitido)?  nao -> recado "conta fora do dominio ..."
+                  v
+                entrar_na_sessao(sessao, Usuario(email, nome=local-part))   (o nome so serve para a lateral)
+
+            ->  'google'                     GET /auth/google
+                  |  Google(client_id, secret).url_de_ida(sessao, redirect_uri)   guarda `state` na sessao, manda ao Google
+                  v                          GET /auth/google/volta?code&state   (ou ?error -> mensagem_de_erro_oauth)
+                Google.usuario_da_volta(sessao, code, state, redirect_uri)
+                  |  state confere? (senao 400)  ->  troca o code por token  ->  le o perfil  ->  email_verified? (senao 403)
+                  |  o Google recusou (HTTP 4xx/5xx)? -> 502 com o codigo publico dele, "nao adianta tentar de novo"
+                  |  o Google nao respondeu (rede, DNS, tempo)? -> 502 "tente de novo"
+                  v
+                Usuario(email, nome=declarado ou local-part, nome_google=declarado)
+                  |  dominio_ok?  nao -> recado
+                  v
+                entrar_na_sessao(sessao, usuario)      grava {email, nome} no cookie assinado; nome_google fica FORA
+
+    usuario_da_sessao(sessao) -> Usuario ou None       (toda pagina; `Usuario(**dict)` monta a partir do cookie)
+    sair_da_sessao(sessao)
+
+    dominio_ok: sem dominio configurado, qualquer conta entra (desenvolvimento). `*` = aberto POR ESCRITO.
+    `ufrrj.br` cobre `lhv.ufrrj.br` (universidade reparte o e-mail por unidade) e NAO cobre `falso-ufrrj.br`;
+    `=ufrrj.br` e o dominio exato; `@ufrrj.br` digitado ainda e dominio; item com `@` no meio e UMA pessoa, exata.
+    dominios_publicos: a lista SEM as pessoas nomeadas — e o que a pagina /entrar (publica) pode mostrar.
+
+
+COMO USAR
+=========
+
+    from easycontig_web.contas import autenticacao
+
+    autenticacao.modo(), autenticacao.google_configurado(), autenticacao.queixa_do_client_id()
+    autenticacao.dominio_ok('ana@lhv.ufrrj.br', cfg.dominio_permitido)
+    autenticacao.dominios_publicos('ufrrj.br, juaredbr@gmail.com')        #* 'ufrrj.br'
+
+    google = autenticacao.provedor_google()                                #* Google(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)
+    ida = google.url_de_ida(request.session, redirect_uri)
+    usuario = google.usuario_da_volta(request.session, code, state, redirect_uri)   #* HTTPException 400/502/403
+
+    autenticacao.entrar_na_sessao(request.session, usuario)
+    autenticacao.usuario_da_sessao(request.session)                       #* Usuario ou None
+    autenticacao.sair_da_sessao(request.session)
+
+    python -m easycontig_web.contas.autenticacao      #* modo, Google, dominio, e confere um e-mail contra a lista
+
+
+O QUE MUDOU DO autenticacao.py ORIGINAL (323 linhas)
+====================================================
+
+ 1. Google e uma classe: dona do client_id/secret e das tres URLs, e a unica
+    coisa aqui que fala com a rede. url_de_ida e usuario_da_volta viraram
+    metodos; provedor_google() monta a instancia a partir do ambiente (o
+    original lia os.environ dentro de cada funcao). A troca do codigo por
+    token e a leitura do perfil ganharam metodos proprios (trocar_codigo,
+    perfil_do), que e o que a bancada exercita contra um Google falso.
+
+ 2. As funcoes de sessao recebem a SESSAO (request.session, um dict), nao o
+    Request: e so nela que mexem, e assim rodam sem FastAPI na bancada.
+
+ 3. exigir_usuario nao veio: nenhum chamador (o comum.py tem o seu proprio
+    `_exigir`, que redireciona para /entrar em vez de responder 401).
+    Usuario.dominio tambem nao: nenhum chamador.
+
+ 4. Usuario e uma classe simples (era dataclass congelada); `Usuario(**dict)`
+    continua montando a partir do cookie.
+
+ 5. Os avisos vao para o logging (REGISTRO), nao para print em stderr.
+
+ 6. Nomes: _e_pessoa_nomeada -> e_pessoa_nomeada; _ERRO_OAUTH ->
+    ERROS_DO_OAUTH (+ ERRO_GENERICO); FORMA_CLIENT_ID -> FORMA_DO_CLIENT_ID;
+    _erro_do_google -> codigo_do_erro_do_google; MODO_DEV/MODO_GOOGLE;
+    ESCOPO; TEMPO_LIMITE.
+
+ 7. Nada mais mudou: as chaves do cookie (`usuario`, `oauth_estado`) e o que
+    vai dentro dele sao os mesmos — a sessao de quem esta logado na VPS
+    sobrevive a troca; os textos de tela, os codigos HTTP e a regra do
+    dominio sao letra por letra os do original.
+
+
+POR QUE NASCE CLASSE
+====================
+
+    Google e dono de um recurso externo (o provedor OAuth, com credencial):
+    classe. Usuario e o registro da sessao como objeto. modo, dominio_ok,
+    dominios_publicos, queixa_do_client_id e as tres funcoes de sessao sao
+    texto/dict -> valor: funcoes.
+"""
+
+import json
+
+import logging
 
 import os
+
 import re
-from dataclasses import dataclass
 
-from fastapi import HTTPException, Request
+import secrets
 
-SESSAO_CHAVE = "usuario"
+import urllib.error
+
+import urllib.parse
+
+import urllib.request
+
+from fastapi import HTTPException
 
 
-@dataclass(frozen=True)
+
+REGISTRO = logging.getLogger('easycontig.autenticacao')
+
+SESSAO_CHAVE = 'usuario'  #* a chave do cookie de sessao onde mora {email, nome}; NAO mudar: e o que ja esta no navegador de quem entrou
+
+ESTADO_CHAVE = 'oauth_estado'  #* onde a ida guarda o `state` que a volta confere
+
+MODO_DEV, MODO_GOOGLE = 'dev', 'google'  #* os dois provedores (EASYCONTIG_AUTH)
+
+FORMA_DO_CLIENT_ID = re.compile(r'^\d+-[a-z0-9_]+\.apps\.googleusercontent\.com$')  #* um ID de cliente do Google e `<numeros>-<letras>.apps.googleusercontent.com`
+
+AUTORIZA = 'https://accounts.google.com/o/oauth2/v2/auth'  #* para onde a pessoa vai
+
+TOKEN = 'https://oauth2.googleapis.com/token'  #* onde o codigo vira token
+
+PERFIL = 'https://openidconnect.googleapis.com/v1/userinfo'  #* onde o token vira e-mail
+
+ESCOPO = 'openid email profile'  #* so o que decide a entrada: e-mail confirmado e nome declarado
+
+TEMPO_LIMITE = 20  #* segundos por chamada ao Google
+
+ERROS_DO_OAUTH = {
+    'access_denied': 'entrada cancelada',
+    'admin_policy_enforced': 'a política da sua organização não permitiu a entrada',
+    'invalid_request': 'não foi possível entrar pelo Google; tente de novo',
+    'unauthorized_client': 'não foi possível entrar pelo Google; tente de novo',
+    'unsupported_response_type': 'não foi possível entrar pelo Google; tente de novo',
+    'invalid_scope': 'não foi possível entrar pelo Google; tente de novo',
+    'server_error': 'o Google recusou a entrada agora; tente de novo em instantes',
+    'temporarily_unavailable': 'o Google recusou a entrada agora; tente de novo em instantes',
+}  #* as frases do retorno do OAuth, ESCRITAS PELO SERVIDOR: o `error` da query e texto de quem monta o link, e ecoa-lo na
+   #* pagina de login deixaria um atacante redigir a frase que a vitima le no nosso site (achado F3). RFC 6749 4.1.2.1 + Google
+
+ERRO_GENERICO = 'não foi possível entrar pelo Google'  #* qualquer codigo fora da tabela; o valor cru vai para o log, nunca para a tela
+
+
+
+
 class Usuario:
-    email: str
-    nome: str = ""
-    # O nome que o provedor DECLAROU, separado do `nome` acima porque aquele cai
-    # no local-part do e-mail quando não há nada. Para a lateral esse tombo é
-    # inofensivo — é o próprio endereço de quem está lendo. Para o diretório
-    # `/labs` não é: foi exatamente assim que o e-mail alheio vazava (achado L1
-    # de 2026-08-08). Quem grava perfil no primeiro login usa ESTE campo, que
-    # fica vazio quando ninguém declarou nada.
-    # ⚠️ Não entra na sessão (`entrar_na_sessao` grava só email e nome): tem
-    # padrão para que `Usuario(**d)` continue montando a partir do cookie.
-    nome_google: str = ""
 
-    @property
-    def dominio(self) -> str:
-        return self.email.rsplit("@", 1)[-1].lower() if "@" in self.email else ""
+    #* quem esta na sessao. nome_google e o que o provedor DECLAROU, separado do nome porque este cai no local-part do e-mail
+    #* quando nao ha nada: para a lateral o tombo e inofensivo (e o proprio endereco de quem le); para o diretorio /labs nao
+    #* e — foi assim que o e-mail alheio vazava (achado L1). quem grava perfil no primeiro login usa nome_google, que fica
+    #* vazio quando ninguem declarou nada. nome_google NAO entra na sessao (entrar_na_sessao grava so email e nome): tem
+    #* padrao para que Usuario(**dict) continue montando a partir do cookie
 
+    def __init__(self, email, nome='', nome_google=''):
 
-def modo() -> str:
-    return os.environ.get("EASYCONTIG_AUTH", "dev").lower()
+        self.email = email
+
+        self.nome = nome  #* o que a lateral mostra
+
+        self.nome_google = nome_google  #* o que o provedor declarou; '' no modo dev e no cookie
 
 
-def google_configurado() -> bool:
-    return bool(os.environ.get("GOOGLE_CLIENT_ID")
-                and os.environ.get("GOOGLE_CLIENT_SECRET"))
+    def __repr__(self):
+
+        return f'Usuario({self.email!r}, nome={self.nome!r})'
 
 
-# Um ID de cliente do Google é `<números>-<letras>.apps.googleusercontent.com`.
-FORMA_CLIENT_ID = re.compile(r"^\d+-[a-z0-9_]+\.apps\.googleusercontent\.com$")
 
 
-def queixa_do_client_id(valor: str | None = None) -> str:
-    """Diz o que há de errado com o `GOOGLE_CLIENT_ID`, ou `""` se está bem.
+def modo():
 
-    Existe porque o erro do outro lado é mudo: um valor que não corresponde a
-    cliente nenhum só se revela na página do Google, como
-    `401 invalid_client — The OAuth client was not found`, depois de a pessoa já
-    ter escolhido a conta. Nada no nosso lado protesta: `google_configurado()`
-    aceita qualquer texto não vazio.
+    #* 'dev' ou 'google' (EASYCONTIG_AUTH; padrao dev)
 
-    Aconteceu em 2026-08-06 com o autor. Os três casos abaixo são os que dá para
-    ver **sem falar com o Google**, e cobrem o que de fato acontece: reticências
-    de exemplo copiadas da receita, aspas vindas do `.env`, e espaço de
-    copiar-e-colar. Não é validação de credencial — o Google segue sendo o único
-    que sabe se o cliente existe."""
-    bruto = os.environ.get("GOOGLE_CLIENT_ID", "") if valor is None else valor
+    return os.environ.get('EASYCONTIG_AUTH', MODO_DEV).lower()
+
+
+
+
+def google_configurado():
+
+    #* as duas credenciais estao no ambiente? nao diz se sao validas — so o Google sabe
+
+    return bool(os.environ.get('GOOGLE_CLIENT_ID') and os.environ.get('GOOGLE_CLIENT_SECRET'))
+
+
+
+
+def queixa_do_client_id(valor=None):
+
+    #* o que ha de errado com o GOOGLE_CLIENT_ID (do ambiente, ou `valor`), ou '' se esta bem. existe porque o erro do outro
+    #* lado e mudo: um valor que nao corresponde a cliente nenhum so se revela na pagina do Google (`401 invalid_client`)
+    #* depois de a pessoa ja ter escolhido a conta. os tres casos sao os que da para ver SEM falar com o Google e cobrem o que
+    #* de fato aconteceu (06/08/2026): reticencias do exemplo da receita, aspas vindas do .env, espaco de copiar-e-colar.
+    #! nao e validacao de credencial: quem sabe se o cliente existe e o Google
+
+    bruto = os.environ.get('GOOGLE_CLIENT_ID', '') if valor is None else valor
+
     if not bruto:
-        return ""                                  # ausente é outro assunto
+        return ''  #* ausente e outro assunto (google_configurado)
+
     if bruto != bruto.strip():
-        return ("GOOGLE_CLIENT_ID tem espaço ou quebra de linha nas pontas — "
-                "o Google compara a string inteira")
+        return 'GOOGLE_CLIENT_ID tem espaço ou quebra de linha nas pontas — o Google compara a string inteira'
+
     if bruto.strip('"\'') != bruto:
-        return ("GOOGLE_CLIENT_ID veio com aspas em volta; no `.env` o valor "
-                "vai cru, sem aspas")
-    if not FORMA_CLIENT_ID.match(bruto):
-        return (f"GOOGLE_CLIENT_ID não tem a forma de um ID do Google "
-                f"(`<números>-<letras>.apps.googleusercontent.com`): {bruto!r}. "
-                "Se ainda tem `…` ou `<>`, é o exemplo da receita, não a "
-                "credencial")
-    return ""
+        return 'GOOGLE_CLIENT_ID veio com aspas em volta; no `.env` o valor vai cru, sem aspas'
+
+    if not FORMA_DO_CLIENT_ID.match(bruto):
+        return (f'GOOGLE_CLIENT_ID não tem a forma de um ID do Google (`<números>-<letras>.apps.googleusercontent.com`): {bruto!r}. '
+                'Se ainda tem `…` ou `<>`, é o exemplo da receita, não a credencial')
+
+    return ''
 
 
-def dominio_ok(email: str, dominio_permitido: str) -> bool:
-    """Sem domínio configurado, qualquer conta entra — de propósito, para o
-    desenvolvimento local não exigir configuração. Em produção o `.env` define
-    `EASYCONTIG_DOMINIO` e a checagem passa a valer.
 
-    **O SUBDOMÍNIO ENTRA JUNTO** (2026-08-06). A comparação era do domínio
-    inteiro, e universidade brasileira reparte o e-mail por unidade: com
-    `ufrrj.br` na lista, `@ppgcv.ufrrj.br` e `@lhv.ufrrj.br` eram RECUSADOS —
-    justamente o pessoal do laboratório para quem o app é feito, e a recusa
-    chegaria como "conta fora do domínio", sem pista do motivo.
 
-    O ponto exigido antes do sufixo é o que separa filho de sósia: `ufrrj.br`
-    cobre `lhv.ufrrj.br`, e **não** cobre `falso-ufrrj.br`, que é um domínio de
-    outro dono. Quem quiser o domínio exato e nada abaixo dele escreve `=`
-    na frente: `=ufrrj.br`.
+def dominio_ok(email, dominio_permitido):
 
-    **ENDEREÇO NOMEADO** (2026-08-06): item com `@` no meio vale por uma pessoa
-    só, exata. Nasceu de um pedido concreto — liberar `juaredbr@gmail.com`, que
-    é a conta pessoal do autor — e a alternativa seria pôr `gmail.com` na lista,
-    abrindo o Gmail inteiro para tirar UMA pessoa do frio. É o que faz da lista
-    uma porta com nomes escritos e não uma heurística: a instituição, mais as
-    exceções, cada uma com nome e sobrenome no `.env`.
-    """
+    #* este e-mail pode entrar, segundo a lista EASYCONTIG_DOMINIO? sem lista, qualquer conta entra — de proposito, para o
+    #* desenvolvimento local nao exigir configuracao (em producao conferir_producao recusa a lista em branco).
+    #* cada item da lista, separado por virgula: `*` aberto por escrito; `ufrrj.br` o dominio e tudo abaixo dele
+    #* (`lhv.ufrrj.br` sim, `falso-ufrrj.br` nao — o ponto antes do sufixo separa filho de sosia); `=ufrrj.br` so o exato;
+    #* `@ufrrj.br` digitado ainda e dominio; `pessoa@gmail.com` e UMA pessoa, exata — e o que faz da lista uma porta com
+    #* nomes escritos, e nao `gmail.com` inteiro para tirar uma pessoa do frio
+
     if not dominio_permitido:
         return True
-    if "@" not in email:
+
+    if '@' not in email:
         return False
-    # `*` = aberto POR ESCRITO. Existe para que "qualquer conta entra" possa ser
-    # uma decisão declarada em vez de um campo em branco — em produção o campo
-    # em branco passa a ser recusado (`conferir_producao`).
-    if "*" in {d.strip() for d in dominio_permitido.split(",")}:
+
+    if '*' in {item.strip() for item in dominio_permitido.split(',')}:
         return True
-    completo = email.strip().lower().rstrip(".")
-    de = completo.rsplit("@", 1)[-1]
-    for bruto in dominio_permitido.split(","):
-        d = bruto.strip().lower().rstrip(".")
-        if d.startswith("@"):            # "@ufrrj.br" digitado: ainda é domínio
-            d = d[1:]
-        if not d:
+
+    completo = email.strip().lower().rstrip('.')
+
+    de = completo.rsplit('@', 1)[-1]
+
+    for bruto in dominio_permitido.split(','):
+
+        item = bruto.strip().lower().rstrip('.')
+
+        if item.startswith('@'):
+            item = item[1:]
+
+        if not item:
             continue
-        if "@" in d:                     # pessoa nomeada, e só ela
-            if completo == d:
+
+        if '@' in item:
+            if completo == item:
                 return True
-        elif d.startswith("="):
-            if de == d[1:]:
+
+        elif item.startswith('='):
+            if de == item[1:]:
                 return True
-        elif de == d or de.endswith("." + d):
+
+        elif de == item or de.endswith('.' + item):
             return True
+
     return False
 
 
-def _e_pessoa_nomeada(bruto: str) -> bool:
-    """Um item da allowlist identifica UMA pessoa (tem `@` no meio)?
-
-    Espelha exatamente a regra de `dominio_ok`: tira o `@` da frente — que ali
-    ainda é domínio (`@ufrrj.br`) — e, se sobrar um `@`, é endereço nomeado.
-    Mora ao lado de `dominio_ok` de propósito: a definição de "isto é uma
-    pessoa" existe UMA vez, senão o filtro público e a checagem de acesso
-    divergem no dia em que alguém mudar a sintaxe.
-    """
-    d = bruto.strip().lower()
-    if d.startswith("@"):
-        d = d[1:]
-    return "@" in d
 
 
-def dominios_publicos(dominio_permitido: str) -> str:
-    """A allowlist SEM os endereços nomeados — o que pode ser mostrado a quem
-    ainda não entrou.
+def e_pessoa_nomeada(bruto):
 
-    A página `/entrar` é pública (o repositório é público e a rota não exige
-    sessão), e `EASYCONTIG_DOMINIO` guarda, além do domínio institucional,
-    endereços pessoais liberados um a um (ver `dominio_ok`). Renderizar a lista
-    crua entrega a qualquer visitante anônimo o e-mail exato de cada pessoa
-    autorizada — dado pessoal de um lado, mapa de alvos de phishing do outro.
+    #* um item da lista identifica UMA pessoa (tem `@` no meio)? espelha a regra de dominio_ok: tira o `@` da frente — que
+    #* ali ainda e dominio — e, se sobrar um `@`, e endereco nomeado. a definicao existe UMA vez, senao o filtro publico
+    #* e a checagem de acesso divergem no dia em que alguem mudar a sintaxe
 
-    O domínio institucional CONTINUA aparecendo: ele orienta quem vai entrar
-    ("é com a conta da universidade") e não identifica ninguém. Só os nomes
-    saem. Uma lista que fosse só de pessoas devolve vazio, e a tela então não
-    promete restrição alguma em vez de listar gente.
-    """
-    itens = [b.strip() for b in dominio_permitido.split(",")]
-    return ", ".join(b for b in itens if b and not _e_pessoa_nomeada(b))
+    item = bruto.strip().lower()
+
+    if item.startswith('@'):
+        item = item[1:]
+
+    return '@' in item
 
 
-# As frases de erro do retorno do OAuth, ESCRITAS PELO SERVIDOR. O `error` que o
-# provedor devolve na query é texto controlável por quem monta o link, e ecoá-lo
-# na página de login (que é a nossa, com o nosso domínio e o nosso cadeado)
-# deixa um atacante escolher a mensagem que a vítima lê como se fosse do site —
-# a falsificação de conteúdo do achado F3. Códigos são os do RFC 6749 §4.1.2.1
-# mais os do Google; qualquer outro cai na frase genérica, e o valor cru vai
-# para o log, nunca para a tela.
-_ERRO_OAUTH = {
-    "access_denied": "entrada cancelada",
-    "admin_policy_enforced": "a política da sua organização não permitiu a entrada",
-    "invalid_request": "não foi possível entrar pelo Google; tente de novo",
-    "unauthorized_client": "não foi possível entrar pelo Google; tente de novo",
-    "unsupported_response_type": "não foi possível entrar pelo Google; tente de novo",
-    "invalid_scope": "não foi possível entrar pelo Google; tente de novo",
-    "server_error": "o Google recusou a entrada agora; tente de novo em instantes",
-    "temporarily_unavailable": "o Google recusou a entrada agora; tente de novo em instantes",
-}
 
 
-def mensagem_de_erro_oauth(codigo: str) -> str:
-    """Traduz o `error` do provedor para uma frase do servidor. NUNCA devolve o
-    texto recebido: código desconhecido vira a genérica."""
-    return _ERRO_OAUTH.get((codigo or "").strip().lower(),
-                           "não foi possível entrar pelo Google")
+def dominios_publicos(dominio_permitido):
+
+    #* a lista SEM os enderecos nomeados: o que pode ser mostrado a quem ainda nao entrou. a pagina /entrar e publica, e a
+    #* lista crua entregaria a qualquer visitante o e-mail exato de cada pessoa autorizada (dado pessoal e mapa de phishing).
+    #* o dominio institucional continua: orienta ("e com a conta da universidade") e nao identifica ninguem. lista so de
+    #* pessoas devolve '' — e a tela nao promete restricao alguma em vez de listar gente
+
+    itens = [item.strip() for item in dominio_permitido.split(',')]
+
+    return ', '.join(item for item in itens if item and not e_pessoa_nomeada(item))
 
 
-AUTORIZA = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN = "https://oauth2.googleapis.com/token"
-PERFIL = "https://openidconnect.googleapis.com/v1/userinfo"
-ESTADO_CHAVE = "oauth_estado"
 
 
-def url_de_ida(request: Request, redirect_uri: str) -> str:
-    """Para onde mandar quem clicou em "Entrar com Google"."""
-    import secrets
-    import urllib.parse
-    estado = secrets.token_urlsafe(24)
-    request.session[ESTADO_CHAVE] = estado
-    return AUTORIZA + "?" + urllib.parse.urlencode({
-        "client_id": os.environ["GOOGLE_CLIENT_ID"],
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "state": estado,
-        # `select_account` evita o login silencioso em máquina compartilhada,
-        # que é o caso de um computador de laboratório.
-        "prompt": "select_account",
-    })
+def mensagem_de_erro_oauth(codigo):
+
+    #* o `error` do provedor como frase do servidor. NUNCA devolve o texto recebido: codigo desconhecido vira a generica
+
+    return ERROS_DO_OAUTH.get((codigo or '').strip().lower(), ERRO_GENERICO)
 
 
-def usuario_da_volta(request: Request, code: str, estado: str,
-                     redirect_uri: str) -> Usuario:
-    """Confere o `state`, troca o código por token e devolve quem entrou."""
-    import json
-    import sys
-    import urllib.error
-    import urllib.parse
-    import urllib.request
 
-    esperado = request.session.pop(ESTADO_CHAVE, None)
-    if not esperado or estado != esperado:
-        # Sem isto, um link forjado completaria o login da conta do atacante
-        # dentro do navegador da vítima.
-        raise HTTPException(status_code=400, detail="estado inválido; tente entrar de novo")
 
-    corpo = urllib.parse.urlencode({
-        "code": code,
-        "client_id": os.environ["GOOGLE_CLIENT_ID"],
-        "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
-        "redirect_uri": redirect_uri,
-        "grant_type": "authorization_code",
-    }).encode()
-    # ⚠️ "o Google não respondeu" era MENTIRA na maioria das falhas.
-    #
-    # Em 2026-08-06 a volta do login deu `502 — o Google não respondeu; tente de
-    # novo`, e o Google TINHA respondido: `401 invalid_client — The provided
-    # client secret is invalid`. A frase ainda mandava tentar de novo, o pior
-    # conselho possível para um erro de configuração que não se resolve sozinho.
-    # Um `except Exception` transformava TODA falha em "não respondeu",
-    # inclusive as que chegavam com o motivo escrito dentro.
-    #
-    # Agora: recusa do Google é recusa, e o código dele (`invalid_client`,
-    # `invalid_grant`, `redirect_uri_mismatch`) vai para a tela — são códigos
-    # públicos do OAuth, não vazam segredo, e é deles que sai o que fazer. O
-    # corpo inteiro vai para o log, onde quem opera consegue ler.
-    def _erro_do_google(bruto: bytes) -> str:
-        try:
-            d = json.loads(bruto)
-            return str(d.get("error") or "")[:60]
-        except Exception:                        # noqa: BLE001
-            return ""
+def codigo_do_erro_do_google(bruto):
+
+    #* o campo `error` do JSON de recusa do Google (ate 60 caracteres), ou '' se o corpo nao e JSON com ele
 
     try:
-        with urllib.request.urlopen(
-                urllib.request.Request(TOKEN, data=corpo), timeout=20) as r:
-            token = json.loads(r.read())["access_token"]
-        req = urllib.request.Request(PERFIL, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            perfil = json.loads(r.read())
-    except HTTPException:
-        raise
-    except urllib.error.HTTPError as e:
-        corpo_erro = b""
+        return str(json.loads(bruto).get('error') or '')[:60]
+
+    except Exception:
+        return ''
+
+
+
+
+def usuario_da_sessao(sessao):
+
+    #* quem esta logado, ou None
+
+    dados = sessao.get(SESSAO_CHAVE)
+
+    return Usuario(**dados) if dados else None
+
+
+
+
+def entrar_na_sessao(sessao, usuario):
+
+    #* grava so email e nome no cookie assinado; nome_google fica fora (ver Usuario)
+
+    sessao[SESSAO_CHAVE] = {'email': usuario.email, 'nome': usuario.nome}
+
+
+
+
+def sair_da_sessao(sessao):
+
+    sessao.pop(SESSAO_CHAVE, None)
+
+
+
+
+class Google:
+
+    #* o provedor OAuth: dono das credenciais e o unico que fala com o Google
+
+    def __init__(self, client_id, client_secret):
+
+        self.client_id = client_id
+
+        self.client_secret = client_secret
+
+
+    def url_de_ida(self, sessao, redirect_uri):
+
+        #* para onde mandar quem clicou em "Entrar com Google"; guarda na sessao o `state` que a volta confere
+
+        estado = secrets.token_urlsafe(24)
+
+        sessao[ESTADO_CHAVE] = estado
+
+        return AUTORIZA + '?' + urllib.parse.urlencode({
+            'client_id': self.client_id,
+            'redirect_uri': redirect_uri,
+            'response_type': 'code',
+            'scope': ESCOPO,
+            'state': estado,
+            'prompt': 'select_account',  #* evita o login silencioso em maquina compartilhada, que e o caso de um computador de laboratorio
+        })
+
+
+    def trocar_codigo(self, code, redirect_uri):
+
+        #* o codigo da volta vira access_token (POST no TOKEN); urllib.error.HTTPError quando o Google recusa
+
+        corpo = urllib.parse.urlencode({
+            'code': code,
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'redirect_uri': redirect_uri,
+            'grant_type': 'authorization_code',
+        }).encode()
+
+        with urllib.request.urlopen(urllib.request.Request(TOKEN, data=corpo), timeout=TEMPO_LIMITE) as resposta:
+            return json.loads(resposta.read())['access_token']
+
+
+    def perfil_do(self, token):
+
+        #* o userinfo do token: dict com email, email_verified, name
+
+        pedido = urllib.request.Request(PERFIL, headers={'Authorization': f'Bearer {token}'})
+
+        with urllib.request.urlopen(pedido, timeout=TEMPO_LIMITE) as resposta:
+            return json.loads(resposta.read())
+
+
+    def usuario_da_volta(self, sessao, code, estado, redirect_uri):
+
+        #* confere o `state`, troca o codigo por token, le o perfil e devolve quem entrou. HTTPException com o que fazer:
+        #* 400 state errado; 502 o Google recusou (com o codigo publico dele: invalid_client, invalid_grant,
+        #* redirect_uri_mismatch — e configuracao do servidor, nao adianta tentar de novo); 502 o Google nao respondeu
+        #* (rede, DNS, tempo: ai sim tente de novo); 403 e-mail nao confirmado
+        #! "o Google nao respondeu" era MENTIRA na maioria das falhas (06/08/2026): um except Exception transformava TODA
+        #! falha nisso, inclusive `401 invalid_client — The provided client secret is invalid`, que chegava com o motivo
+        #! escrito dentro e mandava tentar de novo. recusa e recusa; o corpo inteiro vai para o log
+
+        esperado = sessao.pop(ESTADO_CHAVE, None)
+
+        if not esperado or estado != esperado:
+            raise HTTPException(status_code=400, detail='estado inválido; tente entrar de novo')  #* sem isto, um link forjado completaria o login da conta do atacante no navegador da vitima
+
         try:
-            corpo_erro = e.read()
-        except Exception:                        # noqa: BLE001
-            pass
-        print(f"  ⚠️  Google recusou a entrada (HTTP {e.code}): "
-              f"{corpo_erro.decode('utf-8', 'replace')[:400]}",
-              file=sys.stderr, flush=True)
-        codigo = _erro_do_google(corpo_erro)
-        raise HTTPException(
-            status_code=502,
-            detail=("o Google recusou esta entrada"
-                    + (f" ({codigo})" if codigo else "")
-                    + " — é configuração do servidor, não adianta tentar de novo. "
-                      "O motivo completo está no log."))
-    except Exception as e:                       # noqa: BLE001
-        # Aqui sim: rede, DNS, tempo esgotado — o Google realmente não respondeu.
-        print(f"  ⚠️  Não foi possível falar com o Google: {type(e).__name__}: {e}",
-              file=sys.stderr, flush=True)
-        raise HTTPException(status_code=502, detail="o Google não respondeu; tente de novo")
+            perfil = self.perfil_do(self.trocar_codigo(code, redirect_uri))
 
-    email = (perfil.get("email") or "").strip().lower()
-    if not email or not perfil.get("email_verified"):
-        # Conta sem e-mail confirmado não prova domínio, e é o domínio que
-        # decide quem entra.
-        raise HTTPException(status_code=403, detail="o Google não confirmou este e-mail")
-    declarado = (perfil.get("name") or "").strip()
-    return Usuario(email=email, nome=declarado or email.split("@")[0],
-                   nome_google=declarado)
+        except urllib.error.HTTPError as erro:
 
+            try:
+                corpo = erro.read()
 
-def usuario_da_sessao(request: Request) -> Usuario | None:
-    d = request.session.get(SESSAO_CHAVE)
-    return Usuario(**d) if d else None
+            except Exception:
+                corpo = b''
 
+            REGISTRO.warning('Google recusou a entrada (HTTP %s): %s', erro.code, corpo.decode('utf-8', 'replace')[:400])
 
-def entrar_na_sessao(request: Request, u: Usuario) -> None:
-    request.session[SESSAO_CHAVE] = {"email": u.email, "nome": u.nome}
+            codigo = codigo_do_erro_do_google(corpo)
+
+            raise HTTPException(status_code=502, detail='o Google recusou esta entrada' + (f' ({codigo})' if codigo else '')
+                                + ' — é configuração do servidor, não adianta tentar de novo. O motivo completo está no log.')
+
+        except Exception as erro:
+
+            REGISTRO.warning('Não foi possível falar com o Google: %s: %s', type(erro).__name__, erro)
+
+            raise HTTPException(status_code=502, detail='o Google não respondeu; tente de novo')
+
+        email = (perfil.get('email') or '').strip().lower()
+
+        if not email or not perfil.get('email_verified'):
+            raise HTTPException(status_code=403, detail='o Google não confirmou este e-mail')  #* conta sem e-mail confirmado nao prova dominio, e e o dominio que decide quem entra
+
+        declarado = (perfil.get('name') or '').strip()
+
+        return Usuario(email, nome=declarado or email.split('@')[0], nome_google=declarado)
 
 
-def sair_da_sessao(request: Request) -> None:
-    request.session.pop(SESSAO_CHAVE, None)
+    def __repr__(self):
+
+        return f'Google({self.client_id!r})'  #* o secret nunca aparece
 
 
-def exigir_usuario(request: Request) -> Usuario:
-    u = usuario_da_sessao(request)
-    if not u:
-        raise HTTPException(status_code=401, detail="não autenticado")
-    return u
+
+
+def provedor_google():
+
+    #* o Google com as credenciais do ambiente; KeyError se faltam (google_configurado() diz antes)
+
+    return Google(os.environ['GOOGLE_CLIENT_ID'], os.environ['GOOGLE_CLIENT_SECRET'])
+
+
+
+
+def main():
+
+    from easycontig_web import configuracao
+
+    cfg = configuracao.carregar()
+
+    print(f'modo de entrada: {modo()}')
+
+    print(f'Google configurado: {"sim" if google_configurado() else "nao"}' + (f'  ({provedor_google()!r})' if google_configurado() else ''))
+
+    queixa = queixa_do_client_id()
+
+    if queixa:
+        print(f'  queixa: {queixa}')
+
+    print(f'dominio permitido: {cfg.dominio_permitido or "(em branco: qualquer e-mail entra)"}')
+
+    print(f'  o que a pagina /entrar mostra: {dominios_publicos(cfg.dominio_permitido) or "(nada)"}')
+
+    email = input('\nE-mail para conferir contra a lista (enter = pular): ').strip().lower()
+
+    if email:
+        print(f'  {email}: {"entra" if dominio_ok(email, cfg.dominio_permitido) else "NAO entra"}')
+
+
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

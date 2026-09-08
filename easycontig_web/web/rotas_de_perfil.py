@@ -1,209 +1,233 @@
-#? ROTAS DE PERFIL — leia-me, perfil do laboratório e as fotos
-#!
-#! 1. Só rotas. O que elas usam em comum mora em `comum.py`.
-#! 2. O `app` não é montado aqui: este arquivo expõe um `router`, e quem o
-#!    inclui é o `servidor_web`.
+"""
+rotas_de_perfil.py — o perfil do laboratorio, a foto e a pagina leia-me.
 
-#? SERVIDOR WEB — Decisão sobre não processar nada aqui 04/08/2026
-#!
-#! 1. Sobe assim: `uvicorn easycontig_web.servidor_web:app`
-#! 2. REGRA DE OURO: este arquivo NÃO processa nada. Recebe arquivo, grava em
-#!    disco, enfileira e responde.
-#! 3. Todo trabalho pesado é do trabalhador, em outro processo.
-#! 4. É a diferença entre aguentar 100 pessoas e cair com 20.
-from __future__ import annotations
+    GET  /leiame                pagina_leiame      como nomear os arquivos e como o motor decide F/R
+    GET  /perfil?editando=1     pagina_perfil      perfil.html: Perfil, relatorios prontos (lote + n amostras), resumo das corridas, cota
+    POST /perfil                salvar_perfil      campos do formulario + foto (.png/.jpg/.jpeg/.webp, ate 2 MB) -> perfis.salvar -> 303 /perfil
+    GET  /perfil/foto           foto_do_perfil     a foto de quem entrou (404 "sem foto")
+    GET  /labs/foto/{arquivo}   foto_do_diretorio  a foto de QUALQUER perfil, pelo nome sorteado do arquivo (nunca pelo e-mail)
 
-import errno
-import os
-import sys
-import traceback
+    foto ---> cfg.pasta_de_fotos / token_urlsafe(8) + extensao ---> coluna `foto` do perfil; a antiga e apagada
+
+COMO FUNCIONA
+
+    A foto sai por rota, nao de pasta estatica: continua atras do login. No
+    diretorio, o endereco e o nome do arquivo (sorteado no envio), com tres
+    travas que nao confiam uma na outra: exigir sessao, Path(...).name (nao
+    sai da pasta) e perfis.foto_registrada (so o que esta na coluna de algum
+    perfil).
+
+COMO USAR
+
+    app.include_router(rotas_de_perfil.router)
+
+O QUE MUDOU (em relacao ao original)
+
+ 1. cfg.data_dir / "fotos", escrito a mao em tres rotas, virou cfg.pasta_de_fotos.
+
+ 2. perfis.pegar nunca devolve None (o Perfil com os padroes), entao o
+    `(pegar(...) or {}).get("foto")` virou `perfis.pegar(email).foto`.
+
+ 3. Os relatorios prontos vao ao template como {'lote': Lote, 'n': int}, como
+    antes; o Lote e objeto (lote.id, lote.status) em vez de dicionario.
+
+POR QUE nao nasce classe
+
+    Rotas; o estado (perfis, lotes, cotas) e da Instalacao.
+"""
+
 import secrets
-import shutil
-import threading
-from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               RedirectResponse)
-from fastapi.staticfiles import StaticFiles
-from starlette.concurrency import run_in_threadpool
-from starlette.middleware.gzip import GZipMiddleware
-from starlette.middleware.sessions import SessionMiddleware
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from ..dados import leitura_de_amostras as mod_amostras
-from ..contas import autenticacao as auth
-from ..dados import bancos_de_referencia as bancos
-from .. import configuracao as config
-from ..contas import cota_de_espaco as cotas
-from ..processamento import executor_de_lote as executor
-from ..processamento import fila_de_lotes as fila
-from ..contas import limite_de_requisicoes as limites
-from ..dados import pedidos_entre_labs as pedidos
-from ..contas import perfil_do_laboratorio as perfil
-from ..dados import expurgo_por_retencao as retencao
-from ..dados import cromatograma as traco
+from easycontig_web.contas.perfil_do_laboratorio import resumo_das_corridas
+from easycontig_web.dados import leitura_de_amostras
+from easycontig_web.processamento.fila_de_lotes import PRONTO
+from easycontig_web.web import comum
 
 
-cfg = config.carregar()
+EXTENSOES_DE_FOTO = {'.png', '.jpg', '.jpeg', '.webp'}
 
-# ⚠️ Trava de arranque: `EASYCONTIG_PRODUCAO=1` recusa subir com a porta aberta.
-# Fica atrás de uma variável para o desenvolvimento local não precisar de nada,
-# e o `docker-compose` de produção a define.
-if os.environ.get("EASYCONTIG_PRODUCAO") == "1":
-    _problemas = config.conferir_producao()
-    if _problemas:
-        raise RuntimeError(
-            "EASYCONTIG_PRODUCAO=1 e a configuração não está pronta:\n  - "
-            + "\n  - ".join(_problemas))
+TETO_DA_FOTO = 2 * 1024 * 1024  #* bytes
 
-# ⚠️ O `GOOGLE_CLIENT_ID` errado é MUDO deste lado: `google_configurado()` aceita
-# qualquer texto, e o erro só aparece na página do Google (`401 invalid_client`,
-# "The OAuth client was not found") depois de a pessoa escolher a conta. Aviso,
-# não trava: quem sabe se o cliente existe é o Google, e recusar subir por causa
-# de um formato seria trocar um palpite por outro.
-if os.environ.get("EASYCONTIG_AUTH", "dev").lower() == "google":
-    _queixa = auth.queixa_do_client_id()
-    if _queixa:
-        print("\n  ⚠️  " + _queixa + "\n", file=sys.stderr, flush=True)
+LOTES_NO_PERFIL = 500  #* quantas corridas a pagina de perfil enxerga para o resumo
 
-
-# `docs_url=None` em produção: `/api/docs`, `/redoc` e `/openapi.json` respondiam
-# 200 SEM sessão (verificado em 2026-08-06) e publicam o mapa inteiro da API —
-# toda rota, todo parâmetro, todo formato. Não é vazamento de dado, é o mapa de
-# onde procurar, entregue a quem ainda não entrou. Em desenvolvimento continua
-# ligado, que é onde ele serve para alguma coisa.
-from fastapi import APIRouter
-
-from .comum import (
-    EXT_ACEITAS, TEMPLATES, _br, _casca, _exigir, _lote_do_usuario, _marcar_resposta,
-    _pegar_recado, _por_recado, _referencias, _u, _vaga_pesada, cfg,
-)
+BYTES_DO_NOME_DA_FOTO = 8  #* token_urlsafe: nao se adivinha, nao diz de quem e
 
 router = APIRouter()
 
 
-@router.get("/leiame", response_class=HTMLResponse)
+
+
+@router.get('/leiame', response_class=HTMLResponse)
 def pagina_leiame(request: Request):
-    """Como nomear os arquivos e como o motor decide F/R.
 
-    Nasceu de um caso real (2026-08-07): uma corrida com 81 arquivos nomeados
-    só pelo poço da placa produziu 81 leituras avulsas, e quem enviou leu isso
-    como falha do programa. O conteúdo está aqui e não só na aba de envio
-    porque a pergunta reaparece depois — na hora de entender o resultado.
+    #! a pagina afirma que a orientacao sai do DNA (k-mers, orientacao.py) e NAO do nome nem do metadado do .ab1: se o motor mudar, ela passa a mentir
 
-    ⚠️ A página afirma que a orientação sai do DNA e NÃO de metadado do `.ab1`
-    nem do nome. Isso é o que `app/core/orientation.py` faz (k-mers da
-    sequência contra k-mers do reverso-complemento) e é a tese do produto: se
-    alguém mudar o motor, esta página passa a mentir para o laboratório.
-    """
-    return TEMPLATES.TemplateResponse(request, "leiame.html", {
-        **_casca(_exigir(request)), "pagina": "leiame"})
+    instalacao = comum.instalacao_de(request)
+
+    return comum.TEMPLATES.TemplateResponse(request, 'leiame.html', {**instalacao.casca(comum.exigir(request)), 'pagina': 'leiame'})
 
 
-@router.get("/perfil", response_class=HTMLResponse)
+
+
+def relatorios_prontos(instalacao, lotes):
+
+    #* [{'lote': Lote, 'n': amostras}] dos lotes PRONTO cujo relatorio.json existe
+
+    prontos = []
+
+    for lote in lotes:
+
+        if lote.status != PRONTO:
+            continue
+
+        n = leitura_de_amostras.contar_amostras(instalacao.cfg.pastas_do_lote(lote.id).relatorio_json)
+
+        if n is not None:
+            prontos.append({'lote': lote, 'n': n})
+
+    return prontos
+
+
+
+
+@router.get('/perfil', response_class=HTMLResponse)
 def pagina_perfil(request: Request, editando: int = 0):
-    u = _exigir(request)
-    lotes = fila.listar(cfg().sqlite_path, dono=u.email, limite=500)
-    # Só a CONTAGEM de amostras é lida de cada relatório — é tudo o que a tabela
-    # e o resumo usam. Antes esta página decodificava o `relatorio.json` inteiro
-    # de cada corrida da conta (25,89 ms para 40; o teto aqui é 500) para no fim
-    # tirar um inteiro de cada um. Ver `amostras.contar_amostras`.
-    reps = []
-    for l in lotes:
-        if l["status"] == fila.PRONTO:
-            n = mod_amostras.contar_amostras(
-                executor.pastas_do_lote(cfg(), l["id"])["relatorio_json"])
-            if n is not None:
-                reps.append({"lote": l, "n": n})
-    return TEMPLATES.TemplateResponse(request, "perfil.html", {
-        **_casca(u), "pagina": "perfil",
-        "perfil": perfil.pegar(cfg().sqlite_path, u.email),
-        "relatorios": reps,
-        "resumo": perfil.resumo_das_corridas(lotes, [x["n"] for x in reps]),
-        "cota": cotas.situacao(cfg().sqlite_path, cfg().lotes_dir, u.email, cfg().data_dir),
-        "editando": bool(editando),
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    lotes = instalacao.lotes.listar(dono=u.email, limite=LOTES_NO_PERFIL)
+
+    prontos = relatorios_prontos(instalacao, lotes)
+
+    return comum.TEMPLATES.TemplateResponse(request, 'perfil.html', {
+        **instalacao.casca(u),
+        'pagina': 'perfil',
+        'perfil': instalacao.perfis.pegar(u.email),
+        'relatorios': prontos,
+        'resumo': resumo_das_corridas(lotes, [item['n'] for item in prontos]),
+        'cota': instalacao.cotas.situacao(u.email),
+        'editando': bool(editando),
     })
 
 
-@router.post("/perfil")
-async def salvar_perfil(request: Request,
-                        nome: str = Form(""), laboratorio: str = Form(""),
-                        instituicao: str = Form(""), sobre: str = Form(""),
-                        especies: str = Form(""), marcadores: str = Form(""),
-                        links: str = Form(""),
-                        foto: UploadFile | None = File(None)):
-    u = _exigir(request)
-    # Salvar o perfil é escrita: sem teto, um laço no formulário grava foto atrás
-    # de foto. Reaproveita o teto de envio, que é o balde de "esta conta está
-    # escrevendo no servidor".
-    limites.conferir("envio", request, u.email)
-    nome_foto = None
-    if foto is not None and foto.filename:
-        ext = Path(foto.filename).suffix.lower()
-        if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
-            raise HTTPException(status_code=400,
-                                detail="a foto precisa ser .png, .jpg ou .webp")
-        dados = await foto.read(2 * 1024 * 1024 + 1)
-        if len(dados) > 2 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="a foto passa de 2 MB")
-        pasta = cfg().data_dir / "fotos"
-        pasta.mkdir(parents=True, exist_ok=True)
-        # Nome sorteado, não derivado do arquivo enviado: nome de arquivo é
-        # entrada do usuário e não decide caminho em disco.
-        nome_foto = secrets.token_urlsafe(8) + ext
-        (pasta / nome_foto).write_bytes(dados)
-        # A ANTERIOR SAI. Sem isto cada troca de foto deixava até 2 MB órfãos no
-        # volume para sempre: nada apontava mais para o arquivo, nenhuma cota o
-        # contava (a cota mede as pastas de LOTE) e a retenção não o alcança.
-        antigo = (perfil.pegar(cfg().sqlite_path, u.email) or {}).get("foto")
-        if antigo and antigo != nome_foto:
-            (pasta / Path(antigo).name).unlink(missing_ok=True)
-    perfil.salvar(cfg().sqlite_path, u.email, nome=nome, laboratorio=laboratorio,
-                  instituicao=instituicao, sobre=sobre, especies=especies,
-                  marcadores=marcadores, foto=nome_foto, links=links)
-    return RedirectResponse("/perfil", status_code=303)
 
 
-@router.get("/perfil/foto")
+async def guardar_foto(instalacao, email, foto):
+
+    #* confere extensao e tamanho, grava com nome sorteado e apaga a foto anterior; devolve o nome novo (None se nao veio foto)
+
+    if foto is None or not foto.filename:
+        return None
+
+    extensao = Path(foto.filename).suffix.lower()
+
+    if extensao not in EXTENSOES_DE_FOTO:
+        raise HTTPException(400, 'a foto precisa ser .png, .jpg ou .webp')
+
+    dados = await foto.read(TETO_DA_FOTO + 1)
+
+    if len(dados) > TETO_DA_FOTO:
+        raise HTTPException(413, 'a foto passa de 2 MB')
+
+    pasta = instalacao.cfg.pasta_de_fotos
+
+    pasta.mkdir(parents=True, exist_ok=True)
+
+    nome_da_foto = secrets.token_urlsafe(BYTES_DO_NOME_DA_FOTO) + extensao
+
+    (pasta / nome_da_foto).write_bytes(dados)
+
+    antiga = instalacao.perfis.pegar(email).foto
+
+    if antiga and antiga != nome_da_foto:
+        (pasta / Path(antiga).name).unlink(missing_ok=True)
+
+    return nome_da_foto
+
+
+
+
+@router.post('/perfil')
+async def salvar_perfil(request: Request, nome: str = Form(''), laboratorio: str = Form(''), instituicao: str = Form(''), sobre: str = Form(''),
+                        especies: str = Form(''), marcadores: str = Form(''), links: str = Form(''), foto: UploadFile | None = File(None)):
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    instalacao.limitador.conferir('envio', request, u.email)
+
+    nome_da_foto = await guardar_foto(instalacao, u.email, foto)
+
+    instalacao.perfis.salvar(u.email, nome=nome, laboratorio=laboratorio, instituicao=instituicao, sobre=sobre, especies=especies,
+                             marcadores=marcadores, foto=nome_da_foto, links=links)
+
+    return RedirectResponse('/perfil', status_code=303)
+
+
+
+
+def arquivo_da_foto(instalacao, nome):
+
+    #* o caminho da foto na pasta, ou 404 se nao esta la
+
+    caminho = instalacao.cfg.pasta_de_fotos / Path(nome).name
+
+    if not caminho.exists():
+        raise HTTPException(404, 'sem foto')
+
+    return FileResponse(caminho)
+
+
+
+
+@router.get('/perfil/foto')
 def foto_do_perfil(request: Request):
-    """A foto sai por rota, e não de uma pasta estática servida direto: assim
-    ela continua sendo de quem entrou, e não um arquivo público adivinhável."""
-    u = _exigir(request)
-    p = perfil.pegar(cfg().sqlite_path, u.email)
-    if not p["foto"]:
-        raise HTTPException(status_code=404, detail="sem foto")
-    caminho = cfg().data_dir / "fotos" / Path(p["foto"]).name
-    if not caminho.exists():
-        raise HTTPException(status_code=404, detail="sem foto")
-    return FileResponse(caminho)
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    foto = instalacao.perfis.pegar(u.email).foto
+
+    if not foto:
+        raise HTTPException(404, 'sem foto')
+
+    return arquivo_da_foto(instalacao, foto)
 
 
-@router.get("/labs/foto/{arquivo}")
+
+
+@router.get('/labs/foto/{arquivo}')
 def foto_do_diretorio(request: Request, arquivo: str):
-    """A foto de QUALQUER perfil, para o diretório desenhar os cartões.
 
-    A `/perfil/foto` continua existindo e continua sendo só do dono; esta é a
-    outra pergunta: mostrar a foto dos outros no `/labs`. O receio anotado no
-    template era servir foto **por e-mail**, o que daria uma rota adivinhável —
-    quem soubesse o endereço de alguém pediria a foto dele. Aqui o endereço é o
-    **nome do arquivo**, que é `secrets.token_urlsafe(8)` sorteado no envio: não
-    se adivinha, não diz de quem é, e não se deriva do e-mail.
+    instalacao = comum.instalacao_de(request)
 
-    Três travas, e nenhuma delas confia na anterior:
-      * `_exigir` — o diretório inteiro é atrás do login;
-      * `Path(...).name` — o `{arquivo}` não vira caminho para fora da pasta;
-      * `foto_registrada` — só sai o que está na coluna `foto` de algum perfil,
-        e não qualquer arquivo que exista no volume.
-    """
-    _exigir(request)
+    comum.exigir(request)
+
     nome = Path(arquivo).name
-    if not perfil.foto_registrada(cfg().sqlite_path, nome):
-        raise HTTPException(status_code=404, detail="sem foto")
-    caminho = cfg().data_dir / "fotos" / nome
-    if not caminho.exists():
-        raise HTTPException(status_code=404, detail="sem foto")
-    return FileResponse(caminho)
+
+    if not instalacao.perfis.foto_registrada(nome):
+        raise HTTPException(404, 'sem foto')
+
+    return arquivo_da_foto(instalacao, nome)
 
 
+
+
+def main():
+
+    for rota in router.routes:
+        print(f'  {",".join(sorted(rota.methods)):9} {rota.path:22} {rota.endpoint.__name__}')
+
+    print(f'  foto: {sorted(EXTENSOES_DE_FOTO)}, até {TETO_DA_FOTO // (1024 * 1024)} MB')
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

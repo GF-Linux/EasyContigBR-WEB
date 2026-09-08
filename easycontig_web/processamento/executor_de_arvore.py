@@ -1,247 +1,446 @@
-#? EXECUTOR DE ÁRVORE — Decisão sobre a fronteira com a ciência 19/08/2026
-#!
-#! 1. Roda UMA árvore filogenética sobre um lote já montado.
-#! 2. Como o `executor_de_lote`: nada de ciência aqui. Quem alinha, apara,
-#!    avalia e infere é `app/core/phylogeny.py` — este arquivo junta os
-#!    consensos, descobre o marcador de cada um e desenha o resultado.
-#! 3. O desenho FICA deste lado de propósito. `phylogeny.py` não importa
-#!    matplotlib pelo mesmo motivo que `app/core/` não importa Qt: quem instala
-#!    o núcleo num servidor não deve baixar uma pilha de gráficos, e o desktop
-#!    desenha do jeito dele.
-from __future__ import annotations
+"""
+executor_de_arvore.py — roda UMA arvore filogenetica sobre um lote ja montado.
+
+Como no executor_de_lote: nada de ciencia aqui. Quem alinha, apara, avalia e
+infere e o filogenia.py do nucleo. Este arquivo junta os consensos que o
+tracy deixou em trabalho/, descobre o marcador de cada um pelo NOME, chama o
+nucleo uma vez por marcador e desenha o resultado.
+
+O desenho FICA deste lado de proposito: o filogenia.py nao importa matplotlib
+pelo mesmo motivo que o nucleo nao importa Qt — quem instala o nucleo num
+servidor nao deve baixar uma pilha de graficos.
+
+
+COMO FUNCIONA — de trabalho/ ate arvore/<marcador>/
+===================================================
+
+    executar(cfg, lote_id, referencia, geracoes, etapa)
+           |
+           |-- consensos_do_lote(cfg, lote_id, referencia)
+           |         |
+           |         |-- cfg.pastas_do_lote(lote_id).trabalho     os *.fa do tracy
+           |         |       <amostra>.fa        consenso do PAR (o uso normal)
+           |         |       <amostra>.cons.fa   consenso da leitura avulsa (assemble)
+           |         |       <amostra>.align.fa  NAO e consenso: e o alinhamento das duas leituras -> pulado
+           |         |
+           |         |-- primeira_sequencia(arquivo)              maiuscula, sem '-'; vazio nao vira taxon
+           |         |
+           |         '-- marcador_da_amostra(amostra, reserva)    o gene escrito no NOME ganha; reserva_do_lote() e o
+           |                                                      marcador do banco do lote; sem nada: 'desconhecido'
+           |
+           |   nenhum consenso? -> ValueError (rode o lote primeiro)
+           |
+           |-- filogenia.agrupar_por_marcador(consensos)          um grupo por marcador; < 4 amostras = recusado
+           |-- mrbayes_da_instalacao()                            so se algum grupo e montavel; sem mb -> FerramentaAusente
+           |
+           '-- para cada grupo:
+                   etapa('16S (12 amostras)')
+                   recusado  -> {'marcador', 'n', 'recusado'}
+                   montavel  -> filogenia.montar_arvore(grupo, arvore/<marcador>/, mrbayes, geracoes)
+                                arvore.newick  <- resultado.newick (ja com os nomes do laboratorio)
+                                arvore.png     <- desenhar(resultado)   figura e conforto: falhou, avisa e segue
+                                resumo_do_marcador(...)  -> o dicionario que vai para o banco e para o arvore.html
+
+    caminho_de_saida(cfg, lote_id, pasta, arquivo)  -> lotes/<id>/arvore/<pasta>/<arquivo>, os tres nomes conferidos
+
+
+COMO USAR
+=========
+
+    from easycontig_web import configuracao
+    from easycontig_web.processamento import executor_de_arvore
+
+    cfg = configuracao.carregar()
+    resumo = executor_de_arvore.executar(cfg, 'v2-UNsPd', referencia='apicomplexa_18s', etapa=print)
+
+    for r in resumo:
+        print(r['marcador'], r.get('recusado') or r['veredito'])
+
+
+O QUE MUDOU DO executor_de_arvore.py ORIGINAL
+=============================================
+
+ 1. Os nomes do nucleo: filo.Consensus -> filogenia.Consenso, TreeResult ->
+    ResultadoDaArvore, assessment -> boletim, build_tree -> montar_arvore,
+    read_consensus_tree -> ler_arvore_consenso, safe_name -> nome_seguro.
+
+ 2. O Newick e o mapa nome-seguro -> nome-do-laboratorio vem DENTRO do
+    ResultadoDaArvore (montar_arvore ja le o .con.tre). O original reconstruia
+    o mapa aqui e lia o .con.tre duas vezes (uma para o arquivo, outra para a
+    figura). desenhar(resultado, destino) perdeu o parametro mapa.
+
+ 3. O mb vem da escada do ferramentas.py (EASYCONTIG_MRBAYES_BIN -> PATH),
+    como o tracy e o blastn: MrBayes(caminho) recebe o caminho pronto. Sem mb
+    e com algum grupo montavel, FerramentaAusente ANTES de criar pasta.
+
+ 4. reserva_do_lote: o marcador de reserva e o do banco que o lote consultou,
+    pela mesma regra do executor_de_lote (gene da ficha, ou apelido do banco
+    proprio). O original so conhecia o catalogo: banco proprio caia em
+    'desconhecido'.
+
+ 5. Figura que nao saiu vira AVISO no resumo (e uma linha no log com a causa),
+    em vez de sumir em silencio: o usuario ve que o Newick continua valendo.
+
+ 6. A arvore que sai e a do filogenia.py novo: consensos na mesma polaridade
+    e semente fixa (aprovado no passo 9). A figura e o Newick mudam por isso,
+    nao por este arquivo.
+
+ 7. caminho_de_saida confere pasta e arquivo com configuracao.nome_simples,
+    o mesmo crivo do lote_id (o original repetia a regra pela terceira vez).
+
+ 8. marcadores_conhecidos usa Ficha.gene, que ja e '16S' de '16S rRNA', e
+    sai em ordem FIXA (tamanho, depois alfabetica). O original ordenava um
+    set so por tamanho: a ordem entre 16S/18S/28S/COI/dsb mudava a cada
+    reinicio do servidor, e um nome com dois genes de tres letras caia ora
+    num grupo, ora noutro.
+
+ 9. Dois bugs do original corrigidos de passagem: reserva so de espacos
+    estourava IndexError (reserva.split()[0]); agora e 'desconhecido'. O
+    erro de "nenhum consenso" ORIENTA. Nada foi cortado.
+
+
+POR QUE NAO NASCE CLASSE
+========================
+
+    O executor nao e dono de nada: o mb e do MrBayes, os caminhos sao da
+    PastasDoLote, os grupos e os resultados sao do filogenia.py. Ele le a
+    pasta, chama na ordem e traduz o resultado para o dicionario da tela.
+"""
+
+import logging
 
 import re
-from pathlib import Path
 
-from app.core import phylogeny as filo
+import bancos_de_referencia
 
-from ..configuracao import Config
-from ..dados import bancos_de_referencia as bancos
-from .executor_de_lote import pastas_do_lote
+import ferramentas
 
-# Os marcadores que o catálogo conhece, como aparecem no NOME do arquivo. A
-# lista sai de `bancos.CATALOGO` para não haver duas verdades sobre o que o
-# EasyContig sabe identificar — acrescentar um banco novo passa a ensinar o
-# reconhecedor de nomes junto.
-def marcadores_conhecidos() -> list[str]:
-    fichas = {c.marcador for c in bancos.CATALOGO}
-    # "16S rRNA" → "16S": no nome do arquivo o laboratório escreve o gene, não a
-    # descrição do banco.
-    return sorted({f.split()[0] for f in fichas}, key=len, reverse=True)
+import filogenia
+
+from easycontig_web import configuracao
+
+from easycontig_web.processamento import executor_de_lote
 
 
-def marcador_da_amostra(nome: str, reserva: str = "") -> str:
-    """De que marcador é esta amostra.
 
-    ⚠️ **O nome do arquivo vem primeiro, e o banco do lote é só a reserva.**
-    Parece o contrário do óbvio — o lote inteiro foi identificado contra UM
-    banco — mas a corrida real F13719 desmente o óbvio: as 40 amostras subiram
-    numa pasta só e eram de QUATRO marcadores (16S, groEL, dsb, sodB), com o
-    gene escrito no nome (`F13719_am24_CAP08_groEL_E08-F08`). Confiar no banco
-    do lote juntaria os quatro numa árvore só, que é exatamente o erro que este
-    fluxo inteiro existe para impedir.
+REGISTRO = logging.getLogger('easycontig.arvore')
 
-    Sem nada reconhecível no nome e sem reserva, devolve `desconhecido` — e
-    nesse caso todas caem no mesmo grupo, que é honesto: ou o laboratório
-    nomeia, ou o programa não tem como saber.
-    """
-    for m in marcadores_conhecidos():
-        if re.search(rf"(?<![A-Za-z0-9]){re.escape(m)}(?![A-Za-z0-9])",
-                     nome, re.IGNORECASE):
-            return m
-    return (reserva.split()[0] if reserva else "") or "desconhecido"
+SUFIXOS_DE_CONSENSO = ('.cons.fa', '.fa')  #! a ordem importa: '.cons.fa' primeiro, senao '.fa' engole os dois e o nome da amostra sai com '.cons'
+
+SUFIXO_DE_ALINHAMENTO = '.align.fa'  #! dois registros com gaps: entrando como taxon, a arvore seria das leituras, nao das amostras
+
+DESCONHECIDO = 'desconhecido'  #* o marcador de quem nao tem gene no nome nem banco no lote: todos caem no mesmo grupo, que e honesto
+
+PROBABILIDADE_MINIMA = 0.90  #! so rotula o ramo que o MrBayes sustentou: encher a figura de 0,51 daria ao olho estrutura onde o metodo diz que nao ha
+
+FRONTEIRA = r'(?<![A-Za-z0-9]){}(?![A-Za-z0-9])'  #! '_16S_' e marcador; 'CAP16Sul' nao e. sem a fronteira, um nome de poco viraria grupo fantasma
 
 
-def _ler_fasta(caminho: Path) -> list[tuple[str, str]]:
-    nome, buf, saida = None, [], []
-    for linha in caminho.read_text(errors="replace").splitlines():
+
+
+def marcadores_conhecidos():
+
+    #* os genes que o catalogo conhece, como aparecem no NOME do arquivo, do mais longo para o mais curto.
+    #! sai do CATALOGO para nao haver duas verdades: um banco novo ensina o reconhecedor de nomes junto
+    #! desempate alfabetico: o original ordenava um set so por tamanho, e a ordem entre 16S/18S/COI/dsb mudava a cada
+    #! reinicio do servidor (hash randomization) — um nome com dois genes de 3 letras cairia ora num grupo, ora noutro
+
+    return sorted({ficha.gene for ficha in bancos_de_referencia.CATALOGO}, key=lambda gene: (-len(gene), gene))
+
+
+
+
+def marcador_da_amostra(nome, reserva=''):
+
+    #* de que marcador e esta amostra. O NOME DO ARQUIVO VEM PRIMEIRO; o banco do lote e so a reserva.
+    #! parece o contrario do obvio, mas a corrida real F13719 subiu 40 amostras de QUATRO marcadores numa pasta so,
+    #! com o gene no nome (F13719_am24_CAP08_groEL_E08-F08). confiar no banco do lote juntaria os quatro numa arvore
+
+    for marcador in marcadores_conhecidos():
+
+        if re.search(FRONTEIRA.format(re.escape(marcador)), nome, re.IGNORECASE):
+            return marcador
+
+    palavras = reserva.split()  #* '18S rRNA' -> '18S'; '' ou so espacos -> nada (o original estourava com IndexError no so-espacos)
+
+    return palavras[0] if palavras else DESCONHECIDO
+
+
+
+
+def reserva_do_lote(cfg, referencia=''):
+
+    #* o marcador do banco que o lote consultou, para as amostras sem gene no nome. curado/vazio: sem reserva.
+    #* a mesma regra do executor_de_lote: gene da ficha do catalogo, ou apelido do banco proprio
+
+    if not referencia or referencia == executor_de_lote.CURADO:
+        return ''
+
+    return executor_de_lote.estante_de_bancos(cfg).banco(referencia).marcador
+
+
+
+
+def primeira_sequencia(arquivo):
+
+    #* a sequencia do primeiro registro do FASTA, maiuscula e sem gaps. '' se o arquivo nao tem registro.
+    #! o cabecalho de dentro e '>Consensus' para todas: quem da nome ao taxon e o arquivo, nao o FASTA
+
+    dentro, pedacos = False, []
+
+    for linha in arquivo.read_text(errors='replace').splitlines():
+
         linha = linha.strip()
-        if linha.startswith(">"):
-            if nome:
-                saida.append((nome, "".join(buf)))
-            nome, buf = linha[1:].split()[0], []
-        elif linha:
-            buf.append(linha)
-    if nome:
-        saida.append((nome, "".join(buf)))
-    return saida
+
+        if linha.startswith('>'):
+
+            if dentro:
+                break  #* segundo registro: o primeiro acabou
+
+            dentro = True
+
+        elif linha and dentro:
+            pedacos.append(linha)
+
+    return ''.join(pedacos).upper().replace('-', '')
 
 
-# ⚠️ OS TRÊS NOMES DO TRACY, E A ARMADILHA QUE CUSTOU UMA IMPLANTAÇÃO.
-# O consenso de um PAR F+R — o uso normal — sai como `<amostra>.fa`.
-# `<amostra>.cons.fa` é o consenso da leitura AVULSA (`assemble` e `consensus`
-# são métodos diferentes do `tracy_engine`, e cada um nomeia do seu jeito).
-# E `<amostra>.align.fa` NÃO é consenso: é o alinhamento das duas leituras,
-# dois registros com gaps.
-#
-# Isto nasceu procurando só `*.cons.fa`, e passou em tudo: os testes usavam esse
-# nome e o teste de contêiner semeou arquivos com esse nome. Na primeira corrida
-# REAL — 40 pares, o caso principal do produto — a busca achou ZERO consensos, e
-# a árvore teria falhado com "nenhum consenso encontrado" para todo mundo.
-SUFIXOS_DE_CONSENSO = (".cons.fa", ".fa")   # ordem importa: `.cons.fa` primeiro
-SUFIXO_DE_ALINHAMENTO = ".align.fa"
 
 
-def consensos_do_lote(cfg: Config, lote_id: str, referencia: str = ""
-                      ) -> list[filo.Consensus]:
-    """Junta os consensos que o lote já montou, cada um com seu marcador.
+def consensos_do_lote(cfg, lote_id, referencia=''):
 
-    Lê o que o tracy deixou em `trabalho/` — os mesmos arquivos que o
-    laboratório hoje copia à mão para o MEGA. A amostra dá o nome ao táxon (e
-    não o cabeçalho de dentro do FASTA, que é `>Consensus` para todas).
-    """
-    p = pastas_do_lote(cfg, lote_id)
-    rotulo = ""
-    ficha = bancos.POR_ID.get(referencia)
-    if ficha:
-        rotulo = ficha.marcador
+    #* junta os consensos que o lote ja montou, cada um com seu marcador: os mesmos arquivos que o laboratorio copiava a mao para o MEGA
 
-    por_amostra: dict[str, Path] = {}
-    for arquivo in sorted(p["trabalho"].glob("*.fa")):
-        nome = arquivo.name
-        if nome.endswith(SUFIXO_DE_ALINHAMENTO):
+    trabalho = cfg.pastas_do_lote(lote_id).trabalho
+
+    reserva = reserva_do_lote(cfg, referencia)
+
+
+    por_amostra = {}
+
+    for arquivo in sorted(trabalho.glob('*.fa')):
+
+        if arquivo.name.endswith(SUFIXO_DE_ALINHAMENTO):
             continue
+
         for sufixo in SUFIXOS_DE_CONSENSO:
-            if nome.endswith(sufixo):
-                # `setdefault` porque `.cons.fa` vem primeiro na tupla e na
-                # ordenação: se um dia os dois existirem para a mesma amostra,
-                # ganha o que se chama de consenso, e não o genérico.
-                por_amostra.setdefault(nome[: -len(sufixo)], arquivo)
+
+            if arquivo.name.endswith(sufixo):
+                por_amostra.setdefault(arquivo.name[:-len(sufixo)], arquivo)  #! setdefault: se um dia .cons.fa e .fa existirem para a mesma amostra, ganha o que se chama de consenso
                 break
 
-    saida: list[filo.Consensus] = []
+
+    consensos = []
+
     for amostra, arquivo in sorted(por_amostra.items()):
-        registros = _ler_fasta(arquivo)
-        if not registros:
-            continue
-        sequencia = registros[0][1].upper().replace("-", "")
-        if not sequencia:
-            continue
-        saida.append(filo.Consensus(name=amostra, sequence=sequencia,
-                                    marker=marcador_da_amostra(amostra, rotulo)))
-    return saida
+
+        sequencia = primeira_sequencia(arquivo)
+
+        if sequencia:
+            consensos.append(filogenia.Consenso(amostra, sequencia, marcador_da_amostra(amostra, reserva)))
+
+    return consensos
 
 
-def desenhar(resultado: filo.TreeResult, destino: Path,
-             mapa: dict[str, str] | None = None) -> Path | None:
-    """A figura da árvore, com a probabilidade posterior nos ramos.
 
-    Só desenha o que o MrBayes sustentou: rótulo de ramo apenas para pp ≥ 0,90.
-    Encher a figura com 0,51 daria ao olho a impressão de estrutura onde o
-    próprio método diz que não há — o inverso do que este fluxo promete.
 
-    Devolve None se não der para desenhar. Figura é conforto; o `.newick` e o
-    `.con.tre` são o resultado, e uma falha de desenho não pode derrubar um
-    pedido que a ciência já respondeu.
-    """
-    if not resultado.consensus_tree or not resultado.consensus_tree.exists():
+def rotulo_do_ramo(ramo):
+
+    #* a probabilidade posterior no ramo interno, so quando o MrBayes a sustentou
+
+    if ramo.is_terminal() or not ramo.confidence or ramo.confidence < PROBABILIDADE_MINIMA:
+        return ''
+
+    return f'{ramo.confidence:.2f}'
+
+
+
+
+def desenhar(resultado, destino):
+
+    #* a figura da arvore, com a probabilidade posterior nos ramos. None se nao deu para desenhar: a figura e conforto,
+    #* o .newick e o .con.tre sao o resultado, e uma falha de desenho nao derruba um pedido que a ciencia ja respondeu
+
+    if not resultado.newick:
         return None
+
     try:
-        import matplotlib
-        matplotlib.use("Agg")
+
+        import matplotlib  #! importados aqui de proposito: o modulo carrega (e o Newick sai) mesmo numa maquina sem matplotlib
+        matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         from io import StringIO
         from Bio import Phylo
 
-        newick = filo.read_consensus_tree(resultado.consensus_tree, mapa)
-        arvore = Phylo.read(StringIO(newick), "newick")
-        for no in arvore.get_nonterminals():
+        arvore = Phylo.read(StringIO(resultado.newick), 'newick')
+
+        for no in arvore.get_nonterminals():  #* o filogenia.py escreve a probabilidade como NOME do no interno; o Bio.Phylo desenha 'confidence'
+
             if no.name:
+
                 try:
                     no.confidence = float(no.name)
                 except ValueError:
                     pass
+
                 no.name = None
 
-        a = resultado.assessment
-        fig, eixo = plt.subplots(
-            figsize=(9, max(3.5, 0.42 * len(arvore.get_terminals()))))
-        Phylo.draw(arvore, axes=eixo, do_show=False,
-                   branch_labels=lambda c: (
-                       f"{c.confidence:.2f}"
-                       if (not c.is_terminal() and c.confidence
-                           and c.confidence >= 0.90) else ""))
-        eixo.set_title(
-            f"{resultado.marker} — {a.n_taxa} amostras · {a.columns_after} pb"
-            f" · identidade mediana {a.identity_median:.1f}%\n{resultado.verdict}",
-            fontsize=9)
-        eixo.set_xlabel("substituições por sítio")
-        for lado in ("top", "right"):
+
+        boletim = resultado.boletim
+
+        figura, eixo = plt.subplots(figsize=(9, max(3.5, 0.42 * len(arvore.get_terminals()))))
+
+        Phylo.draw(arvore, axes=eixo, do_show=False, branch_labels=rotulo_do_ramo)
+
+        eixo.set_title(f'{resultado.marcador} — {boletim.n_taxons} amostras · {boletim.colunas_depois} pb'
+                       f' · identidade mediana {boletim.identidade_mediana:.1f}%\n{resultado.veredito}', fontsize=9)
+
+        eixo.set_xlabel('substituições por sítio')
+
+        for lado in ('top', 'right'):
             eixo.spines[lado].set_visible(False)
-        fig.tight_layout()
-        fig.savefig(destino, dpi=140)
-        plt.close(fig)
+
+        figura.tight_layout()
+
+        figura.savefig(destino, dpi=140)
+
+        plt.close(figura)
+
         return destino
-    except Exception:                           # noqa: BLE001
+
+    except Exception as erro:  #! qualquer falha de desenho: registra a causa e devolve None; quem chamou avisa o usuario
+
+        REGISTRO.warning('figura de %s nao desenhada: %s', resultado.marcador, erro)
+
         return None
 
 
-def executar(cfg: Config, lote_id: str, *, referencia: str = "",
-             ngen: int = 5_000_000, etapa=None) -> list[dict]:
-    """Monta uma árvore por marcador e devolve o resumo que a tela mostra.
 
-    O resumo é uma lista de dicionários simples (e não os objetos do núcleo)
-    porque ele é serializado para o banco e lido pelo template — atravessa
-    processo, e o que atravessa processo tem de ser dado, não objeto.
-    """
-    p = pastas_do_lote(cfg, lote_id)
+
+def mrbayes_da_instalacao():
+
+    #* o MrBayes com o mb que a escada do ferramentas.py achar. sem mb nao ha arvore: FerramentaAusente.
+
+    return filogenia.MrBayes(ferramentas.exigir_programa('mb', 'EASYCONTIG_MRBAYES_BIN', 'bin', None))
+
+
+
+
+def resumo_do_marcador(grupo, resultado, figura):
+
+    #* o dicionario que a tela mostra e o banco guarda: atravessa processo, entao e dado, nao objeto
+
+    boletim = resultado.boletim
+
+    avisos = list(boletim.avisos)
+
+    if not figura:
+        avisos.append('a figura não foi desenhada (veja o log do servidor); o Newick continua disponível para o FigTree, iTOL ou MEGA')
+
+    return {'marcador': grupo.marcador,
+            'n': boletim.n_taxons,
+            'colunas': boletim.colunas_depois,
+            'colunas_antes': boletim.colunas_antes,
+            'identidade': round(boletim.identidade_mediana, 1),
+            'asdsf': resultado.asdsf,
+            'convergiu': resultado.convergiu,
+            'veredito': resultado.veredito,
+            'avisos': avisos,
+            'figura': figura.name if figura else '',
+            'newick': 'arvore.newick' if resultado.newick else '',
+            'pasta': filogenia.nome_seguro(grupo.marcador)}
+
+
+
+
+def executar(cfg, lote_id, referencia='', geracoes=filogenia.GERACOES, etapa=None):
+
+    #* monta uma arvore por marcador e devolve o resumo que a tela mostra (lista de dicionarios)
+
+    pastas = cfg.pastas_do_lote(lote_id)
+
     consensos = consensos_do_lote(cfg, lote_id, referencia)
+
     if not consensos:
-        raise ValueError(
-            "nenhum consenso encontrado neste lote; a árvore precisa das "
-            "amostras já montadas")
+        raise ValueError('nenhum consenso encontrado neste lote; a árvore precisa das amostras já montadas — rode o lote primeiro '
+                         'e confira se trabalho/ tem os .fa do tracy')
 
-    saida_dir = p["raiz"] / "arvore"
-    saida_dir.mkdir(parents=True, exist_ok=True)
 
-    resumo: list[dict] = []
-    for grupo in filo.group_by_marker(consensos):
+    grupos = filogenia.agrupar_por_marcador(consensos)
+
+    mrbayes = mrbayes_da_instalacao() if any(grupo.montavel for grupo in grupos) else None  #* so exige o mb se vai usa-lo; e antes de tocar o disco
+
+    pastas.arvore.mkdir(parents=True, exist_ok=True)
+
+
+    resumo = []
+
+    for grupo in grupos:
+
         if etapa:
-            etapa(f"{grupo.marker} ({len(grupo.members)} amostras)")
-        if not grupo.buildable:
-            resumo.append({"marcador": grupo.marker, "n": len(grupo.members),
-                           "recusado": grupo.skipped})
+            etapa(f'{grupo.marcador} ({len(grupo.membros)} amostras)')
+
+        if not grupo.montavel:
+            resumo.append({'marcador': grupo.marcador, 'n': len(grupo.membros), 'recusado': grupo.recusado})
             continue
 
-        pasta = saida_dir / filo.safe_name(grupo.marker)
-        r = filo.build_tree(grupo, pasta, ngen=ngen)
-        a = r.assessment
 
-        # O mapa nome-seguro → nome-do-laboratório é reconstruído aqui porque
-        # `build_tree` o consome por dentro; sem ele a figura sairia com o nome
-        # mutilado que só o MrBayes entende.
-        mapa = {filo.safe_name(c.name): c.name for c in grupo.members}
-        newick = ""
-        if r.consensus_tree:
-            newick = filo.read_consensus_tree(r.consensus_tree, mapa)
-            (pasta / "arvore.newick").write_text(newick, encoding="utf-8")
-        figura = desenhar(r, pasta / "arvore.png", mapa)
+        pasta = pastas.arvore / filogenia.nome_seguro(grupo.marcador)
 
-        resumo.append({
-            "marcador": grupo.marker,
-            "n": a.n_taxa,
-            "colunas": a.columns_after,
-            "colunas_antes": a.columns_before,
-            "identidade": round(a.identity_median, 1),
-            "asdsf": r.asdsf,
-            "convergiu": r.converged,
-            "veredito": r.verdict,
-            "avisos": a.warnings,
-            "figura": figura.name if figura else "",
-            "newick": "arvore.newick" if newick else "",
-            "pasta": filo.safe_name(grupo.marker),
-        })
+        resultado = filogenia.montar_arvore(grupo, pasta, mrbayes, geracoes)
+
+        if resultado.newick:
+            (pasta / 'arvore.newick').write_text(resultado.newick, encoding='utf-8')
+
+        figura = desenhar(resultado, pasta / 'arvore.png')
+
+        resumo.append(resumo_do_marcador(grupo, resultado, figura))
+
     return resumo
 
 
-def caminho_de_saida(cfg: Config, lote_id: str, pasta: str, arquivo: str) -> Path:
-    """Um arquivo da árvore, com o nome conferido em vez de confiado.
 
-    Mesma regra do `pastas_do_lote`: quem decide onde se lê não pode depender
-    de o chamador ter validado antes. `pasta` e `arquivo` vêm da URL.
-    """
-    for parte in (pasta, arquivo):
-        if not parte or parte in (".", "..") or "/" in parte or "\\" in parte \
-                or "\0" in parte or parte != Path(parte).name:
-            raise ValueError(f"caminho inválido: {parte!r}")
-    return pastas_do_lote(cfg, lote_id)["raiz"] / "arvore" / pasta / arquivo
+
+def caminho_de_saida(cfg, lote_id, pasta, arquivo):
+
+    #* um arquivo da arvore, com os tres nomes conferidos em vez de confiados: pasta e arquivo vem da URL
+
+    return (cfg.pastas_do_lote(lote_id).arvore
+            / configuracao.nome_simples(pasta, 'pasta da árvore')
+            / configuracao.nome_simples(arquivo, 'arquivo da árvore'))
+
+
+
+
+def main():
+
+    lote_id = input('Id do lote ja montado (trabalho/ com os .fa do tracy; ou enter para sair): ').strip()
+
+    if not lote_id:
+        raise SystemExit(0)
+
+    referencia = input('Banco que o lote consultou (enter = nenhum; ex. apicomplexa_18s): ').strip()
+
+    cfg = configuracao.carregar()
+
+    resumo = executar(cfg, lote_id, referencia=referencia, etapa=lambda texto: print(f'  {texto}'))
+
+    for r in resumo:
+
+        if r.get('recusado'):
+            print(f"\n{r['marcador']}: recusado — {r['recusado']}")
+            continue
+
+        print(f"\n{r['marcador']}: {r['n']} amostras, {r['colunas']} pb (de {r['colunas_antes']}), identidade mediana {r['identidade']}%")
+        print(f"  {r['veredito']}  (ASDSF {r['asdsf']})")
+
+        for aviso in r['avisos']:
+            print(f'  aviso: {aviso}')
+
+        print(f"  arquivos em {cfg.pastas_do_lote(lote_id).arvore / r['pasta']}: {r['newick'] or '(sem newick)'}, {r['figura'] or '(sem figura)'}")
+
+
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

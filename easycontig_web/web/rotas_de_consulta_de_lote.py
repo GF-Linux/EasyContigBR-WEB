@@ -1,349 +1,432 @@
-#? ROTAS DE CONSULTA DE LOTE — olhar um lote pronto: página, traço, CSV e relatório
-#!
-#! 1. Só rotas. O que elas usam em comum mora em `comum.py`.
-#! 2. O `app` não é montado aqui: este arquivo expõe um `router`, e quem o
-#!    inclui é o `servidor_web`.
+"""
+rotas_de_consulta_de_lote.py — tudo o que se le de um lote depois de enviado: a pagina, as amostras, o traco, a arvore, os arquivos.
 
-#? SERVIDOR WEB — Decisão sobre não processar nada aqui 04/08/2026
-#!
-#! 1. Sobe assim: `uvicorn easycontig_web.servidor_web:app`
-#! 2. REGRA DE OURO: este arquivo NÃO processa nada. Recebe arquivo, grava em
-#!    disco, enfileira e responde.
-#! 3. Todo trabalho pesado é do trabalhador, em outro processo.
-#! 4. É a diferença entre aguentar 100 pessoas e cair com 20.
-from __future__ import annotations
+    GET  /lotes/{lote_id}?tela_do_lote=1                 pagina_lote        lote.html; PRONTO com UMA amostra -> 303 para a amostra
+    GET  /lotes/{lote_id}/amostras/{chave}               pagina_amostra     amostra.html (fatos da amostra, referencias consultaveis)
+    GET  /api/lotes/{lote_id}                            api_lote           o Lote em JSON (a pagina recarrega por aqui)
+    GET  /api/lotes/{lote_id}/amostras/{chave}/traco     api_traco          remonta (vaga pesada) -> tracado.para_navegador -> JSON
+    GET  /api/lotes/{lote_id}/amostras/{chave}/consultar api_consultar      ?banco=<id>: remonta + blastn contra UM banco extra -> {banco, acertos, consulta: true}
 
-import errno
-import os
-import sys
-import traceback
-import secrets
-import shutil
-import threading
-from contextlib import contextmanager
-from pathlib import Path
+    POST /lotes/{lote_id}/arvore                         pedir_arvore       lote PRONTO -> arvores.novo_pedido -> 303 .../arvore
+    GET  /lotes/{lote_id}/arvore                         pagina_arvore      arvore.html (pedido, resumo por marcador, recarregar)
+    GET  /api/lotes/{lote_id}/arvore                     api_arvore         o PedidoDeArvore em JSON
+    GET  /lotes/{lote_id}/arvore/{pasta}/{arquivo}       arquivo_da_arvore  a figura (.png) ou o Newick (download)
+
+    POST /lotes/{lote_id}/apagar                         apagar_lote        expurgo.apagar_lote -> 303 /   (em uso -> 409)
+    GET  /lotes/{lote_id}/relatorio                      relatorio          o HTML gravado pelo trabalhador
+    GET  /lotes/{lote_id}/resultado.csv                  resultado_csv      download resultado_<id>.csv
+    GET  /lotes/{lote_id}/relatorio.json                 relatorio_json     download relatorio_<id>.json
+
+    toda rota comeca por instalacao.lote_do_usuario(lote_id, u): lote de outro ou inexistente -> 404 "lote nao encontrado"
+
+COMO FUNCIONA
+
+    O relatorio e lido do relatorio.json (leitura_de_amostras.carregar ->
+    RelatorioDoLote); None -> "relatorio indisponivel". O traco e a consulta
+    remontam a amostra sob demanda (cromatograma.remontar, ~0,3 s de tracy)
+    dentro de uma vaga pesada: sem vaga, 503 na hora.
+
+    A consulta a outro banco e segunda opiniao, nao veredito: o resultado
+    validado continua sendo o da referencia do lote; a resposta sai rotulada
+    consulta: true.
+
+COMO USAR
+
+    app.include_router(rotas_de_consulta_de_lote.router)
+
+O QUE MUDOU (em relacao ao original)
+
+ 1. As amostras chegam ao template como FatosDaAmostra / dicionarios com nomes
+    em portugues (chave, acesso, valor_e, cobertura_da_consulta,
+    pct_cobertura_1) — veja leitura_de_amostras. Um relatorio.json de versao
+    antiga (chaves em ingles) da "relatorio indisponivel".
+
+ 2. api_consultar devolve {'banco', 'acertos': [acerto_na_tela(Acerto)],
+    'consulta': True}: cada acerto tem organismo, acesso, titulo, identidade
+    e cobertura com 1 casa (as mesmas do relatorio), valor_e e pontuacao como
+    numeros. O original devolvia 'hits' com accession/e_value/bits/alinhado
+    (e_value e bits como texto); o oficina.js so lia titulo, identidade,
+    cobertura e accession -> passa a ler acesso. Sem blastn na instalacao, 500
+    com a orientacao (a busca original quebrava com FileNotFoundError e
+    virava o 500 generico).
+
+ 3. api_lote e api_arvore devolvem vars(Lote) / vars(PedidoDeArvore): os
+    mesmos campos que as linhas do SQLite tinham (o resumo da arvore ja vem
+    como lista, nao como texto JSON).
+
+ 4. O 500 da consulta que falhou vai para o logger em vez do stderr.
+
+POR QUE nao nasce classe
+
+    Rotas; o estado (lotes, arvores, estante, vagas) e da Instalacao.
+"""
+
+import logging
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               RedirectResponse)
-from fastapi.staticfiles import StaticFiles
-from starlette.concurrency import run_in_threadpool
-from starlette.middleware.gzip import GZipMiddleware
-from starlette.middleware.sessions import SessionMiddleware
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-from ..dados import leitura_de_amostras as mod_amostras
-from ..contas import autenticacao as auth
-from ..dados import bancos_de_referencia as bancos
-from .. import configuracao as config
-from ..contas import cota_de_espaco as cotas
-from ..processamento import executor_de_arvore as executor_arvore
-from ..processamento import executor_de_lote as executor
-from ..processamento import fila_de_arvores as fila_arvores
-from ..processamento import fila_de_lotes as fila
-from ..contas import limite_de_requisicoes as limites
-from ..dados import pedidos_entre_labs as pedidos
-from ..contas import perfil_do_laboratorio as perfil
-from ..dados import expurgo_por_retencao as retencao
-from ..dados import cromatograma as traco
+from bancos_de_referencia import POR_ID
+
+from easycontig_web.dados import expurgo_por_retencao, leitura_de_amostras
+from easycontig_web.processamento import cromatograma, executor_de_arvore, executor_de_lote, fila_de_arvores
+from easycontig_web.processamento.executor_de_lote import CURADO
+from easycontig_web.processamento.fila_de_lotes import NA_FILA, PRONTO
+from easycontig_web.web import comum
 
 
-cfg = config.carregar()
+REGISTRO = logging.getLogger('easycontig.consulta')
 
-# ⚠️ Trava de arranque: `EASYCONTIG_PRODUCAO=1` recusa subir com a porta aberta.
-# Fica atrás de uma variável para o desenvolvimento local não precisar de nada,
-# e o `docker-compose` de produção a define.
-if os.environ.get("EASYCONTIG_PRODUCAO") == "1":
-    _problemas = config.conferir_producao()
-    if _problemas:
-        raise RuntimeError(
-            "EASYCONTIG_PRODUCAO=1 e a configuração não está pronta:\n  - "
-            + "\n  - ".join(_problemas))
+SEM_TRACO = 'os arquivos originais não estão mais no servidor, ou esta amostra não é um par F+R'
 
-# ⚠️ O `GOOGLE_CLIENT_ID` errado é MUDO deste lado: `google_configurado()` aceita
-# qualquer texto, e o erro só aparece na página do Google (`401 invalid_client`,
-# "The OAuth client was not found") depois de a pessoa escolher a conta. Aviso,
-# não trava: quem sabe se o cliente existe é o Google, e recusar subir por causa
-# de um formato seria trocar um palpite por outro.
-if os.environ.get("EASYCONTIG_AUTH", "dev").lower() == "google":
-    _queixa = auth.queixa_do_client_id()
-    if _queixa:
-        print("\n  ⚠️  " + _queixa + "\n", file=sys.stderr, flush=True)
-
-
-# `docs_url=None` em produção: `/api/docs`, `/redoc` e `/openapi.json` respondiam
-# 200 SEM sessão (verificado em 2026-08-06) e publicam o mapa inteiro da API —
-# toda rota, todo parâmetro, todo formato. Não é vazamento de dado, é o mapa de
-# onde procurar, entregue a quem ainda não entrou. Em desenvolvimento continua
-# ligado, que é onde ele serve para alguma coisa.
-from fastapi import APIRouter
-
-from .comum import (
-    EXT_ACEITAS, TEMPLATES, _br, _casca, _exigir, _lote_do_usuario, _marcar_resposta,
-    _pegar_recado, _por_recado, _referencias, _u, _vaga_pesada, cfg,
-)
+SEM_BLASTN = ('o blastn não está instalado neste servidor, e a consulta a outro banco precisa dele: '
+              'defina EASYCONTIG_BLAST_BIN (ou avise quem cuida do servidor)')
 
 router = APIRouter()
 
 
-@router.get("/api/lotes/{lote_id}/amostras/{chave}/consultar")
+
+
+def relatorio_ou_404(instalacao, lote_id):
+
+    relatorio = instalacao.relatorio(lote_id)
+
+    if not relatorio:
+        raise HTTPException(404, 'relatório indisponível')
+
+    return relatorio
+
+
+
+
+def amostra_ou_404(relatorio, chave):
+
+    #* a amostra do NUCLEO (com as leituras e os caminhos dos traces): e ela que o cromatograma remonta.
+    #! a tela recebe leitura_de_amostras.formatar_amostra(fatos), nunca este objeto: os numeros da pagina
+    #! saem da mesma formatacao da tabela (listar), e a linha e a pagina nao podem divergir
+
+    fatos = relatorio.amostra(chave)
+
+    if fatos is None:
+        raise HTTPException(404, 'amostra não encontrada no lote')
+
+    return fatos
+
+
+
+
+def acerto_na_tela(acerto):
+
+    #* um Acerto do nucleo como a pagina o mostra: identidade e cobertura com 1 casa, as MESMAS do relatorio ao lado
+    #! o blastn mede 99.540 e o relatorio grava round(identidade, 1) (relatorio.py); a consulta nao pode afirmar
+    #! 99,54 na mesma tela em que o veredito diz 99,5
+
+    return {'organismo': acerto.organismo, 'acesso': acerto.acesso, 'titulo': acerto.titulo, 'identidade': round(acerto.identidade, 1),
+            'cobertura': round(acerto.cobertura, 1), 'valor_e': acerto.valor_e, 'pontuacao': acerto.pontuacao}
+
+
+
+
+@router.get('/api/lotes/{lote_id}/amostras/{chave}/consultar')
 def api_consultar(request: Request, lote_id: str, chave: str, banco: str):
-    """Consulta o consenso da amostra contra UM banco extra.
 
-    ⚠️ Não é identificação: o veredito continua vindo do banco curado, e esta
-    resposta é rotulada como consulta. Trocar uma coisa pela outra mudaria o
-    resultado validado sem ninguém decidir (ADR 0037).
-    """
-    u = _exigir(request)
-    _lote_do_usuario(lote_id, u)
-    rep = _relatorio(lote_id)
-    am = traco.amostra_do_relatorio(rep, chave) if rep else None
-    if not am:
-        raise HTTPException(status_code=404, detail="amostra não encontrada")
-    permitidos = set(bancos.POR_ID) | {b["id"] for b in
-                                       bancos.meus_bancos(cfg().data_dir, u.email)}
-    if banco not in permitidos or not bancos.existe(cfg().data_dir, banco):
-        raise HTTPException(status_code=404, detail="banco não montado")
-    # UMA vaga para os dois passos: soltar entre o tracy e o blastn deixaria a
-    # janela em que 40 requisições passam pelo primeiro teto e se acumulam no
-    # segundo, que é o caro (timeout de 120 s).
-    with _vaga_pesada():
-        asm = traco.montar(cfg(), executor.pastas_do_lote(cfg(), lote_id)["raiz"], am)
-        if asm is None:
-            raise HTTPException(status_code=409,
-                                detail="não foi possível remontar a amostra")
+    #! nao e identificacao: o veredito continua vindo da referencia do lote; a resposta sai rotulada consulta
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    instalacao.lote_do_usuario(lote_id, u)
+
+    relatorio = instalacao.relatorio(lote_id)
+
+    fatos = relatorio.amostra(chave) if relatorio else None
+
+    if fatos is None:
+        raise HTTPException(404, 'amostra não encontrada')
+
+    permitidos = set(POR_ID) | {estado.id for estado in instalacao.estante.meus_bancos(u.email)}
+
+    if banco not in permitidos or not instalacao.estante.existe(banco):
+        raise HTTPException(404, 'banco não montado')
+
+    busca = executor_de_lote.busca_de_referencia(instalacao.cfg, banco)
+
+    if busca is None:
+        raise HTTPException(500, SEM_BLASTN)
+
+    with instalacao.vaga_pesada():
+
+        montagem = cromatograma.remontar(instalacao.cfg, lote_id, fatos)
+
+        if montagem is None:
+            raise HTTPException(409, 'não foi possível remontar a amostra')
+
         try:
-            hits = bancos.consultar(asm.consensus_nogap,
-                                    bancos.prefixo(cfg().data_dir, banco),
-                                    blast_bin=cfg().blast_bin)
-        except Exception as e:                  # noqa: BLE001
-            # ⚠️ O `str(e)` do blastn/E-S carrega caminho absoluto do servidor e
-            # stderr da ferramenta — detalhe interno que não vai no 500. Genérico
-            # para quem chama, completo no log do servidor.
-            print(f"  ⚠️  falha ao consultar o banco {banco}: "
-                  f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
-            traceback.print_exc(file=sys.stderr)
-            raise HTTPException(
-                status_code=500,
-                detail="não foi possível consultar o banco; tente de novo. "
-                       "O motivo completo está no log.")
-    return JSONResponse({"banco": banco, "hits": hits, "consulta": True})
+            acertos = [acerto_na_tela(acerto) for alvo in busca.bancos for acerto in busca.acertos(montagem.consenso_limpo, alvo)]
+
+        except Exception as erro:
+
+            REGISTRO.error('falha ao consultar o banco %s: %s: %s', banco, type(erro).__name__, erro, exc_info=erro)
+
+            raise HTTPException(500, 'não foi possível consultar o banco; tente de novo. O motivo completo está no log.')
+
+    return JSONResponse({'banco': banco, 'acertos': acertos, 'consulta': True})
 
 
-def _relatorio(lote_id: str) -> dict | None:
-    """Os fatos do lote, já lidos do `relatorio.json` gravado pelo trabalhador.
-
-    None quando o arquivo não existe ou não tem forma de relatório — a tela diz
-    "relatório indisponível" em vez de mostrar uma lista vazia, que passaria por
-    "lote sem amostras" e é o tipo de defeito que se parece com resultado.
-    """
-    return mod_amostras.carregar(
-        executor.pastas_do_lote(cfg(), lote_id)["relatorio_json"])
 
 
-@router.get("/lotes/{lote_id}", response_class=HTMLResponse)
+@router.get('/lotes/{lote_id}', response_class=HTMLResponse)
 def pagina_lote(request: Request, lote_id: str, tela_do_lote: int = 0):
-    u = _exigir(request)
-    lote = _lote_do_usuario(lote_id, u)
-    rep = _relatorio(lote_id) if lote["status"] == fila.PRONTO else None
 
-    # Quando o envio é UM PAR — o uso normal, ADR 0051 — o lote tem uma amostra
-    # só, e a "tabela de amostras" é uma linha. O resultado que a pessoa veio
-    # buscar é a página da amostra; mostrar antes uma tela de lote com um item
-    # cobra um clique à toa. `?tela_do_lote=1` é a saída para quem quer mesmo a
-    # tela do lote — e é para onde a página da amostra volta, senão daria laço.
-    if rep and not tela_do_lote:
-        itens = mod_amostras.listar(rep)
-        if len(itens) == 1:
-            return RedirectResponse(
-                f"/lotes/{lote_id}/amostras/{quote(itens[0]['key'])}", status_code=303)
+    instalacao = comum.instalacao_de(request)
 
-    return TEMPLATES.TemplateResponse(request, "lote.html", {
-        **_casca(u), "lote": lote,
-        # a página só se recarrega sozinha enquanto há o que esperar
-        "recarregar": lote["status"] in (fila.RECEBENDO, fila.NA_FILA, fila.RODANDO),
-        # Só se pergunta quando importa: um lote esperando na fila é o único
-        # caso em que a tela promete que alguém vai pegar.
-        "fila_atendida": (fila.fila_atendida(cfg().sqlite_path)
-                          if lote["status"] == fila.NA_FILA else True),
-        "amostras": mod_amostras.listar(rep) if rep else None,
-        "resumo": mod_amostras.resumo(rep) if rep else None,
-        "expira_em": retencao.expira_em(lote, cfg().retencao_dias),
+    u = comum.exigir(request)
+
+    lote = instalacao.lote_do_usuario(lote_id, u)
+
+    relatorio = instalacao.relatorio(lote_id) if lote.status == PRONTO else None
+
+    amostras = leitura_de_amostras.listar(relatorio) if relatorio else None
+
+    if amostras and not tela_do_lote and len(amostras) == 1:
+        return RedirectResponse(f'/lotes/{lote_id}/amostras/{quote(amostras[0]["chave"])}', status_code=303)
+
+    return comum.TEMPLATES.TemplateResponse(request, 'lote.html', {
+        **instalacao.casca(u),
+        'lote': lote,
+        'recarregar': lote.ativo,
+        'fila_atendida': instalacao.lotes.fila_atendida() if lote.status == NA_FILA else True,
+        'amostras': amostras,
+        'resumo': leitura_de_amostras.resumo(relatorio) if relatorio else None,
+        'expira_em': expurgo_por_retencao.expira_em(lote, instalacao.cfg.retencao_dias),
     })
 
 
-@router.get("/api/lotes/{lote_id}/amostras/{chave}/traco")
-def api_traco(request: Request, lote_id: str, chave: str):
-    """O cromatograma das duas leituras, no eixo de coluna do consenso.
 
-    Sai por API e não embutido na página porque é o pedaço pesado (~112 KB
-    comprimidos): a página abre com os números na hora, e o traço chega depois.
-    Remontar custa ~0,3 s de tracy — é feito aqui, sob demanda.
-    """
-    u = _exigir(request)
-    _lote_do_usuario(lote_id, u)
-    rep = _relatorio(lote_id)
-    if not rep:
-        raise HTTPException(status_code=404, detail="relatório indisponível")
-    am = traco.amostra_do_relatorio(rep, chave)
-    if not am:
-        raise HTTPException(status_code=404, detail="amostra não encontrada no lote")
-    lote_dir = executor.pastas_do_lote(cfg(), lote_id)["raiz"]
-    with _vaga_pesada():
-        dados = traco.para_navegador(traco.montar(cfg(), lote_dir, am), am)
+
+@router.get('/api/lotes/{lote_id}/amostras/{chave}/traco')
+def api_traco(request: Request, lote_id: str, chave: str):
+
+    #* por API e nao embutido na pagina porque e o pedaco pesado (~112 KB comprimidos): a pagina abre com os numeros, o traco chega depois
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    instalacao.lote_do_usuario(lote_id, u)
+
+    fatos = amostra_ou_404(relatorio_ou_404(instalacao, lote_id), chave)
+
+    with instalacao.vaga_pesada():
+        dados = cromatograma.traco_da_amostra(instalacao.cfg, lote_id, fatos)
+
     if not dados:
-        # Sem traço a página não quebra: ela mostra os números e diz por quê.
-        return JSONResponse({"disponivel": False,
-                             "motivo": "os arquivos originais não estão mais no "
-                                       "servidor, ou esta amostra não é um par F+R"},
-                            status_code=200)
-    dados["disponivel"] = True
+        return JSONResponse({'disponivel': False, 'motivo': SEM_TRACO})
+
+    dados['disponivel'] = True
+
     return JSONResponse(dados)
 
 
-@router.get("/lotes/{lote_id}/amostras/{chave}", response_class=HTMLResponse)
+
+
+@router.get('/lotes/{lote_id}/amostras/{chave}', response_class=HTMLResponse)
 def pagina_amostra(request: Request, lote_id: str, chave: str):
-    u = _exigir(request)
-    lote = _lote_do_usuario(lote_id, u)
-    rep = _relatorio(lote_id)
-    if not rep:
-        raise HTTPException(status_code=404, detail="relatório indisponível")
-    a = mod_amostras.amostra(rep, chave)
-    if not a:
-        raise HTTPException(status_code=404, detail="amostra não encontrada no lote")
-    return TEMPLATES.TemplateResponse(request, "amostra.html", {
-        **_casca(u), "lote": lote, "amostra": a,
-        # só os bancos montados: oferecer o que não está pronto é oferecer erro
-        "consultaveis": [r for r in _referencias(u)
-                         if r["id"] != (lote.get("referencia") or "curado")],
-        "referencia_usada": lote.get("referencia") or "curado",
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    lote = instalacao.lote_do_usuario(lote_id, u)
+
+    fatos = amostra_ou_404(relatorio_ou_404(instalacao, lote_id), chave)
+
+    referencia_usada = lote.referencia or CURADO
+
+    return comum.TEMPLATES.TemplateResponse(request, 'amostra.html', {
+        **instalacao.casca(u),
+        'lote': lote,
+        'amostra': leitura_de_amostras.formatar_amostra(fatos),
+        'consultaveis': [item for item in instalacao.referencias(u.email) if item['id'] != referencia_usada],
+        'referencia_usada': referencia_usada,
     })
 
 
-@router.get("/api/lotes/{lote_id}")
+
+
+@router.get('/api/lotes/{lote_id}')
 def api_lote(request: Request, lote_id: str):
-    u = _exigir(request)
-    return JSONResponse(_lote_do_usuario(lote_id, u))
+
+    instalacao = comum.instalacao_de(request)
+
+    return JSONResponse(vars(instalacao.lote_do_usuario(lote_id, comum.exigir(request))))
 
 
-# ── árvore filogenética do lote ──────────────────────────────────────────────
-# O botão fica na página do lote pronto. A rota só ENFILEIRA — montar é MCMC,
-# de segundos a minutos, e é a mesma razão que tirou o lote da requisição.
 
-@router.post("/lotes/{lote_id}/arvore")
+
+@router.post('/lotes/{lote_id}/arvore')
 def pedir_arvore(request: Request, lote_id: str):
-    u = _exigir(request)
-    lote = _lote_do_usuario(lote_id, u)
-    if lote["status"] != fila.PRONTO:
-        raise HTTPException(status_code=409,
-                            detail="a árvore só pode ser montada depois que o "
-                                   "lote terminar")
-    fila_arvores.novo_pedido(cfg().sqlite_path, lote_id=lote_id, dono=u.email)
-    return RedirectResponse(f"/lotes/{lote_id}/arvore", status_code=303)
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    lote = instalacao.lote_do_usuario(lote_id, u)
+
+    if lote.status != PRONTO:
+        raise HTTPException(409, 'a árvore só pode ser montada depois que o lote terminar')
+
+    instalacao.arvores.novo_pedido(lote_id, u.email)
+
+    return RedirectResponse(f'/lotes/{lote_id}/arvore', status_code=303)
 
 
-def _pedido_do_usuario(lote_id: str, u: auth.Usuario) -> dict:
-    _lote_do_usuario(lote_id, u)     # confere o dono pelo LOTE, como o resto
-    pedido = fila_arvores.do_lote(cfg().sqlite_path, lote_id)
+
+
+def pedido_do_usuario(instalacao, lote_id, u):
+
+    #* confere o dono pelo LOTE, como o resto; sem pedido -> 404
+
+    instalacao.lote_do_usuario(lote_id, u)
+
+    pedido = instalacao.arvores.do_lote(lote_id)
+
     if not pedido:
-        raise HTTPException(status_code=404, detail="nenhuma árvore pedida "
-                                                    "para este lote")
+        raise HTTPException(404, 'nenhuma árvore pedida para este lote')
+
     return pedido
 
 
-@router.get("/lotes/{lote_id}/arvore", response_class=HTMLResponse)
+
+
+@router.get('/lotes/{lote_id}/arvore', response_class=HTMLResponse)
 def pagina_arvore(request: Request, lote_id: str):
-    u = _exigir(request)
-    lote = _lote_do_usuario(lote_id, u)
-    pedido = fila_arvores.do_lote(cfg().sqlite_path, lote_id)
-    return TEMPLATES.TemplateResponse(request, "arvore.html", {
-        **_casca(u), "lote": lote, "pedido": pedido,
-        "resumo": fila_arvores.resumo_lido(pedido) if pedido else [],
-        "recarregar": bool(pedido and pedido["status"] in fila_arvores.ATIVOS),
-        # Mesma honestidade da tela do lote: só se promete que alguém vai pegar
-        # quando há trabalhador vivo para cumprir.
-        "fila_atendida": (fila.fila_atendida(cfg().sqlite_path)
-                          if pedido and pedido["status"] == fila_arvores.NA_FILA
-                          else True),
+
+    instalacao = comum.instalacao_de(request)
+
+    u = comum.exigir(request)
+
+    lote = instalacao.lote_do_usuario(lote_id, u)
+
+    pedido = instalacao.arvores.do_lote(lote_id)
+
+    return comum.TEMPLATES.TemplateResponse(request, 'arvore.html', {
+        **instalacao.casca(u),
+        'lote': lote,
+        'pedido': pedido,
+        'resumo': pedido.resumo if pedido else [],
+        'recarregar': bool(pedido and pedido.ativo),
+        'fila_atendida': instalacao.arvores.fila_atendida() if pedido and pedido.status == fila_de_arvores.NA_FILA else True,
     })
 
 
-@router.get("/api/lotes/{lote_id}/arvore")
+
+
+@router.get('/api/lotes/{lote_id}/arvore')
 def api_arvore(request: Request, lote_id: str):
-    u = _exigir(request)
-    return JSONResponse(_pedido_do_usuario(lote_id, u))
+
+    instalacao = comum.instalacao_de(request)
+
+    return JSONResponse(vars(pedido_do_usuario(instalacao, lote_id, comum.exigir(request))))
 
 
-@router.get("/lotes/{lote_id}/arvore/{pasta}/{arquivo}")
+
+
+@router.get('/lotes/{lote_id}/arvore/{pasta}/{arquivo}')
 def arquivo_da_arvore(request: Request, lote_id: str, pasta: str, arquivo: str):
-    """A figura ou o Newick de um marcador.
 
-    O Newick sai como download porque o destino dele é outro programa — FigTree,
-    iTOL, MEGA. Quem publica não vai usar o PNG do EasyContig na figura final, e
-    fingir o contrário seria prender o usuário numa saída pior que a dele.
-    """
-    u = _exigir(request)
-    _lote_do_usuario(lote_id, u)
+    #* o Newick sai como download porque o destino dele e outro programa (FigTree, iTOL, MEGA); a figura abre na pagina
+
+    instalacao = comum.instalacao_de(request)
+
+    instalacao.lote_do_usuario(lote_id, comum.exigir(request))
+
     try:
-        caminho = executor_arvore.caminho_de_saida(cfg(), lote_id, pasta, arquivo)
+        caminho = executor_de_arvore.caminho_de_saida(instalacao.cfg, lote_id, pasta, arquivo)
+
     except ValueError:
-        raise HTTPException(status_code=404, detail="arquivo não encontrado")
+        raise HTTPException(404, 'arquivo não encontrado')
+
     if not caminho.exists():
-        raise HTTPException(status_code=404, detail="arquivo não gerado")
-    if caminho.suffix == ".png":
-        return FileResponse(caminho, media_type="image/png")
-    return FileResponse(caminho, media_type="text/plain",
-                        filename=f"{pasta}_{lote_id}{caminho.suffix}")
+        raise HTTPException(404, 'arquivo não gerado')
+
+    if caminho.suffix == '.png':
+        return FileResponse(caminho, media_type='image/png')
+
+    return FileResponse(caminho, media_type='text/plain', filename=f'{pasta}_{lote_id}{caminho.suffix}')
 
 
-@router.post("/lotes/{lote_id}/apagar")
+
+
+@router.post('/lotes/{lote_id}/apagar')
 def apagar_lote(request: Request, lote_id: str):
-    """Apagar agora, sem esperar o prazo.
 
-    Existe porque a retenção automática não substitui isto: quem mandou um lote
-    por engano — a pasta errada, o dado de outro projeto — precisa poder tirá-lo
-    do servidor no mesmo minuto, e não em 90 dias. `_lote_do_usuario` garante
-    que só o dono chega aqui.
-    """
-    u = _exigir(request)
-    _lote_do_usuario(lote_id, u)
-    if not retencao.apagar_lote(cfg().sqlite_path, cfg().lotes_dir, lote_id):
-        # A remoção recusa lote em `recebendo`/`rodando`: há outro processo
-        # lendo ou escrevendo aquela pasta neste instante.
-        raise HTTPException(status_code=409,
-                            detail="o lote está em uso; tente de novo quando terminar")
-    return RedirectResponse("/", status_code=303)
+    #* apagar agora, sem esperar o prazo: quem mandou a pasta errada precisa tira-la do servidor no mesmo minuto
+
+    instalacao = comum.instalacao_de(request)
+
+    instalacao.lote_do_usuario(lote_id, comum.exigir(request))
+
+    if not expurgo_por_retencao.apagar_lote(instalacao.banco, instalacao.cfg.pasta_de_lotes, lote_id):
+        raise HTTPException(409, 'o lote está em uso; tente de novo quando terminar')
+
+    return RedirectResponse('/', status_code=303)
 
 
-def _arquivo(lote_id: str, u: auth.Usuario, chave: str, midia: str,
-             baixar_como: str | None = None) -> FileResponse:
-    lote = _lote_do_usuario(lote_id, u)
-    if lote["status"] != fila.PRONTO:
-        raise HTTPException(status_code=409,
-                            detail=f"lote ainda em '{lote['status']}'")
-    caminho = executor.pastas_do_lote(cfg(), lote_id)[chave]
+
+
+def arquivo_do_lote(request, lote_id, qual, midia, baixar_como=None):
+
+    #* um dos arquivos gravados pelo trabalhador (relatorio_html, resultado_csv, relatorio_json), so de lote PRONTO
+
+    instalacao = comum.instalacao_de(request)
+
+    lote = instalacao.lote_do_usuario(lote_id, comum.exigir(request))
+
+    if lote.status != PRONTO:
+        raise HTTPException(409, f"lote ainda em '{lote.status}'")
+
+    caminho = getattr(instalacao.cfg.pastas_do_lote(lote_id), qual)
+
     if not caminho.exists():
-        raise HTTPException(status_code=404, detail="arquivo não gerado")
+        raise HTTPException(404, 'arquivo não gerado')
+
     return FileResponse(caminho, media_type=midia, filename=baixar_como)
 
 
-@router.get("/lotes/{lote_id}/relatorio")
+
+
+@router.get('/lotes/{lote_id}/relatorio')
 def relatorio(request: Request, lote_id: str):
-    # Servido como HTML e não como PDF de propósito: quem converte é o navegador
-    # (Ctrl+P → Salvar como PDF). O único trecho do projeto que dependia de Qt
-    # para gerar PDF era `app/ui/report_pdf.py`, e na web ele deixa de existir.
-    return _arquivo(lote_id, _exigir(request), "relatorio_html", "text/html")
+
+    return arquivo_do_lote(request, lote_id, 'relatorio_html', 'text/html')
 
 
-@router.get("/lotes/{lote_id}/resultado.csv")
+
+
+@router.get('/lotes/{lote_id}/resultado.csv')
 def resultado_csv(request: Request, lote_id: str):
-    return _arquivo(lote_id, _exigir(request), "resultado_csv", "text/csv",
-                    baixar_como=f"resultado_{lote_id}.csv")
+
+    return arquivo_do_lote(request, lote_id, 'resultado_csv', 'text/csv', baixar_como=f'resultado_{lote_id}.csv')
 
 
-@router.get("/lotes/{lote_id}/relatorio.json")
+
+
+@router.get('/lotes/{lote_id}/relatorio.json')
 def relatorio_json(request: Request, lote_id: str):
-    return _arquivo(lote_id, _exigir(request), "relatorio_json", "application/json",
-                    baixar_como=f"relatorio_{lote_id}.json")
+
+    return arquivo_do_lote(request, lote_id, 'relatorio_json', 'application/json', baixar_como=f'relatorio_{lote_id}.json')
 
 
+
+
+def main():
+
+    for rota in router.routes:
+        print(f'  {",".join(sorted(rota.methods)):9} {rota.path:48} {rota.endpoint.__name__}')
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main

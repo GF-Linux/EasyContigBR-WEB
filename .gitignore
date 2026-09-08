@@ -3,16 +3,34 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+build/
+dist/
 
-# Configuração real da máquina — o exemplo é que é versionado.
+# Configuração real da máquina — o exemplo (.env.exemplo) é que é versionado.
 .env
 
+# ⚠️ FORA DO VERSIONAMENTO POR DECISÃO DE 08/09/2026: o núcleo científico (os
+# .py da raiz) e o front (templates e estáticos). Eles são o mecanismo — a
+# ciência e a tela —, e ficam só nas máquinas que precisam deles: aqui e a VPS.
+# O repositório carrega o andaime (a web, a suíte, o empacotamento, a docs).
+# ⚠️ Consequências, para ninguém descobrir na hora errada:
+#   - um clone limpo NÃO sobe e NÃO passa na suíte; o conftest.py diz isso e diz
+#     como resolver, em vez de estourar um ImportError cru;
+#   - o `docker compose up --build` na VPS só funciona com os arquivos JÁ no
+#     disco de lá: mande-os antes com `tools/enviar_privado.sh` (o Dockerfile
+#     confere e FALHA no build se faltarem, em vez de subir uma imagem quebrada);
+#   - não há mais cópia versionada destes arquivos em lugar nenhum. O que
+#     protege é o backup desta máquina.
+/*.py
+/easycontig_web/templates/
+/easycontig_web/estatico/
+
 # ⚠️ NUNCA versionar: aqui ficam os .ab1 enviados pelos usuários. São dados de
-# sequenciamento não publicados do laboratório (o mesmo motivo de o repo da demo
-# ser privado).
-dados/
-bancos/
-nucleo
+# sequenciamento não publicados do laboratório. A barra na frente prende a
+# regra à raiz: sem ela `dados/` também engolia o pacote easycontig_web/dados/
+# (arquivo novo ali nunca entrava no git, e o original tinha a mesma armadilha).
+/dados/
+/bancos/
 
 # Relatórios e logs do arnês de carga (tools/carga.sh) — o número interessa,
 # o arquivo não: cada execução gera um novo, com selo de máquina e horário.
@@ -21,9 +39,6 @@ carga-*.log
 carga-execucao.txt
 carga-vcpu.txt
 
-# Relatorio de dados de segurança realizados pelo plugin claude
-
-
 # Candidatos das varreduras de seguranca. O padrao e GLOB, nao os nomes
 # exatos: cada execucao cria uma pasta nova com carimbo novo, e listar as
 # que ja existem deixa a PROXIMA de fora. O que ha ali dentro e a lista de
@@ -31,29 +46,18 @@ carga-vcpu.txt
 # publicado por descuido.
 CLAUDE-SECURITY-*/
 
-# Documentos de auditoria e de checklist operacional. Saem do versionamento a
-# pedido do autor antes de o repositorio ficar publico: eles registram defeitos
+# Documentos de auditoria e de checklist operacional: registram defeitos
 # achados, o estado da instancia e o que ainda falta -- util para quem opera,
-# e mapa para quem nao deveria.
-# ⚠️ ISTO NAO APAGA O QUE JA FOI PUBLICADO. Eles seguem legiveis no historico
-# (`git log -p`) ate alguem reescrever a arvore. Copia em ../easycontig-docs-privados/
+# e mapa para quem nao deveria. Copia em ../easycontig-docs-privados/
+# ⚠️ ISTO NAO APAGA O QUE JA FOI PUBLICADO: seguem legiveis no historico
+# (`git log -p`) ate alguem reescrever a arvore.
 docs/auditoria-do-nucleo.md
 docs/checklist-de-producao.md
-# Mesma regra, dois documentos novos de 2026-08-08 (o repositorio JA E PUBLICO,
-# conferido na API do GitHub nesta data):
-#   checklist.md            — IP publico, IP da Tailscale, apelido e nome da
-#                             chave de SSH, onde ficam os dados e os backups, e
-#                             a lista do que ainda NAO esta feito.
-#   achados-seguranca-*.md  — relatorio de vulnerabilidades com o mecanismo de
-#                             cada uma; parte segue sem correcao (M2, M4, L3).
 docs/checklist.md
 docs/achados-seguranca-*.md
-
-# Andaime da reescrita a mao. Nao vai para o repositorio.
-REESCRITA.md
 
 # Testes de seguranca do proprio servidor — NUNCA publicar (repo publico)
 Teste-Seguranca-GustavoFreitas/
 
-# o exemplo trazia caminhos pessoais da máquina do autor
+# O exemplo antigo trazia caminhos pessoais da máquina do autor; o novo é o .env.exemplo
 .env.example

@@ -4,34 +4,56 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easycontig-web"
-version = "0.1.0"
-description = "Fachada web do EasyContig BR: processamento de corridas Sanger em lote"
+version = "0.2.0"
+description = "EasyContig BR: montagem, identificação e árvore de corridas Sanger em lote, e a fachada web que as serve"
 requires-python = ">=3.10"
 license = { text = "PolyForm-Noncommercial-1.0.0" }
 dependencies = [
-    # o núcleo científico, instalado do repo do EasyContig (ADR 0050).
-    # Em desenvolvimento: pip install -e ../EasyContig-BR-Demo-Deck
-    "easycontig-br-core",
+    # As bibliotecas do núcleo. O original as recebia por tabela, pelo pacote
+    # `easycontig-br-core` (o repo da demo); com o núcleo dentro deste
+    # repositório elas vêm aqui, senão a imagem sobe e morre na primeira
+    # leitura de .ab1 (Bio.SeqIO no orientacao.py) ou na primeira árvore
+    # (pyfamsa e dendropy no filogenia.py). O MrBayes (`mb`) não é pip: o
+    # Dockerfile o compila.
+    "biopython>=1.83",
+    "pyfamsa>=0.5",
+    "dendropy>=4.5",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "python-multipart>=0.0.9",
     "jinja2>=3.1",
     "itsdangerous>=2.1",
-    # A FIGURA da árvore (`processamento/executor_de_arvore.py`). Fica deste
-    # lado, e não no núcleo, pelo mesmo motivo que o Qt não está lá: quem
-    # instala `app/core` num servidor não deve baixar uma pilha de gráficos.
-    # A ciência da árvore não depende disto -- sem matplotlib saem o Newick e o
-    # .con.tre do mesmo jeito, e a tela só perde a imagem.
+    # A FIGURA da árvore (processamento/executor_de_arvore.py). Fica do lado da
+    # web, e não no núcleo: o filogenia.py não importa matplotlib, e sem ele o
+    # Newick e o .con.tre saem do mesmo jeito — a tela só perde a imagem.
     "matplotlib>=3.7",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx>=0.27"]
+# O playwright é do teste_oficina.py (o oficina.js num Chromium de verdade);
+# o navegador vem à parte: `playwright install chromium`.
+dev = ["pytest>=8", "httpx>=0.27", "playwright>=1.45"]
 
 [tool.setuptools]
-# ⚠️ Listado um a um, e não `find_packages`: subpacote esquecido aqui some da
-# imagem do Docker e o erro só aparece DENTRO do contêiner — em desenvolvimento
-# o `pip install -e .` põe a pasta no caminho e mascara a falta.
+# O núcleo são módulos soltos na raiz do repositório, e o pip só leva o que
+# está listado aqui: módulo novo na raiz precisa entrar nesta lista, senão a
+# imagem sobe sem ele e o erro só aparece dentro do contêiner (em
+# desenvolvimento o `pip install -e .` põe a pasta no caminho e mascara a falta).
+py-modules = [
+    "ferramentas",
+    "motor_tracy",
+    "pareamento",
+    "orientacao",
+    "montagem",
+    "identificacao",
+    "relatorio",
+    "lote",
+    "tracado",
+    "filogenia",
+    "cliente_ncbi",
+    "bancos_de_referencia",
+]
+# Pela mesma razão, os subpacotes da web um a um, e não `find_packages`.
 packages = [
     "easycontig_web",
     "easycontig_web.contas",
@@ -41,7 +63,12 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-easycontig_web = ["templates/*.html", "estatico/*.js"]
+# O favicon entra junto: a lista antiga só levava o .js, e o ícone faltava na imagem.
+easycontig_web = ["templates/*.html", "estatico/*.js", "estatico/*.svg"]
 
 [tool.pytest.ini_options]
+# Os arquivos chamam-se teste_*.py (o prefixo em português), e o pythonpath
+# aponta para a raiz para a suíte rodar sem instalar o pacote.
 testpaths = ["tests"]
+python_files = ["teste_*.py"]
+pythonpath = ["."]

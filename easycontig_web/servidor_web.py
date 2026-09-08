@@ -1,585 +1,468 @@
-#? SERVIDOR WEB — Decisão sobre não processar nada aqui 04/08/2026
-#!
-#! 1. Sobe assim: `uvicorn easycontig_web.servidor_web:app`
-#! 2. REGRA DE OURO: este arquivo NÃO processa nada. Recebe arquivo, grava em
-#!    disco, enfileira e responde.
-#! 3. Todo trabalho pesado é do trabalhador, em outro processo.
-#! 4. É a diferença entre aguentar 100 pessoas e cair com 20.
-from __future__ import annotations
+"""
+servidor_web.py — o app FastAPI do EasyContig BR: middlewares, paredes de erro, /saude e as seis familias de rotas.
 
-import errno
+    uvicorn easycontig_web.servidor_web:app
+                 |
+                 v
+    criar_app(instalacao)                       Instalacao(configuracao.carregar()).preparar()  -> app.state.instalacao
+      |
+      |   pilha de middlewares (de fora para dentro, na ordem em que o pedido passa):
+      |     cabecalhos_de_seguranca   nonce por resposta -> request.state.nonce; CSP, nosniff, DENY, noindex, HSTS
+      |     sem_cache                 no-store em tudo que nao e /estatico/
+      |     SessionMiddleware         cookie assinado (EASYCONTIG_SECRET_KEY), SameSite=Lax
+      |     limite_de_leitura         POST: origem confere? corpo cabe no teto? tem sessao?   GET/HEAD: limitador "leitura"
+      |     GZipMiddleware
+      |     ExceptionMiddleware       HTTPException -> erro_http (JSON para API, erro.html para navegador, 401 -> /entrar)
+      |       |
+      |       '-- /saude, /estatico, rotas_de_entrada, rotas_de_envio_de_lote, rotas_de_perfil,
+      |           rotas_de_labs_e_pedidos, rotas_de_bancos, rotas_de_consulta_de_lote
+      |
+      '-- ServerErrorMiddleware (o Starlette poe no ponto MAIS de fora): Exception -> erro_nao_previsto
+             que por isso carimba os cabecalhos e o no-store A MAO, porque nao passa por middleware nenhum
+
+COMO FUNCIONA
+
+    O import do modulo monta `app` com a configuracao do ambiente — e o que o
+    Dockerfile chama (uvicorn easycontig_web.servidor_web:app). Um teste chama
+    criar_app(Instalacao(cfg_de_teste)) e ganha outro app inteiro, com outra
+    pasta e outro SQLite, sem recarregar modulo nenhum.
+
+    Cada rota acha o que precisa em comum.instalacao_de(request): a fila, os
+    perfis, a estante, o NCBI, o semaforo. Nada e global de modulo.
+
+COMO USAR
+
+    uvicorn easycontig_web.servidor_web:app --host 0.0.0.0 --port 8000
+    python -m easycontig_web.servidor_web           # desenvolvimento: 127.0.0.1:8000
+
+O QUE MUDOU (em relacao ao servidor_web.py original)
+
+ 1. O app e montado por criar_app(instalacao): a configuracao, o SQLite, as
+    filas, a estante e o NCBI moram numa Instalacao (web/instalacao.py) presa
+    em app.state, em vez de globais de modulo relidos em cada arquivo de rota.
+
+ 2. O esquema do SQLite e criado UMA vez (instalacao.preparar), nao tres
+    (fila, perfil, pedidos) — o banco_sqlite.py unificou o esquema.
+
+ 3. As rotas continuam entrando por app.router.routes.extend, na mesma
+    ordem, como o original. Medido no fastapi 0.141 instalado: include_router
+    guarda um unico _IncludedRouter (sem .path) em app.routes, e quem percorre
+    a lista atras dos caminhos (o /saude de amanha, um teste, o main daqui)
+    nao ve rota nenhuma. Acrescentar deixa app.routes plano: um APIRoute por
+    caminho, como quando tudo morava num arquivo so.
+
+ 4. Os avisos que iam para o stderr com print (erro nao previsto, queixa do
+    client_id) vao para o logger 'easycontig.servidor' — sem handler, o
+    Python os imprime no stderr do mesmo jeito; com handler, vao onde o
+    operador mandou. A queixa do client_id saia SETE vezes (uma por modulo
+    que carregava a configuracao); sai uma.
+
+ 5. `_destino = rotas_de_entrada._destino` era reexportado so para a suite
+    antiga; a suite sera reescrita, entao nao ha o que reexportar.
+
+ 6. MAX_CORPO, MAX_CORPO_SEM_SESSAO, MAX_PESADAS e o semaforo _VAGAS_PESADAS
+    sao atributos da Instalacao (max_corpo, max_corpo_sem_sessao, vagas).
+
+POR QUE nao nasce classe
+
+    O que tem estado ja e a Instalacao; o app e um objeto do FastAPI. As
+    funcoes daqui sao os middlewares e as paredes de erro, que recebem o
+    request e devolvem a resposta.
+"""
+
+import logging
 import os
-import sys
-import traceback
 import secrets
-import shutil
-import threading
-from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               RedirectResponse)
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from .dados import leitura_de_amostras as mod_amostras
-from .contas import autenticacao as auth
-from .dados import bancos_de_referencia as bancos
-from . import configuracao as config
-from .contas import cota_de_espaco as cotas
-from .processamento import executor_de_lote as executor
-from .processamento import fila_de_lotes as fila
-from .contas import limite_de_requisicoes as limites
-from .dados import pedidos_entre_labs as pedidos
-from .contas import perfil_do_laboratorio as perfil
-from .dados import expurgo_por_retencao as retencao
-from .dados import cromatograma as traco
-
-from .web import (
-    rotas_de_bancos, rotas_de_consulta_de_lote, rotas_de_entrada,
-    rotas_de_envio_de_lote, rotas_de_labs_e_pedidos, rotas_de_perfil,
-)
-from .web.comum import (  # o que toda rota usa; mora fora para não haver ciclo
-    EXT_ACEITAS, TEMPLATES, _vaga_pesada, _br, _casca, _exigir, _lote_do_usuario,
-    _marcar_resposta, _pegar_recado, _por_recado, _referencias, _u,
-)
-
-cfg = config.carregar()
-
-# ⚠️ Trava de arranque: `EASYCONTIG_PRODUCAO=1` recusa subir com a porta aberta.
-# Fica atrás de uma variável para o desenvolvimento local não precisar de nada,
-# e o `docker-compose` de produção a define.
-if os.environ.get("EASYCONTIG_PRODUCAO") == "1":
-    _problemas = config.conferir_producao()
-    if _problemas:
-        raise RuntimeError(
-            "EASYCONTIG_PRODUCAO=1 e a configuração não está pronta:\n  - "
-            + "\n  - ".join(_problemas))
-
-# ⚠️ O `GOOGLE_CLIENT_ID` errado é MUDO deste lado: `google_configurado()` aceita
-# qualquer texto, e o erro só aparece na página do Google (`401 invalid_client`,
-# "The OAuth client was not found") depois de a pessoa escolher a conta. Aviso,
-# não trava: quem sabe se o cliente existe é o Google, e recusar subir por causa
-# de um formato seria trocar um palpite por outro.
-if os.environ.get("EASYCONTIG_AUTH", "dev").lower() == "google":
-    _queixa = auth.queixa_do_client_id()
-    if _queixa:
-        print("\n  ⚠️  " + _queixa + "\n", file=sys.stderr, flush=True)
-
-fila.criar_esquema(cfg.sqlite_path)
-perfil.criar_esquema(cfg.sqlite_path)
-pedidos.criar_esquema(cfg.sqlite_path)
-
-# `docs_url=None` em produção: `/api/docs`, `/redoc` e `/openapi.json` respondiam
-# 200 SEM sessão (verificado em 2026-08-06) e publicam o mapa inteiro da API —
-# toda rota, todo parâmetro, todo formato. Não é vazamento de dado, é o mapa de
-# onde procurar, entregue a quem ainda não entrou. Em desenvolvimento continua
-# ligado, que é onde ele serve para alguma coisa.
-_DOCS = None if os.environ.get("EASYCONTIG_PRODUCAO") == "1" else "/api/docs"
-app = FastAPI(title="EasyContig BR — lotes", docs_url=_DOCS,
-              redoc_url=None, openapi_url=None if _DOCS is None else "/openapi.json")
-
-# A chave assina o cookie de sessão. Sem SECRET_KEY no ambiente, gera uma por
-# processo: seguro, mas derruba as sessões a cada reinício — aceitável em
-# desenvolvimento, e o `.env.example` avisa que produção precisa definir.
-# O traço de um par são ~380 KB de JSON e ~112 KB comprimidos (medido). Sem
-# isto, a página da amostra puxaria três vezes mais pela rede sem ganho nenhum.
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+from easycontig_web import configuracao
+from easycontig_web.contas import autenticacao
+from easycontig_web.processamento.fila_de_lotes import NA_FILA
+from easycontig_web.web import comum
+from easycontig_web.web.instalacao import Instalacao
+from easycontig_web.web import (rotas_de_entrada, rotas_de_envio_de_lote, rotas_de_perfil, rotas_de_labs_e_pedidos,
+                                rotas_de_bancos, rotas_de_consulta_de_lote)
 
 
-# Os únicos POST que uma pessoa sem sessão pode fazer. Allowlist e não
-# blocklist: rota nova nasce fechada, que é o mesmo princípio do teto de leitura
-# logo abaixo.
-POST_SEM_SESSAO = {"/entrar"}
+REGISTRO = logging.getLogger('easycontig.servidor')
+
+TITULO = 'EasyContig BR — lotes'
+
+PASTA_ESTATICA = Path(__file__).parent / 'estatico'
+
+ROTAS = (rotas_de_entrada, rotas_de_envio_de_lote, rotas_de_perfil, rotas_de_labs_e_pedidos, rotas_de_bancos, rotas_de_consulta_de_lote)  #* a ordem em que o app as registra
+
+POST_SEM_SESSAO = {'/entrar'}  #* o unico POST que quem nao entrou pode fazer
+
+MEGA = 1024 * 1024
+
+GZIP_A_PARTIR_DE = 1024  #* bytes
+
+TAMANHO_DO_NONCE = 16  #* bytes do token_urlsafe que vai na CSP de cada resposta
+
+SEM_CACHE = {'Cache-Control': 'no-store, must-revalidate', 'Pragma': 'no-cache'}  #* apagar uma corrida e apertar VOLTAR nao pode trazer a pagina dela do cache
+
+LOTES_NA_SAUDE = 500  #* quantos lotes o /saude olha para contar a fila
+
+TEXTO_DO_ERRO_NAO_PREVISTO = ('Algo quebrou do lado do servidor, e não foi por causa do que você mandou. '
+                              'O registro do erro ficou no log do servidor — avise quem cuida dele.')
+
+PAGINA_DE_SOCORRO = ('<!doctype html><html lang=pt-br><head><meta charset=utf-8><title>Erro interno</title></head><body>'
+                     f'<h1>Erro interno do servidor</h1><p>{TEXTO_DO_ERRO_NAO_PREVISTO}</p></body></html>')  #* quando ate o erro.html falha
 
 
-def _origem_confere(request: Request) -> bool:
-    """O POST veio de uma página DESTE site? (achado M3 de 2026-08-08)
 
-    O cookie de sessão é `SameSite=Lax`, e Lax é *same-**site***, não
-    *same-**origin***. A diferença não é acadêmica quando o endereço final for
-    `easycontig.ufrrj.br`: aí **qualquer host sob `ufrrj.br`** — o site
-    departamental com um XSS, o subdomínio de um evento abandonado — é
-    same-site, e um `<form method=post>` escondido lá dentro sai com o cookie
-    junto. Os alvos são de estado e alguns são irreversíveis: `/perfil`
-    (sobrescreve), `/lotes/{id}/apagar`, `/bancos/meu`, `/bancos/{id}/remover`.
 
-    Em vez de token CSRF em seis formulários — que a sétima rota esqueceria —,
-    a checagem mora aqui, no middleware que já vê TODO POST: rota nova nasce
-    coberta, do mesmo jeito que já nasce com teto de leitura e exigindo sessão.
+def producao():
 
-    **Ausência de `Origin` passa de propósito.** Navegador manda `Origin` em
-    todo POST desde 2020 (inclusive same-origin); quem não manda é cliente de
-    linha de comando — `curl`, o `TestClient` da suíte, um script do laboratório
-    —, e esses não carregam cookie de terceiro, que é o mecanismo do ataque.
-    Recusar sem `Origin` quebraria os três sem fechar nada.
-    """
-    origem = request.headers.get("origin")
+    return os.environ.get('EASYCONTIG_PRODUCAO') == '1'
+
+
+
+
+def conferir_arranque():
+
+    #* em producao, configuracao incompleta derruba o arranque (melhor que subir e falhar no primeiro lote); no modo google, avisa do client_id torto
+
+    if producao():
+
+        problemas = configuracao.conferir_producao()
+
+        if problemas:
+            raise RuntimeError('EASYCONTIG_PRODUCAO=1 e a configuração não está pronta:\n  - ' + '\n  - '.join(problemas))
+
+    if autenticacao.modo() == 'google':
+
+        queixa = autenticacao.queixa_do_client_id()
+
+        if queixa:
+            REGISTRO.warning(queixa)
+
+
+
+
+def origem_confere(request, url_base=''):
+
+    #* o POST veio de uma pagina DESTE site? o cookie e SameSite=Lax, que e same-SITE: qualquer host sob o mesmo dominio mandaria o cookie junto.
+    #* sem Origin passa: navegador manda Origin em todo POST desde 2020; quem nao manda e curl/script, que nao carrega cookie de terceiro
+
+    origem = request.headers.get('origin')
+
     if not origem:
         return True
-    base = os.environ.get("EASYCONTIG_URL_BASE", "").rstrip("/")
-    # Sem URL_BASE (desenvolvimento) o espelho é a própria requisição. Atrás do
-    # nginx isso viria com o host errado — daí a configuração vencer quando há.
-    esperado = base or str(request.base_url).rstrip("/")
-    return origem.rstrip("/").lower() == esperado.lower()
+
+    esperado = url_base or str(request.base_url).rstrip('/')
+
+    return origem.rstrip('/').lower() == esperado.lower()
 
 
-# Teto de CORPO, em bytes. Sobra generosa sobre `EASYCONTIG_MAX_BYTES` (o teto
-# por lote, 300 MB por padrão) porque o multipart carrega cabeçalho e fronteira
-# por arquivo — 400 partes somam alguns MB só de moldura.
-_FOLGA_MULTIPART = 16 * 1024 * 1024
-MAX_CORPO = int(os.environ.get("EASYCONTIG_MAX_CORPO",
-                               str(cfg.max_bytes + _FOLGA_MULTIPART)))
-
-# Teto de corpo para quem AINDA NÃO TEM SESSÃO. O de cima é dimensionado para o
-# envio de lote — 400 arquivos `.ab1`, 316 MB — e aplicá-lo também a `/entrar`
-# era dar a um anônimo o mesmo orçamento de memória que a um laboratório
-# enviando uma corrida inteira. O formulário de login manda um e-mail e um
-# campo `proximo`: algumas centenas de bytes. 64 KB é folga de duas ordens de
-# grandeza sobre o que a rota realmente usa, e ainda assim recusa o corpo antes
-# de o `MultiPartParser` existir.
-#
-# Achado F1 da varredura de 2026-08-21: `/entrar` é o único POST isento do 401
-# (POST_SEM_SESSAO), então era o único caminho em que um cliente sem cookie
-# nenhum decidia quantos bytes o processo segurava — e o FastAPI chama
-# `request.form()` ANTES da função da rota, de modo que nem o 403 do modo nem o
-# teto de login impediam a alocação.
-MAX_CORPO_SEM_SESSAO = int(os.environ.get("EASYCONTIG_MAX_CORPO_SEM_SESSAO",
-                                          str(64 * 1024)))
 
 
-def _teto_do_caminho(caminho: str) -> int:
-    """O teto de corpo que vale para esta rota.
+def teto_do_caminho(instalacao, caminho):
 
-    Rota aberta a quem não tem sessão paga o teto pequeno; o resto segue no
-    teto de envio. Fica numa função só para que o fast-path do `Content-Length`
-    e o caminho `chunked` não possam divergir — foi divergência assim que
-    deixou o buraco aberto pela porta sem cabeçalho da última vez.
-    """
-    return MAX_CORPO_SEM_SESSAO if caminho in POST_SEM_SESSAO else MAX_CORPO
+    #* rota aberta a quem nao tem sessao paga o teto pequeno; o resto segue no teto de envio
+
+    return instalacao.max_corpo_sem_sessao if caminho in POST_SEM_SESSAO else instalacao.max_corpo
 
 
-def _corpo_grande_demais(request: Request) -> str:
-    """Recusa pelo `Content-Length`, antes de o corpo existir (achado H1).
 
-    O `MultiPartParser` do Starlette spoola **cada parte de arquivo** num
-    `SpooledTemporaryFile`, que vira arquivo real em `/tmp` assim que passa do
-    limiar — e isso acontece **antes** de a função da rota rodar. Ou seja,
-    `max_bytes`, cota e retenção agem todos DEPOIS de os bytes já terem tocado o
-    disco. Medido em 2026-08-08: 12.000.296 bytes subiram inteiros num
-    `POST /perfil` cujo teto é 2 MB, e só então voltou o 413.
 
-    A barreira de verdade é o `client_max_body_size` do nginx (512 MB, em
-    `implantacao/nginx-easycontig.conf`). Isto aqui é defesa em profundidade,
-    e vale por dois motivos concretos: quem roda o app sem nginx na frente
-    (desenvolvimento, ou uma instalação nova que ainda não copiou a receita)
-    não tem barreira NENHUMA; e o teto do app acompanha `MAX_BYTES`, enquanto o
-    do nginx é um número fixo que alguém teria de lembrar de mexer junto.
+def recado_do_teto(teto):
 
-    ⚠️ **Sem `Content-Length` não há o que conferir** — corpo em `chunked` não
-    declara tamanho. Aí a barreira volta a ser só o nginx. Recusar requisição
-    sem o cabeçalho quebraria cliente legítimo para fechar um caminho que o
-    proxy já fecha.
-    """
-    bruto = request.headers.get("content-length")
+    if teto < MEGA:
+        return f'o envio passa do teto de {teto // 1024} KB para esta requisição'
+
+    return f'o envio passa do teto de {teto // MEGA} MB por requisição; mande em lotes menores'
+
+
+
+
+def corpo_grande_demais(instalacao, request):
+
+    #* recusa pelo Content-Length, ANTES de o corpo existir: o parser multipart do Starlette grava cada arquivo em /tmp antes de a rota rodar.
+    #* sem o cabecalho nao ha o que conferir aqui (corpo chunked); esse caso e lido aos pedacos no middleware
+
+    bruto = request.headers.get('content-length')
+
     if not bruto:
-        return ""
+        return ''
+
     try:
-        n = int(bruto)
+        declarado = int(bruto)
+
     except ValueError:
-        return "content-length inválido"
-    teto = _teto_do_caminho(request.url.path)
-    if n > teto:
-        if teto < 1024 * 1024:
-            return (f"o envio passa do teto de {teto // 1024} KB para esta "
-                    "requisição")
-        return (f"o envio passa do teto de {teto // (1024 * 1024)} MB por "
-                "requisição; mande em lotes menores")
-    return ""
+        return 'content-length inválido'
+
+    teto = teto_do_caminho(instalacao, request.url.path)
+
+    return recado_do_teto(teto) if declarado > teto else ''
 
 
-# ⚠️ A POSIÇÃO DESTE BLOCO É O QUE O FAZ FUNCIONAR — não mova para junto dos
-# outros middlewares lá embaixo. `add_middleware` empilha de dentro para fora:
-# quem é registrado DEPOIS fica por FORA. Registrando o limitador aqui, entre o
-# GZip e o Session, ele passa a rodar POR DENTRO do `SessionMiddleware` e
-# `request.session` existe quando ele roda. Registrado depois do Session — que
-# era como estava — ele roda por fora, a sessão ainda não foi decodificada, e
-# só sobra o IP.
-#
-# Isso deixou de ser detalhe quando se mediu o efeito: contando por IP, o teto
-# de 300 leituras/60 s é do PRÉDIO, não da pessoa. A página do lote pergunta o
-# estado de 3 em 3 s, ou seja 0,33 req/s por aba aberta — **15 abas no mesmo IP
-# esgotam o teto**, e a universidade inteira sai por um NAT. Quem seria barrado
-# é justamente o laboratório em dia de corrida.
-@app.middleware("http")
-async def _limite_de_leitura(request: Request, call_next):
-    """Teto de leitura no middleware, e não rota a rota: assim uma rota nova já
-    nasce protegida em vez de depender de alguém lembrar.
 
-    Conta por CONTA quando há sessão e cai para o IP quando não há — que é o
-    comportamento que `limites.chave()` já implementava e este middleware não
-    conseguia usar. O caminho anônimo continua contado por IP, e é o que se quer:
-    ali o IP é a única identidade que existe.
 
-    ⚠️ **E o 401 dos POST tem que sair DAQUI, não da rota.** Medido nos pacotes
-    instalados em 2026-08-06: o FastAPI executa `await request.form()` dentro do
-    manipulador da requisição, **antes** de chamar a função do endpoint — e a
-    autenticação deste app é a primeira instrução DE DENTRO dela. Ou seja, um
-    chamador sem cookie nenhum decidia quantos bytes o servidor recebia e por
-    quanto tempo, e só depois levava 401: mil partes de ~1 MB seguravam ~1 GB
-    residente no processo do uvicorn. Middleware roda antes do parser, então
-    recusar aqui é recusar antes de o corpo existir.
-    """
+async def limite_de_leitura(request, call_next):
+
+    #* no middleware, e nao rota a rota: rota nova ja nasce coberta. o 401 do POST tem de sair DAQUI: o FastAPI le o formulario inteiro
+    #* antes de chamar a funcao da rota, entao um chamador sem cookie decidiria quantos bytes o servidor recebe
+
+    instalacao = comum.instalacao_de(request)
+
     caminho = request.url.path
-    if caminho.startswith("/estatico/"):
+
+    if caminho.startswith('/estatico/'):
         return await call_next(request)
 
-    if request.method == "POST" and not _origem_confere(request):
-        # Recusado ANTES do 401 e antes do parser: um POST forjado de fora não
-        # merece nem que o corpo dele seja lido.
-        return JSONResponse({"detail": "origem não confere"}, status_code=403)
+    if request.method == 'POST':
 
-    if request.method == "POST":
-        grande = _corpo_grande_demais(request)
+        if not origem_confere(request, instalacao.url_base):
+            return JSONResponse({'detail': 'origem não confere'}, status_code=403)
+
+        grande = corpo_grande_demais(instalacao, request)
+
         if grande:
-            return JSONResponse({"detail": grande}, status_code=413)
+            return JSONResponse({'detail': grande}, status_code=413)
 
-    # ⚠️ NÃO acrescente aqui um `limites.conferir("login", ...)` para os
-    # POST_SEM_SESSAO. O relatório F1 sugeria isso, e seria trocar um buraco
-    # por outro que já foi fechado: o teto de login vivia antes da checagem de
-    # modo e foi movido para DEPOIS dela em 2026-08-06, porque em produção
-    # (`EASYCONTIG_AUTH=google`) `/entrar` sempre devolve 403 e cada batida
-    # queimava o orçamento de login — que atrás do nginx é COMPARTILHADO por
-    # todo visitante anônimo. Uma rota desligada trancava o login de quem usa.
-    # Conferir no middleware é conferir antes do 403, ou seja, é reabrir aquilo.
-    # O que o F1 pede de fato — não deixar um anônimo escolher quanta memória o
-    # processo segura — está resolvido pelo teto de corpo acima, que recusa em
-    # 64 KB antes de o `MultiPartParser` existir.
-    if request.method == "POST" and caminho not in POST_SEM_SESSAO:
-        try:
-            tem_sessao = auth.usuario_da_sessao(request) is not None
-        except Exception:                       # noqa: BLE001
-            tem_sessao = False
-        if not tem_sessao:
-            if "text/html" in request.headers.get("accept", ""):
-                return RedirectResponse(f"/entrar?proximo={quote(caminho)}",
-                                        status_code=303)
-            return JSONResponse({"detail": "entre para continuar"}, status_code=401)
+        if caminho not in POST_SEM_SESSAO and not tem_sessao(request):
 
-    # ⚠️ Teto de corpo para POST em `chunked`/streamed — SÓ AQUI, depois de a
-    # origem (403) E a sessão (401) já terem passado. `_corpo_grande_demais`
-    # confere o `Content-Length`, mas um POST `Transfer-Encoding: chunked` não
-    # declara tamanho: passava batido pelo fast-path e o `MultiPartParser`
-    # spoolava cada parte de arquivo em /tmp antes de a rota rodar (o mesmo H1,
-    # pela porta sem cabeçalho). Lê-se o corpo em pedaços com teto e PARA no
-    # primeiro byte que passa de MAX_CORPO — antes do spool. A posição importa:
-    # só chega aqui quem vai mesmo alcançar o parser (autenticado, ou os
-    # POST_SEM_SESSAO como /entrar). Um POST sem sessão a rota protegida já
-    # levou 401 acima, com ZERO byte lido — o buraco de memória pré-auth que o
-    # 401-primeiro fechou continua fechado. Só se aplica sem `Content-Length`:
-    # com ele o fast-path já decidiu e não se re-lê o corpo.
-    if request.method == "POST" and not request.headers.get("content-length"):
-        # O mesmo teto do fast-path, pela função única: rota sem sessão paga o
-        # teto pequeno também aqui. Sem isto, `chunked` continuaria sendo a
-        # porta larga de `/entrar` — exatamente o padrão que já tinha aberto o
-        # buraco uma vez.
-        teto = _teto_do_caminho(caminho)
-        if teto < 1024 * 1024:
-            recado = f"o envio passa do teto de {teto // 1024} KB para esta requisição"
-        else:
-            recado = (f"o envio passa do teto de {teto // (1024 * 1024)} MB por "
-                      "requisição; mande em lotes menores")
-        corpo = bytearray()
-        async for pedaco in request.stream():
-            corpo.extend(pedaco)
-            if len(corpo) > teto:
-                return JSONResponse({"detail": recado}, status_code=413)
-        # Sob o teto: devolve o corpo já lido ao pipeline. `_CachedRequest` do
-        # BaseHTTPMiddleware entrega `_body` ao parser lá dentro, então a rota
-        # ainda recebe o multipart inteiro — nada foi perdido ao conferir.
-        request._body = bytes(corpo)
+            if comum.quer_html(request):
+                return RedirectResponse(f'/entrar?proximo={quote(caminho)}', status_code=303)
 
-    # ⚠️ HEAD conta junto com GET. HEAD é leitura — o servidor resolve a rota,
-    # monta a resposta inteira e só descarta o corpo — e enquanto isto dizia
-    # apenas `== "GET"` havia um método que não gastava orçamento NENHUM: bastava
-    # trocar o verbo para bater à vontade. Apareceu ao abrir o `/saude` para
-    # HEAD (o UptimeRobot só fala HEAD no plano grátis), mas o buraco não era do
-    # `/saude`: era de toda rota deste app.
-    if request.method in ("GET", "HEAD"):
-        quem = None
+            return JSONResponse({'detail': 'entre para continuar'}, status_code=401)
+
+        if not request.headers.get('content-length'):
+
+            teto = teto_do_caminho(instalacao, caminho)
+
+            corpo = bytearray()
+
+            async for pedaco in request.stream():
+
+                corpo.extend(pedaco)
+
+                if len(corpo) > teto:
+                    return JSONResponse({'detail': recado_do_teto(teto)}, status_code=413)
+
+            request._body = bytes(corpo)  #! e assim que o Starlette guarda um corpo ja lido: o BaseHTTPMiddleware reentrega _body a rota
+
+    if request.method in ('GET', 'HEAD'):
+
         try:
-            u = auth.usuario_da_sessao(request)
-            quem = u.email if u else None
-        except Exception:                       # noqa: BLE001
-            # Sessão ilegível (cookie de uma chave antiga, por exemplo) não pode
-            # derrubar a requisição: cai para o IP, que é o teto de quem não
-            # está identificado. O limite é convivência, não autenticação.
-            quem = None
-        try:
-            limites.conferir("leitura", request, quem)
-        except HTTPException as e:
-            return JSONResponse({"detail": e.detail}, status_code=429,
-                                headers=e.headers or {})
+            instalacao.limitador.conferir('leitura', request, quem_entrou(request))
+
+        except HTTPException as erro:
+            return JSONResponse({'detail': erro.detail}, status_code=429, headers=erro.headers or {})
+
     return await call_next(request)
 
 
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=os.environ.get("EASYCONTIG_SECRET_KEY") or secrets.token_urlsafe(32),
-    https_only=os.environ.get("EASYCONTIG_HTTPS_ONLY", "0") == "1",
-    same_site="lax",
-)
-
-# O JS do workspace sai em arquivo, e não embutido no template, porque o
-# navegador o guarda em cache entre amostras — a página da amostra é a que mais
-# se reabre, uma por par.
-app.mount("/estatico",
-          StaticFiles(directory=str(Path(__file__).parent / "estatico")),
-          name="estatico")
 
 
-@app.middleware("http")
-async def _sem_cache(request: Request, call_next):
-    """Página com sessão não vai para o cache do navegador.
+def quem_entrou(request):
 
-    Sem isto, apagar uma corrida e apertar VOLTAR trazia de volta a página dela
-    do cache — com o botão "Apagar agora" e tudo —, e qualquer clique ali dava
-    404. A corrida "sumia" sem explicação, que foi a queixa. Com `no-store` o
-    voltar refaz a requisição e vê o 404 honesto, que a tela de erro explica.
+    #* o e-mail da sessao, ou None; sessao ilegivel conta como ninguem
 
-    Vale também para quem sai da conta num computador compartilhado: sem isto o
-    histórico do navegador ainda mostraria o relatório de quem entrou antes.
-    Arquivos estáticos ficam de fora — o JS do workspace se beneficia do cache.
-    """
+    try:
+        u = comum.usuario(request)
+
+    except Exception:
+        return None
+
+    return u.email if u else None
+
+
+
+
+def tem_sessao(request):
+
+    return quem_entrou(request) is not None
+
+
+
+
+async def sem_cache(request, call_next):
+
+    #* pagina com sessao nao vai para o cache do navegador; o estatico fica de fora (o JS se beneficia do cache)
+
     resposta = await call_next(request)
-    if not request.url.path.startswith("/estatico/"):
-        resposta.headers["Cache-Control"] = "no-store, must-revalidate"
-        resposta.headers["Pragma"] = "no-cache"
+
+    if not request.url.path.startswith('/estatico/'):
+        resposta.headers.update(SEM_CACHE)
+
     return resposta
 
 
-@app.middleware("http")
-async def _cabecalhos_de_seguranca(request: Request, call_next):
-    """O que o navegador precisa ouvir do servidor. Nenhum destes existia.
 
-    **`X-Robots-Tag: noindex`** é o mais específico deste projeto, e vai em TODA
-    resposta: com domínio próprio o app fica descobrível de fora, e o que está
-    atrás do login é sequenciamento **não publicado**. Não pode ser indexado nem
-    por engano — nem pelo buscador que segue um link colado no grupo errado.
 
-    **CSP com nonce, e sem `'unsafe-inline'` no script.** A página não carrega
-    nada de fora — nem fonte, nem folha, nem imagem — então dá para fechar quase
-    tudo. `script-src` sem `'unsafe-inline'` é o que transforma a CSP em defesa
-    real contra o gênero de XSS armazenado que já apareceu aqui (o `stitle` do
-    BLAST, em 06/08): mesmo que um texto vindo de fora volte a escapar do
-    escape, ele não executa sem o nonce, que muda a cada resposta.
+async def cabecalhos_de_seguranca(request, call_next):
 
-    `style-src` fica com `'unsafe-inline'` de propósito: são 68 atributos
-    `style=` nos templates, e bloqueá-los quebraria o layout para proteger
-    contra um risco muito menor. Trocar funcionamento por teatro não paga.
+    #* um nonce por resposta: o script inline do base.html o carrega, e mais nenhum script executa (CSP sem 'unsafe-inline')
 
-    **HSTS só quando há TLS.** Mandá-lo em `http://localhost` ensinaria o
-    navegador a recusar o próprio desenvolvimento pelos meses do `max-age`.
-    """
-    nonce = secrets.token_urlsafe(16)
+    nonce = novo_nonce()
+
     request.state.nonce = nonce
+
     resposta = await call_next(request)
-    _marcar_resposta(resposta, nonce)
+
+    comum.marcar_resposta(resposta, nonce, comum.instalacao_de(request).https_only)
+
     return resposta
 
 
-@app.exception_handler(HTTPException)
-def _erro(request: Request, exc: HTTPException):
-    """Quem veio pelo navegador recebe página; quem veio por API recebe JSON.
 
-    Sem isto, abrir um link de lote sem sessão devolvia `{"detail":"entre para
-    continuar"}` cru na tela, sem título nem caminho de volta. E não é caso de
-    borda: sem `EASYCONTIG_SECRET_KEY` fixa a chave é regerada a cada arranque
-    do servidor (ver o comentário do SessionMiddleware), então TODO reinício
-    desloga todo mundo e leva todos a esta parede.
-    """
-    # ⚠️ Os cabeçalhos da exceção viajam junto (achado de 2026-08-11, encontrado
-    # ao escrever o teste do 503 de `_vaga_pesada`). Este manipulador montava a
-    # resposta do zero e descartava `exc.headers` — então o `Retry-After` que
-    # `_vaga_pesada()` e `limites.conferir()` põem no 503 e no 429 nunca chegava
-    # a ninguém. O servidor sabia em quantos segundos valia tentar de novo e não
-    # contava, e um cliente educado não tinha como ser educado.
+
+def novo_nonce():
+
+    return secrets.token_urlsafe(TAMANHO_DO_NONCE)
+
+
+
+
+def casca_do_erro(request):
+
+    #* a barra lateral de quem entrou, ou nada
+
+    u = comum.usuario(request)
+
+    return comum.instalacao_de(request).casca(u) if u else {'usuario': None}
+
+
+
+
+def erro_http(request, exc):
+
+    #* quem veio pelo navegador recebe pagina; quem veio por API recebe JSON; 401 no navegador vai para /entrar e volta depois
+
     cabecalhos = dict(exc.headers or {})
-    quer_html = "text/html" in request.headers.get("accept", "")
-    if not quer_html:
-        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
-                            headers=cabecalhos)
+
+    if not comum.quer_html(request):
+        return JSONResponse({'detail': exc.detail}, status_code=exc.status_code, headers=cabecalhos)
+
     if exc.status_code == 401:
-        # `proximo` preserva o destino: depois de entrar, a pessoa volta para o
-        # lote que tentou abrir, em vez de cair na lista e ter de procurá-lo.
-        return RedirectResponse(f"/entrar?proximo={quote(request.url.path)}",
-                                status_code=303)
-    u = _u(request)
-    return TEMPLATES.TemplateResponse(request, "erro.html", {
-        **(_casca(u) if u else {"usuario": None}),
-        "codigo": exc.status_code, "detalhe": exc.detail,
-    }, status_code=exc.status_code, headers=cabecalhos)
+        return RedirectResponse(f'/entrar?proximo={quote(request.url.path)}', status_code=303)
 
-@app.exception_handler(Exception)
-def _erro_nao_previsto(request: Request, exc: Exception):
-    """A parede de qualquer exceção que ninguém previu.
+    return comum.TEMPLATES.TemplateResponse(request, 'erro.html', {**casca_do_erro(request), 'codigo': exc.status_code, 'detalhe': exc.detail},
+                                            status_code=exc.status_code, headers=cabecalhos)
 
-    Sem isto o Starlette devolve `Internal Server Error` em texto puro — sem
-    casca, sem caminho de volta e sem dizer se o trabalho foi perdido. Visto de
-    verdade em 2026-08-06, simulando disco cheio: a limpeza estava correta e a
-    tela não contava nada disso.
 
-    O texto NÃO leva a exceção: quem está do outro lado não pode ler caminho de
-    arquivo nem consulta. O detalhe vai para o log, onde quem opera lê.
 
-    ⚠️ **ESTA RESPOSTA NÃO PASSA POR MIDDLEWARE NENHUM**, e por isso ela carimba
-    os cabeçalhos à mão. Achado M1 de 2026-08-08: um `@app.exception_handler(
-    Exception)` é servido pelo `ServerErrorMiddleware`, que o Starlette põe no
-    ponto MAIS DE FORA da pilha — fora, portanto, do `_cabecalhos_de_seguranca`
-    e do `_sem_cache`, que são `@app.middleware("http")`. O resultado é que a
-    única página que sai numa hora ruim saía **sem** CSP, sem `nosniff`, sem
-    `X-Frame-Options`, sem `noindex` e **cacheável** — e ela herda o `base.html`,
-    ou seja, leva a lateral com o nome, o e-mail de quem entrou e os nomes das
-    corridas. A 500 do HTTPException (`_erro`) não tem o problema: aquela vem do
-    `ExceptionMiddleware`, que fica por DENTRO da pilha.
-    """
-    print(f"  ⚠️  erro não previsto em {request.method} {request.url.path}: "
-          f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-    traceback.print_exc(file=sys.stderr)
-    # O nonce é posto por `_cabecalhos_de_seguranca` antes de a rota rodar; o
-    # sorteio aqui é só para o caso de a exceção nascer antes disso — uma CSP
-    # com nonce que não casa é mais segura que CSP nenhuma.
-    nonce = getattr(request.state, "nonce", None) or secrets.token_urlsafe(16)
-    if "text/html" not in request.headers.get("accept", ""):
-        resposta = JSONResponse({"detail": "erro interno do servidor"},
-                                status_code=500)
+
+def erro_nao_previsto(request, exc):
+
+    #* a parede de qualquer excecao que ninguem previu. o texto NAO leva a excecao (caminho de arquivo, consulta): isso vai para o log.
+    #! esta resposta nao passa por middleware nenhum (ServerErrorMiddleware e o mais de fora): cabecalhos e no-store carimbados a mao
+
+    REGISTRO.error('erro não previsto em %s %s: %s: %s', request.method, request.url.path, type(exc).__name__, exc, exc_info=exc)
+
+    nonce = getattr(request.state, 'nonce', None) or novo_nonce()
+
+    if not comum.quer_html(request):
+        resposta = JSONResponse({'detail': 'erro interno do servidor'}, status_code=500)
+
     else:
+
         try:
-            # A falha DA falha: `_casca` faz leituras no SQLite (perfil, fila,
-            # pedidos) e é justamente o que quebra num disco cheio ou banco fora
-            # do ar — o cenário que este manipulador existe para servir. Se
-            # `_casca` ou o render explodir aqui, a exceção sai do manipulador e
-            # o `ServerErrorMiddleware` do Starlette devolve um "Internal Server
-            # Error" cru, SEM os cabeçalhos que `_marcar_resposta` põe. Por isso
-            # a montagem fica cercada: em qualquer falha, cai-se numa resposta
-            # mínima e ESTÁTICA que ainda passa por `_marcar_resposta`.
-            u = _u(request)
-            resposta = TEMPLATES.TemplateResponse(request, "erro.html", {
-                **(_casca(u) if u else {"usuario": None}),
-                "codigo": 500,
-                "detalhe": ("Algo quebrou do lado do servidor, e não foi por "
-                            "causa do que você mandou. O registro do erro ficou "
-                            "no log do servidor — avise quem cuida dele."),
-            }, status_code=500)
-        except Exception as exc2:
-            print("  ⚠️  a própria página de erro falhou ao montar: "
-                  f"{type(exc2).__name__}: {exc2}", file=sys.stderr, flush=True)
-            traceback.print_exc(file=sys.stderr)
-            # Corpo estático e genérico: nenhum dado de usuário, nenhum detalhe
-            # da exceção. O que importa é sair com os cabeçalhos de segurança.
-            resposta = HTMLResponse(
-                "<!doctype html><html lang=pt-br><head><meta charset=utf-8>"
-                "<title>Erro interno</title></head><body>"
-                "<h1>Erro interno do servidor</h1>"
-                "<p>Algo quebrou do lado do servidor, e não foi por causa do "
-                "que você mandou. O registro do erro ficou no log do servidor "
-                "— avise quem cuida dele.</p></body></html>",
-                status_code=500)
-    _marcar_resposta(resposta, nonce)
-    resposta.headers["Cache-Control"] = "no-store, must-revalidate"
-    resposta.headers["Pragma"] = "no-cache"
+            resposta = comum.TEMPLATES.TemplateResponse(request, 'erro.html', {**casca_do_erro(request), 'codigo': 500, 'detalhe': TEXTO_DO_ERRO_NAO_PREVISTO}, status_code=500)
+
+        except Exception as erro:
+
+            REGISTRO.error('a própria página de erro falhou ao montar: %s: %s', type(erro).__name__, erro, exc_info=erro)
+
+            resposta = HTMLResponse(PAGINA_DE_SOCORRO, status_code=500)
+
+    comum.marcar_resposta(resposta, nonce, comum.instalacao_de(request).https_only)
+
+    resposta.headers.update(SEM_CACHE)
+
     return resposta
 
 
-# ───────────────────────────────────────────── teto de trabalho pesado (M4)
-# Duas rotas GET rodam ferramenta externa por requisição: `api_traco` chama
-# `tracy` (~0,3 s) e `api_consultar` chama `tracy` **mais** `blastn` (timeout de
-# 120 s). As duas são `def` síncronas, então rodam no threadpool do Starlette —
-# que tem 40 vagas e é COMPARTILHADO por todas as rotas `def` do app.
-#
-# O buraco (achado M4 de 2026-08-08): o único freio era o balde `leitura`, de
-# 300 por 60 s POR CONTA. O dono de um lote pronto dispara 300 GETs num minuto,
-# o threadpool enche de `blastn`, e aí param junto a página inicial, a lista de
-# corridas e os downloads — de todo mundo, não só dele. Não precisa de má
-# intenção: um laço de script do laboratório faz igual.
-#
-# O teto é sobre CONCORRÊNCIA, e não sobre taxa, porque o recurso que colapsa é
-# CPU (a VPS tem 2 vCPU, e o trabalhador disputa a mesma). E a tomada é
-# **não bloqueante** de propósito: esperar por vaga seguraria a thread, que é
-# exatamente o que se quer liberar. Sem vaga, 503 na hora — a rota pesada
-# degrada e o resto do site continua de pé, que é a troca certa.
-MAX_PESADAS = max(1, int(os.environ.get("EASYCONTIG_MAX_PESADAS", "4")))
-_VAGAS_PESADAS = threading.BoundedSemaphore(MAX_PESADAS)
 
 
-# ----------------------------------------------------------------------- saúde
-@app.api_route("/saude", methods=["GET", "HEAD"])
 def saude(request: Request):
-    """De pé ou não. Detalhe só para quem entrou.
 
-    ⚠️ **HEAD, não só GET** (2026-08-08). O FastAPI — ao contrário do Starlette
-    puro — NÃO acrescenta HEAD numa rota declarada com `@app.get`, então a rota
-    respondia `405 Method Not Allowed` a quem falasse HEAD. O UptimeRobot usa
-    HEAD, e escolher o método é recurso PAGO lá: o monitor externo nasceu em
-    "down" e assim ficou, apontado para um site que estava de pé o tempo todo.
-    O 503 que a nota abaixo descreve não servia para nada, porque o monitor
-    nunca chegava a ler código de saúde algum. Corrigir aqui é o que não depende
-    do plano de ninguém.
+    #* de pe ou nao (200/503); o detalhe (ferramentas, bancos, fila) so para quem entrou. GET e HEAD: o monitor externo fala HEAD
 
+    instalacao = comum.instalacao_de(request)
 
-    ⚠️ Isto respondia a QUALQUER UM com os caminhos absolutos do contêiner
-    (`/usr/local/bin/tracy`, `/bancos/referencias_18S`), quais ferramentas
-    científicas estão instaladas e onde, e a profundidade da fila **sem filtro
-    de dono** — repetindo a chamada, um estranho acompanha quando o laboratório
-    trabalha e quanto. Não vaza `.ab1` nem credencial, mas é reconhecimento e um
-    oráculo de atividade, de graça.
+    itens = configuracao.diagnostico(instalacao.cfg)
 
-    A rota continua aberta porque o `healthcheck` do compose a usa sem cookie —
-    e para ele `{"ok": true}` com 200 basta. Quem precisa do detalhe é quem
-    opera, e quem opera tem sessão.
+    ok = all(bem for _, bem, _ in itens)
 
-    ⚠️ **DOENTE RESPONDE 503, NÃO 200** (2026-08-08). Antes, `ok: false` saía com
-    **200**, e o efeito é que a rota mentia para todo mundo que fala HTTP em vez
-    de ler JSON: um monitor externo olhando o código de status veria "no ar" com
-    o `tracy` sumido ou os bancos sem índice — que é justamente o estado em que
-    o serviço aceita corrida e não consegue identificar nada. O `healthcheck` do
-    compose tinha o mesmo buraco: conferia `status == 200`, e 200 era o que
-    chegava sempre.
-
-    Os quatro itens de `config.diagnostico` são estáveis dentro do contêiner
-    (dois binários da imagem e dois índices do volume), então 503 aqui não
-    pisca: quando aparecer, quebrou mesmo.
-    """
-    itens = config.diagnostico(cfg)
-    ok = all(x for _, x, _ in itens)
     codigo = 200 if ok else 503
-    if not _u(request):
-        return JSONResponse({"ok": ok}, status_code=codigo)
-    return JSONResponse({
-        "ok": ok,
-        "dependencias": [{"item": i, "ok": x, "detalhe": d} for i, x, d in itens],
-        "na_fila": sum(1 for x in fila.listar(cfg.sqlite_path, limite=500)
-                       if x["status"] == fila.NA_FILA),
-    }, status_code=codigo)
+
+    if not comum.usuario(request):
+        return JSONResponse({'ok': ok}, status_code=codigo)
+
+    na_fila = sum(1 for lote in instalacao.lotes.listar(limite=LOTES_NA_SAUDE) if lote.status == NA_FILA)
+
+    return JSONResponse({'ok': ok, 'dependencias': [{'item': item, 'ok': bem, 'detalhe': detalhe} for item, bem, detalhe in itens], 'na_fila': na_fila}, status_code=codigo)
 
 
-#* As rotas moram em arquivos por assunto, em `web/`.
-#! As rotas são ACRESCENTADAS uma a uma, e não por `include_router`. Motivo
-#!   medido: nesta versão do FastAPI o `include_router` guarda um embrulho em
-#!   `app.routes`, e quem percorre a lista procurando `.path` deixa de achar a
-#!   rota — foi o que quebrou o teste do leia-me. Acrescentar mantém
-#!   `app.routes` com o mesmo formato de quando tudo morava num arquivo só.
-#! A ORDEM é a mesma de antes: o FastAPI casa a primeira rota que bater.
-for _modulo in (rotas_de_entrada, rotas_de_envio_de_lote, rotas_de_perfil,
-                rotas_de_labs_e_pedidos, rotas_de_bancos, rotas_de_consulta_de_lote):
-    app.router.routes.extend(_modulo.router.routes)
 
-#! Reexportado de propósito: a suíte confere o `_destino` direto no servidor
-#!   (`main._destino(...)`), e ele mora no arquivo das rotas de entrada. Tirar
-#!   esta linha não quebra o site — quebra o teste que guarda o redirecionamento
-#!   contra destino externo.
-_destino = rotas_de_entrada._destino
+
+def criar_app(instalacao=None):
+
+    #* monta o app inteiro sobre UMA Instalacao. a ordem dos add_middleware importa: o ultimo registrado e o mais de fora
+
+    if instalacao is None:
+        instalacao = Instalacao(configuracao.carregar())
+
+    conferir_arranque()
+
+    instalacao.preparar()
+
+    docs = None if producao() else '/api/docs'
+
+    app = FastAPI(title=TITULO, docs_url=docs, redoc_url=None, openapi_url=None if docs is None else '/openapi.json')
+
+    app.state.instalacao = instalacao
+
+    app.add_middleware(GZipMiddleware, minimum_size=GZIP_A_PARTIR_DE)
+
+    app.middleware('http')(limite_de_leitura)
+
+    app.add_middleware(SessionMiddleware, secret_key=instalacao.chave_da_sessao, https_only=instalacao.https_only, same_site='lax')
+
+    app.mount('/estatico', StaticFiles(directory=str(PASTA_ESTATICA)), name='estatico')
+
+    app.middleware('http')(sem_cache)
+
+    app.middleware('http')(cabecalhos_de_seguranca)
+
+    app.add_exception_handler(HTTPException, erro_http)
+
+    app.add_exception_handler(Exception, erro_nao_previsto)
+
+    app.add_api_route('/saude', saude, methods=['GET', 'HEAD'])
+
+    for modulo in ROTAS:
+        app.router.routes.extend(modulo.router.routes)  #! nao include_router: no fastapi 0.141 ele embrulha tudo num _IncludedRouter sem .path (ver O QUE MUDOU 3)
+
+    return app
+
+
+
+
+app = criar_app()
+
+
+
+
+def main():
+
+    #* servidor de desenvolvimento; em producao o Dockerfile chama o uvicorn direto
+
+    import uvicorn
+
+    uvicorn.run(app, host='127.0.0.1', port=8000)
+
+
+if __name__ == '__main__':  #* verifica se o arquivo esta sendo executado diretamente
+    main()  #* chama a funcao main
