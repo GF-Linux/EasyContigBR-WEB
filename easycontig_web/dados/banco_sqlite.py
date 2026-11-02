@@ -162,6 +162,25 @@ TEMPO_LIMITE = 30  #* segundos que uma conexao espera pela trava do arquivo ante
 SUFIXO_DO_BACKUP = '.antes-de-migrar-'  #* fila.sqlite3.antes-de-migrar-20260901T120000Z
 
 
+ESQUEMA_DAS_AMOSTRAS = (  #* um comando por item: a migracao 7 os executa um a um (ver a regra das migracoes) e o ESQUEMA os junta
+    """CREATE TABLE IF NOT EXISTS amostras (
+    lote_id     TEXT NOT NULL,
+    chave       TEXT NOT NULL,
+    dono        TEXT NOT NULL DEFAULT '',
+    situacao    TEXT NOT NULL DEFAULT '',
+    organismo   TEXT,
+    marcador    TEXT,
+    identidade  REAL,
+    consenso    TEXT NOT NULL DEFAULT '',            -- a sequencia que foi ao BLAST
+    fatos       TEXT NOT NULL DEFAULT '{}',          -- o dicionario inteiro da amostra (leituras, ressalvas, evidencia), JSON
+    gravado_em  TEXT NOT NULL,
+    PRIMARY KEY (lote_id, chave)
+)""",
+    'CREATE INDEX IF NOT EXISTS ix_amostras_dono      ON amostras(dono)',
+    'CREATE INDEX IF NOT EXISTS ix_amostras_organismo ON amostras(organismo)',
+)
+
+
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS lotes (
     id              TEXT PRIMARY KEY,
@@ -236,7 +255,9 @@ CREATE TABLE IF NOT EXISTS arvores (
 );
 CREATE INDEX IF NOT EXISTS ix_arvores_lote   ON arvores(lote_id, criado_em);
 CREATE INDEX IF NOT EXISTS ix_arvores_status ON arvores(status, criado_em);
-"""
+
+-- uma linha por amostra de lote PRONTO: o resultado consultavel por SQL sem abrir relatorio.json (migracao 7)
+""" + ''.join(f'{comando};\n' for comando in ESQUEMA_DAS_AMOSTRAS)
 
 
 
@@ -407,6 +428,16 @@ def migracao_6_arvores_do_lote(con):
 
 
 
+def migracao_7_amostras_do_lote(con):
+
+    #* as amostras de cada lote pronto no banco. decisao de 02/11/2026: os resultados ficam, sem prazo, com o consentimento dos usuarios
+
+    for comando in ESQUEMA_DAS_AMOSTRAS:
+        con.execute(comando)
+
+
+
+
 MIGRACOES = (  #* (versao a que o banco chega, descricao para o log, funcao); em ordem, e a ordem e a numeracao
     (1, 'referencia gravada no lote', migracao_1_referencia_no_lote),
     (2, 'enderecos de rede no perfil', migracao_2_links_do_perfil),
@@ -414,6 +445,7 @@ MIGRACOES = (  #* (versao a que o banco chega, descricao para o log, funcao); em
     (4, 'bytes previstos do lote, para a cota reservar', migracao_4_bytes_previstos_do_lote),
     (5, 'pedidos de amostra entre laboratorios', migracao_5_pedidos_de_amostra),
     (6, 'fila das arvores filogeneticas do lote', migracao_6_arvores_do_lote),
+    (7, 'amostras e resultados de cada lote pronto', migracao_7_amostras_do_lote),
 )
 
 VERSAO_ALVO = MIGRACOES[-1][0]  #* a versao que um banco preparado tem; o ESQUEMA acima e o retrato do banco nesta versao

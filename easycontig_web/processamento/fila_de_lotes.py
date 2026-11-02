@@ -94,6 +94,8 @@ POR QUE NASCE CLASSE
     usuario o que estourou.
 """
 
+import json
+
 import secrets
 
 from datetime import datetime, timedelta, timezone
@@ -113,6 +115,24 @@ ATIVOS = (RECEBENDO, NA_FILA, RODANDO)  #* os estados que ocupam vaga na cota da
 ENVIO_ABANDONADO = 1800.0  #* segundos em RECEBENDO a partir dos quais o envio conta como abandonado (quem envia nao pulsa; a idade e a unica evidencia)
 
 AVISO_DE_ENVIO_INTERROMPIDO = 'o envio dos arquivos foi interrompido; envie a corrida de novo'  #* o erro gravado no lote abandonado; a pagina mostra
+
+
+
+
+def gravar_amostras(con, lote_id, relatorio):
+
+    #* uma linha por amostra do relatorio, dentro da transacao de quem chama. regravar SUBSTITUI as linhas do lote:
+    #* a carga inicial rodada de novo, ou um lote reprocessado, nao duplicam amostra
+
+    dono = con.execute('SELECT dono FROM lotes WHERE id=?', (lote_id,)).fetchone()
+
+    con.execute('DELETE FROM amostras WHERE lote_id=?', (lote_id,))
+
+    con.executemany('INSERT INTO amostras (lote_id, chave, dono, situacao, organismo, marcador, identidade, consenso, fatos, gravado_em) '
+                    'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                    [(lote_id, fatos.chave, dono[0] if dono else '', fatos.situacao, fatos.organismo, fatos.marcador, fatos.identidade,
+                      fatos.consenso or '', json.dumps(fatos.para_dicionario(), ensure_ascii=False), agora())
+                     for fatos in relatorio.amostras])
 
 
 
@@ -290,11 +310,23 @@ class FilaDeLotes(fila.Fila):
         return self.gravar_do_dono(lote_id, trabalhador, feito=feito, total=total, etapa=etapa[:TAMANHO_DA_ETAPA])
 
 
-    def concluir(self, lote_id, trabalhador=''):
+    def concluir(self, lote_id, trabalhador='', relatorio=None):
 
-        #* PRONTO. True se este trabalhador ainda era o dono; False = perdeu o lote, e o relatorio dele nao deve ser publicado
+        #* PRONTO, e as amostras do relatorio no banco. True se este trabalhador ainda era o dono; False = perdeu o lote,
+        #* e o relatorio dele nao deve ser publicado.
+        #! carimbo e amostras na MESMA transacao: lote pronto sem amostras no banco (ou amostras de quem perdeu o lote) nao existe
 
-        return self.gravar_do_dono(lote_id, trabalhador, status=PRONTO, terminado_em=agora(), etapa='')
+        condicao, extra = fila.condicao_do_dono(trabalhador)
+
+        with self.banco.transacao() as con:
+
+            if con.execute(f'UPDATE lotes SET status=?, terminado_em=?, etapa=? WHERE id=?{condicao}', (PRONTO, agora(), '', lote_id, *extra)).rowcount != 1:
+                return False
+
+            if relatorio is not None:
+                gravar_amostras(con, lote_id, relatorio)
+
+        return True
 
 
     def falhar_envios_abandonados(self, momento=None):

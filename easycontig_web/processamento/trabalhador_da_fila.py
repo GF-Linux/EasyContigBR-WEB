@@ -227,7 +227,7 @@ class Trabalhador:
             relatorio = executor_de_lote.executar(self.cfg, lote.id, nome=lote.nome, n_esperado=lote.n_arquivos,
                                                   referencia=lote.referencia, progresso=avisar)
 
-            if self.lotes.concluir(lote.id, self.eu):
+            if self.lotes.concluir(lote.id, self.eu, relatorio):
                 REGISTRO.info('lote %s: pronto em %.1f s (%d amostras)', lote.id, time.perf_counter() - inicio, len(relatorio.amostras))
 
             else:

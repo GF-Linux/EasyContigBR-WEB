@@ -33,10 +33,15 @@ cookies de terceiros. O único cookie é o de sessão.
 
 ## 3. Por quanto tempo
 
-- **Corridas: 30 dias.** Depois disso o expurgo automático apaga os arquivos e
-  o relatório. Não é arquivo permanente — quem quiser guardar, baixa.
-- **Backup: mais 30 dias.** Cópia diária às 03:15, com a mesma retenção. Ou
-  seja, um dado enviado pode existir em cópia por até ~60 dias após o envio.
+- **Corridas: sem prazo.** Desde 02/11/2026 não há apagamento automático: os
+  arquivos `.ab1`, o relatório e o resultado de cada amostra (consenso,
+  identificação, qualidade) ficam guardados no servidor, também no banco de
+  dados, para uso na pesquisa do responsável pelo serviço. Esse uso foi
+  autorizado por escrito por cada usuário; quem não autorizar não deve enviar.
+- **Quem apaga é você.** O botão de apagar a corrida remove os arquivos e as
+  amostras do banco no mesmo instante.
+- **Backup: 30 dias.** Cópia diária às 03:15; uma corrida apagada ainda existe
+  nas cópias por até 30 dias.
 - Uma cópia do backup é puxada para uma máquina do responsável, fora da VPS.
 
 ## 4. Onde o dado mora, e o que isso implica

@@ -276,6 +276,7 @@ def apagar_lote(banco, pasta_de_lotes, lote_id):
 
         if linhas:
             con.execute('DELETE FROM arvores WHERE lote_id=?', (lote_id,))  #* montar a arvore de um lote apagado nao e trabalho pendente, e trabalho sem sentido
+            con.execute('DELETE FROM amostras WHERE lote_id=?', (lote_id,))  #! o dono apagou a corrida: as amostras saem junto. o expurgo por prazo nao chega aqui com EASYCONTIG_RETENCAO_DIAS=0
 
     if ocupado:
 
